@@ -1,0 +1,71 @@
+# --- OS / shell ---
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.stackdump
+
+# --- Editors / IDEs ---
+.vs/
+.idea/
+*.code-workspace
+
+# Visual Studio / MSVC (local machine files)
+*.vcxproj.user
+*.vcxproj.filters.user
+*.sln.docstates
+*.suo
+*.user
+*.userosscache
+*.VC.db
+*.VC.VC.opendb
+*.opensdf
+*.sdf
+*.ipch
+
+# Qt / Qt Creator (local machine files)
+*.pro.user
+*.pro.user.*
+*.qbs.user
+*.qmlc
+*.jsc
+CMakeLists.txt.user*
+
+# CMake / build trees (generated)
+**/CMakeFiles/
+**/CMakeCache.txt
+**/cmake_install.cmake
+**/CTestTestfile.cmake
+**/install_manifest.txt
+**/compile_commands.json
+**/Testing/
+
+# Common build output folder names
+**/build/
+**/build-*/
+**/cmake-build-*/
+**/out/
+
+# Ninja / Makefile artifacts inside build trees
+**/*.ninja
+**/.ninja_deps
+**/.ninja_log
+
+# Python caches / venvs (if used locally)
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/.venv/
+**/venv/
+
+# Logs / temp
+*.log
+*.tmp
+*.temp
+*.swp
+*.swo
+
+# Documentation
+docs/
