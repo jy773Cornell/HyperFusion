@@ -1,3 +1,4 @@
+// Qt application entry point and main window bootstrap.
 #include "MainWindow.hpp"
 
 #include <QApplication>

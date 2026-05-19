@@ -1,6 +1,11 @@
+// Main window implementation for stream views, settings tabs, and logging.
 #include "MainWindow.hpp"
 
+#include "adapters/lumo/LumoCamera.hpp"
+#include "orchestrator/CameraCoordinator.hpp"
+
 #include <QComboBox>
+#include <QMetaObject>
 #include <QCheckBox>
 #include <QDateTime>
 #include <QDoubleSpinBox>
@@ -18,7 +23,13 @@
 #include <QSplitter>
 #include <QTabWidget>
 #include <QVBoxLayout>
+#include <QApplication>
+#include <QEventLoop>
+#include <QProcessEnvironment>
+#include <QTimer>
 #include <QWidget>
+
+#include <vector>
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
@@ -51,7 +62,79 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     rootLayout->addWidget(logBox, 0);
     setCentralWidget(central);
 
-    appendLog("HyperFusion UI initialized");
+    camera1Ui_.camera = std::make_shared<LumoCamera>(CameraBackendId::Camera1, "Camera 1");
+    camera1Ui_.cameraIndex = 0;
+    camera2Ui_.camera = std::make_shared<LumoCamera>(CameraBackendId::Camera2, "Camera 2");
+    camera2Ui_.cameraIndex = 1;
+
+    coordinator_ = std::make_unique<CameraCoordinator>(
+        std::vector<std::shared_ptr<ICameraController>>{camera1Ui_.camera, camera2Ui_.camera});
+
+    coordinator_->setLogCallback([this](const std::string &message) {
+        const QString line = QString::fromStdString(message);
+        QMetaObject::invokeMethod(
+            this,
+            [this, line]() { appendLog(line); },
+            Qt::QueuedConnection);
+    });
+
+    coordinator_->setGuiTaskRunner([](std::function<void()> task) {
+        QMetaObject::invokeMethod(
+            qApp,
+            [t = std::move(task)]() {
+                t();
+                QCoreApplication::processEvents(QEventLoop::AllEvents);
+            },
+            Qt::BlockingQueuedConnection);
+    });
+
+    coordinator_->setCameraStateCallback(0, [this](const CameraState state) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, state]() { updateCameraControls(camera1Ui_, state); },
+            Qt::QueuedConnection);
+    });
+
+    coordinator_->setCameraStateCallback(1, [this](const CameraState state) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, state]() { updateCameraControls(camera2Ui_, state); },
+            Qt::QueuedConnection);
+    });
+
+    coordinator_->setFrameCallback([this](const FramePacket &frame) {
+        if ((frame.frameIndex % 60U) != 0U)
+            return;
+
+        const QString cameraName =
+            frame.source == CameraBackendId::Camera1 ? QStringLiteral("Camera 1") : QStringLiteral("Camera 2");
+        const QString line = QStringLiteral("%1 frame %2 (%3x%4)")
+                               .arg(cameraName)
+                               .arg(frame.frameIndex)
+                               .arg(frame.width)
+                               .arg(frame.height);
+        QMetaObject::invokeMethod(
+            this,
+            [this, line]() { appendLog(line); },
+            Qt::QueuedConnection);
+    });
+
+    coordinator_->start();
+    appendLog("HyperFusion UI initialized; camera coordinator started.");
+
+    QTimer::singleShot(0, this, [this]() { refreshLumoDeviceLists(); });
+}
+
+MainWindow::~MainWindow()
+{
+    if (!coordinator_)
+        return;
+
+    coordinator_->stopStream(0);
+    coordinator_->stopStream(1);
+    coordinator_->disconnect(0);
+    coordinator_->disconnect(1);
+    coordinator_->stop();
 }
 
 QWidget *MainWindow::createStreamTabsPanel()
@@ -60,43 +143,12 @@ QWidget *MainWindow::createStreamTabsPanel()
     auto *layout = new QVBoxLayout(panel);
 
     auto *tabs = new QTabWidget(panel);
-    tabs->addTab(createStreamTabPage("FX10e"), "FX10e");
-    tabs->addTab(createStreamTabPage("SWIR"), "SWIR");
-    tabs->addTab(createDualSensorStackTab(), "Dual");
+    tabs->addTab(createStreamTabPage("Camera 1"), "Camera 1");
+    tabs->addTab(createStreamTabPage("Camera 2"), "Camera 2");
     tabs->addTab(createRgbUr3eStreamTab(), "UR3e");
 
     layout->addWidget(tabs, 1);
     return panel;
-}
-
-QWidget *MainWindow::createDualSensorStackTab()
-{
-    auto *tab = new QWidget(this);
-    auto *outer = new QVBoxLayout(tab);
-    outer->setContentsMargins(8, 8, 8, 8);
-    outer->setSpacing(10);
-
-    auto *fxRow = new QGroupBox("FX10e", tab);
-    auto *fxRowLayout = new QHBoxLayout(fxRow);
-    QLabel *fxDetectorLabel = nullptr;
-    QLabel *fxWaterfallLabel = nullptr;
-    fxRowLayout->addWidget(createPreviewPane("Detector", fxDetectorLabel), 1);
-    fxRowLayout->addWidget(createPreviewPane("Waterfall", fxWaterfallLabel), 1);
-    fxDetectorLabel->setText("FX10e detector stream (disconnected)");
-    fxWaterfallLabel->setText("FX10e waterfall stream (disconnected)");
-
-    auto *swirRow = new QGroupBox("SWIR", tab);
-    auto *swirRowLayout = new QHBoxLayout(swirRow);
-    QLabel *swirDetectorLabel = nullptr;
-    QLabel *swirWaterfallLabel = nullptr;
-    swirRowLayout->addWidget(createPreviewPane("Detector", swirDetectorLabel), 1);
-    swirRowLayout->addWidget(createPreviewPane("Waterfall", swirWaterfallLabel), 1);
-    swirDetectorLabel->setText("SWIR detector stream (disconnected)");
-    swirWaterfallLabel->setText("SWIR waterfall stream (disconnected)");
-
-    outer->addWidget(fxRow, 1);
-    outer->addWidget(swirRow, 1);
-    return tab;
 }
 
 QWidget *MainWindow::createStreamTabPage(const QString &cameraName)
@@ -212,108 +264,142 @@ QWidget *MainWindow::createCameraSettingsTab()
     auto *page = new QWidget(this);
     auto *layout = new QVBoxLayout(page);
 
-    auto *fx10eBox = new QGroupBox("FX10e", page);
-    auto *fxForm = new QFormLayout(fx10eBox);
-    auto *fxExposure = new QDoubleSpinBox(fx10eBox);
-    fxExposure->setRange(0.001, 5.0);
-    fxExposure->setDecimals(4);
-    fxExposure->setSingleStep(0.001);
-    fxExposure->setValue(0.015);
-    fxExposure->setSuffix(" s");
-    auto *fxFrameRate = new QDoubleSpinBox(fx10eBox);
-    fxFrameRate->setRange(1.0, 500.0);
-    fxFrameRate->setValue(120.0);
-    fxFrameRate->setSuffix(" fps");
-    auto *fxTrigger = new QComboBox(fx10eBox);
-    fxTrigger->addItems({"Internal", "External"});
-    auto *fxConnect = new QPushButton("Connect", fx10eBox);
-    auto *fxApply = new QPushButton("Apply settings", fx10eBox);
-    auto *fxStart = new QPushButton("Start preview", fx10eBox);
-    fxStart->setEnabled(false);
-    fxForm->addRow("Exposure", fxExposure);
-    fxForm->addRow("Frame rate", fxFrameRate);
-    fxForm->addRow("Trigger mode", fxTrigger);
-    fxForm->addRow("", fxConnect);
-    fxForm->addRow("", fxApply);
-    fxForm->addRow("", fxStart);
+    auto *profilesBox = new QGroupBox("Lumo SSP profiles", page);
+    auto *profilesLayout = new QHBoxLayout(profilesBox);
+    auto *refreshProfilesBtn = new QPushButton("Refresh profile list", profilesBox);
+    profilesLayout->addWidget(refreshProfilesBtn);
+    profilesLayout->addStretch();
+    connect(refreshProfilesBtn, &QPushButton::clicked, this, [this]() { refreshLumoDeviceLists(); });
 
-    connect(fxConnect, &QPushButton::clicked, this, [this]() {
-        appendLog("FX10e: connect requested (not implemented)");
-    });
-    connect(fxApply, &QPushButton::clicked, this, [this, fxExposure, fxFrameRate, fxTrigger]() {
-        appendLog(QString("FX10e: apply settings (exposure=%1s, fps=%2, trigger=%3)")
-                      .arg(fxExposure->value(), 0, 'f', 4)
-                      .arg(fxFrameRate->value(), 0, 'f', 1)
-                      .arg(fxTrigger->currentText()));
-    });
-    connect(fxStart, &QPushButton::clicked, this, [this]() {
-        appendLog("FX10e: start preview requested (not implemented)");
-    });
-
-    auto *swirBox = new QGroupBox("SWIR", page);
-    auto *swirForm = new QFormLayout(swirBox);
-    auto *swirExposure = new QDoubleSpinBox(swirBox);
-    swirExposure->setRange(0.001, 5.0);
-    swirExposure->setDecimals(4);
-    swirExposure->setSingleStep(0.001);
-    swirExposure->setValue(0.020);
-    swirExposure->setSuffix(" s");
-    auto *swirFrameRate = new QDoubleSpinBox(swirBox);
-    swirFrameRate->setRange(1.0, 500.0);
-    swirFrameRate->setValue(100.0);
-    swirFrameRate->setSuffix(" fps");
-    auto *swirTrigger = new QComboBox(swirBox);
-    swirTrigger->addItems({"Internal", "External"});
-    auto *swirConnect = new QPushButton("Connect", swirBox);
-    auto *swirApply = new QPushButton("Apply settings", swirBox);
-    auto *swirStart = new QPushButton("Start preview", swirBox);
-    swirStart->setEnabled(false);
-    swirForm->addRow("Exposure", swirExposure);
-    swirForm->addRow("Frame rate", swirFrameRate);
-    swirForm->addRow("Trigger mode", swirTrigger);
-    swirForm->addRow("", swirConnect);
-    swirForm->addRow("", swirApply);
-    swirForm->addRow("", swirStart);
-
-    connect(swirConnect, &QPushButton::clicked, this, [this]() {
-        appendLog("SWIR: connect requested (not implemented)");
-    });
-    connect(swirApply, &QPushButton::clicked, this, [this, swirExposure, swirFrameRate, swirTrigger]() {
-        appendLog(QString("SWIR: apply settings (exposure=%1s, fps=%2, trigger=%3)")
-                      .arg(swirExposure->value(), 0, 'f', 4)
-                      .arg(swirFrameRate->value(), 0, 'f', 1)
-                      .arg(swirTrigger->currentText()));
-    });
-    connect(swirStart, &QPushButton::clicked, this, [this]() {
-        appendLog("SWIR: start preview requested (not implemented)");
-    });
-
-    auto *dualBox = new QGroupBox("Dual camera session", page);
-    auto *dualLayout = new QVBoxLayout(dualBox);
-    auto *armBoth = new QPushButton("Arm both", dualBox);
-    auto *startBoth = new QPushButton("Start dual preview", dualBox);
-    auto *stopBoth = new QPushButton("Stop both", dualBox);
-    startBoth->setEnabled(false);
-    stopBoth->setEnabled(false);
-    dualLayout->addWidget(armBoth);
-    dualLayout->addWidget(startBoth);
-    dualLayout->addWidget(stopBoth);
-
-    connect(armBoth, &QPushButton::clicked, this, [this]() {
-        appendLog("Cameras: arm both requested (not implemented)");
-    });
-    connect(startBoth, &QPushButton::clicked, this, [this]() {
-        appendLog("Cameras: start dual preview requested (not implemented)");
-    });
-    connect(stopBoth, &QPushButton::clicked, this, [this]() {
-        appendLog("Cameras: stop both requested (not implemented)");
-    });
-
-    layout->addWidget(fx10eBox);
-    layout->addWidget(swirBox);
-    layout->addWidget(dualBox);
+    layout->addWidget(profilesBox);
+    layout->addWidget(createLumoCameraGroup(page, QStringLiteral("Camera 1"), camera1Ui_));
+    layout->addWidget(createLumoCameraGroup(page, QStringLiteral("Camera 2"), camera2Ui_));
     layout->addStretch();
     return page;
+}
+
+QGroupBox *MainWindow::createLumoCameraGroup(QWidget *parent, const QString &title, LumoCameraUi &ui)
+{
+    auto *box = new QGroupBox(title, parent);
+    auto *form = new QFormLayout(box);
+
+    ui.deviceCombo = new QComboBox(box);
+    ui.deviceCombo->setMinimumWidth(260);
+
+    ui.exposureSpin = new QDoubleSpinBox(box);
+    ui.exposureSpin->setRange(0.001, 5.0);
+    ui.exposureSpin->setDecimals(4);
+    ui.exposureSpin->setSingleStep(0.001);
+    ui.exposureSpin->setValue(title == QStringLiteral("Camera 1") ? 0.015 : 0.020);
+    ui.exposureSpin->setSuffix(" s");
+
+    ui.frameRateSpin = new QDoubleSpinBox(box);
+    ui.frameRateSpin->setRange(1.0, 500.0);
+    ui.frameRateSpin->setValue(title == QStringLiteral("Camera 1") ? 120.0 : 100.0);
+    ui.frameRateSpin->setSuffix(" fps");
+
+    ui.triggerCombo = new QComboBox(box);
+    ui.triggerCombo->addItems({"Internal", "External"});
+
+    ui.connectBtn = new QPushButton("Connect sensor", box);
+    ui.applyBtn = new QPushButton("Apply settings", box);
+    ui.startBtn = new QPushButton("Start preview", box);
+    ui.stopBtn = new QPushButton("Stop preview", box);
+
+    ui.applyBtn->setEnabled(false);
+    ui.startBtn->setEnabled(false);
+    ui.stopBtn->setEnabled(false);
+
+    form->addRow("Sensor profile (SSP)", ui.deviceCombo);
+    form->addRow("Exposure", ui.exposureSpin);
+    form->addRow("Frame rate", ui.frameRateSpin);
+    form->addRow("Trigger mode", ui.triggerCombo);
+    form->addRow("", ui.connectBtn);
+    form->addRow("", ui.applyBtn);
+    form->addRow("", ui.startBtn);
+    form->addRow("", ui.stopBtn);
+
+    connect(ui.connectBtn, &QPushButton::clicked, this, [this, &ui, title]() {
+        if (!coordinator_ || !ui.camera)
+            return;
+
+        const bool disconnectRequested =
+            ui.state != CameraState::Disconnected && ui.state != CameraState::Fault;
+
+        if (disconnectRequested)
+        {
+            coordinator_->stopStream(ui.cameraIndex);
+            coordinator_->disconnect(ui.cameraIndex);
+            appendLog(QString("%1: disconnect requested.").arg(title));
+            return;
+        }
+
+        if (ui.deviceCombo->count() == 0)
+        {
+            appendLog(QString("%1: refresh SSP profiles before connecting.").arg(title));
+            return;
+        }
+
+        const CameraSettings connectionSettings = buildCameraSettings(ui);
+        ui.camera->prepareConnection(connectionSettings);
+        appendLog(QString("%1: connect sensor (SSP index %2, %3)...")
+                      .arg(title)
+                      .arg(connectionSettings.deviceIndex)
+                      .arg(ui.deviceCombo->currentText()));
+
+        coordinator_->connectAndInitializeOnGuiThread(ui.cameraIndex);
+    });
+
+    connect(ui.applyBtn, &QPushButton::clicked, this, [this, &ui, title]() {
+        if (!coordinator_)
+            return;
+
+        const CameraSettings settings = buildCameraSettings(ui);
+        coordinator_->applySettings(ui.cameraIndex, settings);
+        appendLog(QString("%1: apply settings (exposure=%2 ms, fps=%3, trigger=%4)")
+                      .arg(title)
+                      .arg(settings.exposureMs, 0, 'f', 3)
+                      .arg(settings.frameRateHz, 0, 'f', 1)
+                      .arg(ui.triggerCombo->currentText()));
+    });
+
+    connect(ui.startBtn, &QPushButton::clicked, this, [this, &ui, title]() {
+        if (!coordinator_)
+            return;
+
+        coordinator_->arm(ui.cameraIndex);
+        coordinator_->startStream(ui.cameraIndex);
+        appendLog(QString("%1: arm + start preview requested.").arg(title));
+    });
+
+    connect(ui.stopBtn, &QPushButton::clicked, this, [this, &ui, title]() {
+        if (!coordinator_)
+            return;
+
+        coordinator_->stopStream(ui.cameraIndex);
+        appendLog(QString("%1: stop preview requested.").arg(title));
+    });
+
+    return box;
+}
+
+CameraSettings MainWindow::buildCameraSettings(const LumoCameraUi &ui) const
+{
+    CameraSettings settings;
+    settings.exposureMs = ui.exposureSpin->value() * 1000.0;
+    settings.frameRateHz = ui.frameRateSpin->value();
+    settings.externalTrigger = ui.triggerCombo->currentText() == QLatin1String("External");
+    settings.acquisitionTimeoutMs = 5000;
+    settings.deviceIndex = ui.deviceCombo->currentData().toInt();
+    settings.lumoProfilesDirectory =
+        QProcessEnvironment::systemEnvironment().value(QStringLiteral("HF_LUMO_PROFILES_DIR")).toStdString();
+
+    const QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+    const QString perCameraKey =
+        ui.cameraIndex == 0 ? QStringLiteral("HF_LUMO_GRABBER_CHANNEL_1") : QStringLiteral("HF_LUMO_GRABBER_CHANNEL_2");
+    settings.grabberChannel = env.contains(perCameraKey) ? env.value(perCameraKey).toStdString()
+                                                         : env.value(QStringLiteral("HF_LUMO_GRABBER_CHANNEL")).toStdString();
+    return settings;
 }
 
 QWidget *MainWindow::createStageSettingsTab()
@@ -623,4 +709,71 @@ void MainWindow::appendLog(const QString &message)
 
     const QString ts = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss");
     logOutput_->appendPlainText(QString("[%1] %2").arg(ts, message));
+}
+
+void MainWindow::refreshLumoDeviceLists()
+{
+    if (camera1Ui_.camera == nullptr)
+        return;
+
+    CameraSettings prep;
+    prep.lumoProfilesDirectory =
+        QProcessEnvironment::systemEnvironment().value(QStringLiteral("HF_LUMO_PROFILES_DIR")).toStdString();
+
+    std::vector<LumoDeviceEntry> devices;
+    CameraError error;
+    if (!LumoCamera::enumerateDevices(prep, devices, error))
+    {
+        appendLog(QString("Lumo: profile refresh failed — %1").arg(QString::fromStdString(error.message)));
+        return;
+    }
+
+    auto populateCombo = [&devices](QComboBox *combo, const char *preferHint) {
+        if (combo == nullptr)
+            return;
+
+        combo->clear();
+        for (const LumoDeviceEntry &device : devices)
+        {
+            const QString label = QString::fromStdString(device.name);
+            combo->addItem(label, device.index);
+
+            if (preferHint != nullptr && device.name.find(preferHint) != std::string::npos)
+                combo->setCurrentIndex(combo->count() - 1);
+        }
+    };
+
+    populateCombo(camera1Ui_.deviceCombo, "FX10");
+    populateCombo(camera2Ui_.deviceCombo, "SWIR");
+
+    appendLog(QString("Lumo: found %1 SSP profile(s).").arg(devices.size()));
+}
+
+void MainWindow::updateCameraControls(LumoCameraUi &ui, const CameraState state)
+{
+    ui.state = state;
+
+    const bool connected = state != CameraState::Disconnected && state != CameraState::Fault;
+
+    if (ui.connectBtn != nullptr)
+    {
+        ui.connectBtn->setText(connected ? QStringLiteral("Disconnect sensor")
+                                         : QStringLiteral("Connect sensor"));
+    }
+
+    if (ui.deviceCombo != nullptr)
+        ui.deviceCombo->setEnabled(!connected);
+
+    const bool readyForApply = state == CameraState::Initialized || state == CameraState::Configured
+                               || state == CameraState::Armed || state == CameraState::SafeStopped;
+    if (ui.applyBtn != nullptr)
+        ui.applyBtn->setEnabled(readyForApply);
+
+    const bool canPreview = state == CameraState::Configured || state == CameraState::Armed
+                            || state == CameraState::SafeStopped;
+    if (ui.startBtn != nullptr)
+        ui.startBtn->setEnabled(canPreview);
+
+    if (ui.stopBtn != nullptr)
+        ui.stopBtn->setEnabled(state == CameraState::Streaming);
 }

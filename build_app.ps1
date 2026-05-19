@@ -22,7 +22,10 @@ param(
 
     # Optional override if auto-detection fails:
     # Example: C:\Qt\Tools\mingw1310_64
-    [string]$MingwPath = $env:MINGW_PATH
+    [string]$MingwPath = $env:MINGW_PATH,
+
+    # Specim Lumo Sensor SDK (FX10e). Override if installed elsewhere.
+    [string]$LumoSdkRoot = $(if ($env:LUMO_SDK_ROOT) { $env:LUMO_SDK_ROOT } else { "C:\Program Files (x86)\Specim\SDKs\SpecSensor\2020_519" })
 )
 
 $ErrorActionPreference = "Stop"
@@ -94,11 +97,16 @@ if (-not (Test-Path -LiteralPath $gcc) -or -not (Test-Path -LiteralPath $gpp)) {
 
 $mingwBin = Join-Path $MingwPath "bin"
 $qtBin = Join-Path $QtPrefixPath "bin"
+$lumoBin = Join-Path $LumoSdkRoot "bin\x64"
+$lumoProfiles = Join-Path $LumoSdkRoot "profiles"
 # Ensure MinGW/Qt DLLs win over other tools on PATH (notably Git's sh.exe, which can break MinGW Makefiles).
-$env:PATH = "$mingwBin;$qtBin;$env:PATH"
+$env:PATH = "$mingwBin;$qtBin;$lumoBin;$env:PATH"
+$env:LUMO_SDK_ROOT = $LumoSdkRoot
+$env:HF_LUMO_PROFILES_DIR = $lumoProfiles
 
 Write-Host "==> Qt prefix: $QtPrefixPath"
 Write-Host "==> MinGW:   $MingwPath"
+Write-Host "==> Lumo SDK: $LumoSdkRoot"
 Write-Host "==> Removing old build dir: $BuildDir"
 if (Test-Path -LiteralPath $BuildDir) {
     Remove-Item -Recurse -Force -LiteralPath $BuildDir
@@ -116,6 +124,7 @@ if ($useNinja) {
         "-DCMAKE_SH=CMAKE_SH-NOTFOUND" `
         "-DCMAKE_C_COMPILER=$gcc" `
         "-DCMAKE_CXX_COMPILER=$gpp" `
+        "-DLUMO_SDK_ROOT=$LumoSdkRoot" `
         "-DCMAKE_BUILD_TYPE=$Config"
 } else {
     Write-Warning "ninja not found on PATH; falling back to 'MinGW Makefiles'."
@@ -137,6 +146,7 @@ Fix options (pick one):
         "-DCMAKE_C_COMPILER=$gcc" `
         "-DCMAKE_CXX_COMPILER=$gpp" `
         "-DCMAKE_MAKE_PROGRAM=$mingwMake" `
+        "-DLUMO_SDK_ROOT=$LumoSdkRoot" `
         "-DCMAKE_BUILD_TYPE=$Config"
 }
 
