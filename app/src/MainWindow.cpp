@@ -24,12 +24,121 @@
 #include <QTabWidget>
 #include <QVBoxLayout>
 #include <QApplication>
+#include <QCoreApplication>
+#include <QDir>
 #include <QEventLoop>
-#include <QProcessEnvironment>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QImage>
+#include <QMessageBox>
+#include <QPixmap>
+#include <QSizePolicy>
 #include <QTimer>
 #include <QWidget>
 
+#include <algorithm>
 #include <vector>
+
+namespace
+{
+QImage framePacketToQImage(const FramePacket &frame)
+{
+    if (frame.width <= 0 || frame.height <= 0 || frame.pixels.empty())
+        return {};
+
+    const int width = frame.width;
+    const int height = frame.height;
+    const std::size_t pixelCount = static_cast<std::size_t>(width * height);
+    if (frame.pixels.size() < pixelCount)
+        return {};
+
+    std::uint16_t minValue = frame.pixels[0];
+    std::uint16_t maxValue = frame.pixels[0];
+    for (std::size_t i = 1; i < pixelCount; ++i)
+    {
+        minValue = std::min(minValue, frame.pixels[i]);
+        maxValue = std::max(maxValue, frame.pixels[i]);
+    }
+
+    QImage image(width, height, QImage::Format_Grayscale8);
+    if (maxValue == minValue)
+    {
+        image.fill(0);
+        return image;
+    }
+
+    const double scale = 255.0 / static_cast<double>(maxValue - minValue);
+    for (int y = 0; y < height; ++y)
+    {
+        auto *scanLine = image.scanLine(y);
+        for (int x = 0; x < width; ++x)
+        {
+            const std::uint16_t value = frame.pixels[static_cast<std::size_t>(y * width + x)];
+            scanLine[x] = static_cast<unsigned char>((value - minValue) * scale);
+        }
+    }
+
+    return image;
+}
+
+constexpr auto kFx10eCalibrationFileName = "3210441_20211027_calpack.scp";
+constexpr auto kCalibrationPackPathProperty = "hf_calibrationPackPath";
+
+void setPreviewDisconnectedText(QLabel *label, const QString &paneTitle, const QString &cameraName)
+{
+    if (label == nullptr)
+        return;
+
+    label->setText(cameraName + QStringLiteral(" ") + paneTitle + QStringLiteral(" (disconnected)"));
+}
+} // namespace
+
+QString MainWindow::calibrationPackPath(const LumoCameraUi &ui)
+{
+    if (ui.calibrationPackEdit == nullptr)
+        return {};
+
+    const QVariant stored = ui.calibrationPackEdit->property(kCalibrationPackPathProperty);
+    if (stored.isValid())
+    {
+        const QString path = stored.toString();
+        if (!path.isEmpty())
+            return path;
+    }
+
+    return ui.calibrationPackEdit->text().trimmed();
+}
+
+void MainWindow::setCalibrationPackDisplay(QLineEdit *edit, const QString &fullPath)
+{
+    if (edit == nullptr)
+        return;
+
+    const QString cleaned = QDir::cleanPath(fullPath);
+    edit->setProperty(kCalibrationPackPathProperty, cleaned);
+    edit->setText(QFileInfo(cleaned).fileName());
+    edit->setToolTip(cleaned);
+}
+
+QString MainWindow::defaultFx10eCalibrationPackPath()
+{
+    const QString fileName = QString::fromLatin1(kFx10eCalibrationFileName);
+    const QString appDir = QCoreApplication::applicationDirPath();
+
+    const QStringList candidates = {
+        QDir(appDir).filePath(QStringLiteral("calibration/") + fileName),
+        QDir(appDir).filePath(QStringLiteral("../calibration/") + fileName),
+        QDir(appDir).filePath(QStringLiteral("../../app/calibration/") + fileName),
+    };
+
+    for (const QString &candidate : candidates)
+    {
+        if (QFileInfo::exists(candidate))
+            return QDir::cleanPath(candidate);
+    }
+
+    return QDir::cleanPath(QDir(appDir).filePath(QStringLiteral("../calibration/") + fileName));
+}
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
@@ -83,39 +192,62 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
             qApp,
             [t = std::move(task)]() {
                 t();
-                QCoreApplication::processEvents(QEventLoop::AllEvents);
+                for (int i = 0; i < 8; ++i)
+                    QCoreApplication::processEvents(QEventLoop::AllEvents);
             },
             Qt::BlockingQueuedConnection);
+    });
+
+    coordinator_->setGuiAsyncTaskRunner([](std::function<void()> task) {
+        QMetaObject::invokeMethod(qApp, std::move(task), Qt::QueuedConnection);
     });
 
     coordinator_->setCameraStateCallback(0, [this](const CameraState state) {
         QMetaObject::invokeMethod(
             this,
-            [this, state]() { updateCameraControls(camera1Ui_, state); },
+            [this, state]() { onCameraStateChanged(camera1Ui_, state); },
             Qt::QueuedConnection);
     });
 
     coordinator_->setCameraStateCallback(1, [this](const CameraState state) {
         QMetaObject::invokeMethod(
             this,
-            [this, state]() { updateCameraControls(camera2Ui_, state); },
+            [this, state]() { onCameraStateChanged(camera2Ui_, state); },
+            Qt::QueuedConnection);
+    });
+
+    coordinator_->setCameraErrorCallback(0, [this](const CameraError &error) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, error]() { onCameraError(camera1Ui_, error); },
+            Qt::QueuedConnection);
+    });
+
+    coordinator_->setCameraErrorCallback(1, [this](const CameraError &error) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, error]() { onCameraError(camera2Ui_, error); },
+            Qt::QueuedConnection);
+    });
+
+    coordinator_->setCameraShutterStateCallback(0, [this](const bool isOpen) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, isOpen]() { onShutterStateChanged(camera1Ui_, isOpen); },
+            Qt::QueuedConnection);
+    });
+
+    coordinator_->setCameraShutterStateCallback(1, [this](const bool isOpen) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, isOpen]() { onShutterStateChanged(camera2Ui_, isOpen); },
             Qt::QueuedConnection);
     });
 
     coordinator_->setFrameCallback([this](const FramePacket &frame) {
-        if ((frame.frameIndex % 60U) != 0U)
-            return;
-
-        const QString cameraName =
-            frame.source == CameraBackendId::Camera1 ? QStringLiteral("Camera 1") : QStringLiteral("Camera 2");
-        const QString line = QStringLiteral("%1 frame %2 (%3x%4)")
-                               .arg(cameraName)
-                               .arg(frame.frameIndex)
-                               .arg(frame.width)
-                               .arg(frame.height);
         QMetaObject::invokeMethod(
             this,
-            [this, line]() { appendLog(line); },
+            [this, frame]() { updateDetectorFrame(frame); },
             Qt::QueuedConnection);
     });
 
@@ -130,11 +262,7 @@ MainWindow::~MainWindow()
     if (!coordinator_)
         return;
 
-    coordinator_->stopStream(0);
-    coordinator_->stopStream(1);
-    coordinator_->disconnect(0);
-    coordinator_->disconnect(1);
-    coordinator_->stop();
+    coordinator_->shutdownSync();
 }
 
 QWidget *MainWindow::createStreamTabsPanel()
@@ -143,49 +271,50 @@ QWidget *MainWindow::createStreamTabsPanel()
     auto *layout = new QVBoxLayout(panel);
 
     auto *tabs = new QTabWidget(panel);
-    tabs->addTab(createStreamTabPage("Camera 1"), "Camera 1");
-    tabs->addTab(createStreamTabPage("Camera 2"), "Camera 2");
+    tabs->addTab(createStreamTabPage(QStringLiteral("Camera 1"), camera1Ui_), "Camera 1");
+    tabs->addTab(createStreamTabPage(QStringLiteral("Camera 2"), camera2Ui_), "Camera 2");
     tabs->addTab(createRgbUr3eStreamTab(), "UR3e");
 
     layout->addWidget(tabs, 1);
     return panel;
 }
 
-QWidget *MainWindow::createStreamTabPage(const QString &cameraName)
+QWidget *MainWindow::createStreamTabPage(const QString &cameraName, LumoCameraUi &cameraUi)
 {
     auto *tab = new QWidget(this);
-    auto *layout = new QVBoxLayout(tab);
-
-    auto *gridHost = new QWidget(tab);
-    auto *grid = new QGridLayout(gridHost);
+    auto *grid = new QGridLayout(tab);
     grid->setContentsMargins(8, 8, 8, 8);
     grid->setSpacing(10);
 
     QLabel *detectorLabel = nullptr;
     QLabel *waterfallLabel = nullptr;
     QLabel *wavelengthLabel = nullptr;
-    QLabel *pixelsLabel = nullptr;
+    QLabel *pixelStreamLabel = nullptr;
 
-    auto *detectorPane = createPreviewPane("Detector", detectorLabel);
-    auto *waterfallPane = createPreviewPane("Waterfall", waterfallLabel);
-    auto *wavelengthPane = createPreviewPane("Wavelength", wavelengthLabel);
-    auto *pixelsPane = createPreviewPane("Pixels", pixelsLabel);
+    auto *detectorPane = createPreviewPane(QStringLiteral("Detector"), detectorLabel);
+    auto *waterfallPane = createPreviewPane(QStringLiteral("Waterfall"), waterfallLabel);
+    auto *wavelengthPane = createPreviewPane(QStringLiteral("Wavelength"), wavelengthLabel);
+    auto *pixelStreamPane = createPreviewPane(QStringLiteral("Pixel stream"), pixelStreamLabel);
 
-    detectorLabel->setText(cameraName + " detector stream (disconnected)");
-    waterfallLabel->setText(cameraName + " waterfall stream (disconnected)");
-    wavelengthLabel->setText(cameraName + " wavelength view (disconnected)");
-    pixelsLabel->setText(cameraName + " pixel profile (disconnected)");
+    cameraUi.detectorView = detectorLabel;
+    cameraUi.waterfallView = waterfallLabel;
+    cameraUi.wavelengthView = wavelengthLabel;
+    cameraUi.pixelStreamView = pixelStreamLabel;
+
+    setPreviewDisconnectedText(cameraUi.detectorView, QStringLiteral("detector"), cameraName);
+    setPreviewDisconnectedText(cameraUi.waterfallView, QStringLiteral("waterfall"), cameraName);
+    setPreviewDisconnectedText(cameraUi.wavelengthView, QStringLiteral("wavelength"), cameraName);
+    setPreviewDisconnectedText(cameraUi.pixelStreamView, QStringLiteral("pixel stream"), cameraName);
 
     grid->addWidget(detectorPane, 0, 0);
     grid->addWidget(waterfallPane, 0, 1);
     grid->addWidget(wavelengthPane, 1, 0);
-    grid->addWidget(pixelsPane, 1, 1);
-    grid->setRowStretch(0, 1);
-    grid->setRowStretch(1, 1);
+    grid->addWidget(pixelStreamPane, 1, 1);
     grid->setColumnStretch(0, 1);
     grid->setColumnStretch(1, 1);
+    grid->setRowStretch(0, 1);
+    grid->setRowStretch(1, 1);
 
-    layout->addWidget(gridHost, 1);
     return tab;
 }
 
@@ -225,7 +354,7 @@ QGroupBox *MainWindow::createPreviewPane(const QString &title, QLabel *&labelOut
 
     auto *placeholder = new QFrame(box);
     placeholder->setFrameShape(QFrame::StyledPanel);
-    placeholder->setMinimumSize(440, 260);
+    placeholder->setMinimumSize(320, 200);
     placeholder->setStyleSheet("background-color: #111111;");
 
     labelOut = new QLabel("No stream", placeholder);
@@ -244,8 +373,8 @@ QGroupBox *MainWindow::createPreviewPane(const QString &title, QLabel *&labelOut
 QWidget *MainWindow::createSettingsPanel()
 {
     auto *panel = new QWidget(this);
-    panel->setMinimumWidth(360);
-    panel->setMaximumWidth(440);
+    panel->setMinimumWidth(380);
+    panel->setMaximumWidth(520);
     auto *layout = new QVBoxLayout(panel);
 
     auto *tabs = new QTabWidget(panel);
@@ -264,14 +393,6 @@ QWidget *MainWindow::createCameraSettingsTab()
     auto *page = new QWidget(this);
     auto *layout = new QVBoxLayout(page);
 
-    auto *profilesBox = new QGroupBox("Lumo SSP profiles", page);
-    auto *profilesLayout = new QHBoxLayout(profilesBox);
-    auto *refreshProfilesBtn = new QPushButton("Refresh profile list", profilesBox);
-    profilesLayout->addWidget(refreshProfilesBtn);
-    profilesLayout->addStretch();
-    connect(refreshProfilesBtn, &QPushButton::clicked, this, [this]() { refreshLumoDeviceLists(); });
-
-    layout->addWidget(profilesBox);
     layout->addWidget(createLumoCameraGroup(page, QStringLiteral("Camera 1"), camera1Ui_));
     layout->addWidget(createLumoCameraGroup(page, QStringLiteral("Camera 2"), camera2Ui_));
     layout->addStretch();
@@ -286,38 +407,96 @@ QGroupBox *MainWindow::createLumoCameraGroup(QWidget *parent, const QString &tit
     ui.deviceCombo = new QComboBox(box);
     ui.deviceCombo->setMinimumWidth(260);
 
-    ui.exposureSpin = new QDoubleSpinBox(box);
-    ui.exposureSpin->setRange(0.001, 5.0);
-    ui.exposureSpin->setDecimals(4);
-    ui.exposureSpin->setSingleStep(0.001);
-    ui.exposureSpin->setValue(title == QStringLiteral("Camera 1") ? 0.015 : 0.020);
-    ui.exposureSpin->setSuffix(" s");
+    ui.calibrationPackEdit = new QLineEdit(box);
+    ui.calibrationPackEdit->setMinimumWidth(0);
+    ui.calibrationPackEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+
+    ui.calibrationPackBrowseBtn = new QPushButton(QStringLiteral("Browse…"), box);
+    ui.calibrationPackBrowseBtn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    ui.calibrationPackBrowseBtn->setFixedWidth(72);
+
+    if (title == QStringLiteral("Camera 1"))
+        setCalibrationPackDisplay(ui.calibrationPackEdit, defaultFx10eCalibrationPackPath());
+
+    auto *calibrationRow = new QWidget(box);
+    auto *calibrationLayout = new QHBoxLayout(calibrationRow);
+    calibrationLayout->setContentsMargins(0, 0, 0, 0);
+    calibrationLayout->setSpacing(6);
+    calibrationLayout->addWidget(ui.calibrationPackEdit, 1);
+    calibrationLayout->addWidget(ui.calibrationPackBrowseBtn, 0);
+
+    auto *shutterRow = new QWidget(box);
+    auto *shutterLayout = new QHBoxLayout(shutterRow);
+    shutterLayout->setContentsMargins(0, 0, 0, 0);
+    shutterLayout->setSpacing(8);
+
+    ui.shutterIndicator = new QLabel(shutterRow);
+    ui.shutterIndicator->setFixedSize(14, 14);
+    ui.shutterStatusLabel = new QLabel(QStringLiteral("—"), shutterRow);
+    ui.shutterToggleBtn = new QPushButton(QStringLiteral("Toggle"), shutterRow);
+    ui.shutterToggleBtn->setEnabled(false);
+    shutterLayout->addWidget(ui.shutterIndicator);
+    shutterLayout->addWidget(ui.shutterStatusLabel, 1);
+    shutterLayout->addWidget(ui.shutterToggleBtn);
 
     ui.frameRateSpin = new QDoubleSpinBox(box);
     ui.frameRateSpin->setRange(1.0, 500.0);
-    ui.frameRateSpin->setValue(title == QStringLiteral("Camera 1") ? 120.0 : 100.0);
-    ui.frameRateSpin->setSuffix(" fps");
+    ui.frameRateSpin->setDecimals(2);
+    ui.frameRateSpin->setValue(title == QStringLiteral("Camera 1") ? 133.0 : 100.0);
+    ui.frameRateSpin->setSuffix(QStringLiteral(" Hz"));
+
+    ui.exposureSpin = new QDoubleSpinBox(box);
+    ui.exposureSpin->setRange(0.01, 400.0);
+    ui.exposureSpin->setDecimals(2);
+    ui.exposureSpin->setSingleStep(0.1);
+    ui.exposureSpin->setValue(title == QStringLiteral("Camera 1") ? 2.0 : 3.0);
+    ui.exposureSpin->setSuffix(QStringLiteral(" ms"));
+
+    ui.spectralBinningCombo = new QComboBox(box);
+    ui.spatialBinningCombo = new QComboBox(box);
+    for (QComboBox *binningCombo : {ui.spectralBinningCombo, ui.spatialBinningCombo})
+    {
+        binningCombo->addItems({QStringLiteral("1"),
+                                QStringLiteral("2"),
+                                QStringLiteral("4"),
+                                QStringLiteral("8")});
+    }
 
     ui.triggerCombo = new QComboBox(box);
     ui.triggerCombo->addItems({"Internal", "External"});
 
-    ui.connectBtn = new QPushButton("Connect sensor", box);
+    ui.connectBtn = new QPushButton("Connect camera", box);
     ui.applyBtn = new QPushButton("Apply settings", box);
-    ui.startBtn = new QPushButton("Start preview", box);
-    ui.stopBtn = new QPushButton("Stop preview", box);
 
     ui.applyBtn->setEnabled(false);
-    ui.startBtn->setEnabled(false);
-    ui.stopBtn->setEnabled(false);
 
-    form->addRow("Sensor profile (SSP)", ui.deviceCombo);
-    form->addRow("Exposure", ui.exposureSpin);
-    form->addRow("Frame rate", ui.frameRateSpin);
+    form->addRow("Sensor profile", ui.deviceCombo);
+    form->addRow("Calibration pack", calibrationRow);
+    form->addRow("Shutter", shutterRow);
+    form->addRow("Frame rate (Hz)", ui.frameRateSpin);
+    form->addRow("Exposure time (ms)", ui.exposureSpin);
+    form->addRow("Spectral binning", ui.spectralBinningCombo);
+    form->addRow("Spatial binning", ui.spatialBinningCombo);
     form->addRow("Trigger mode", ui.triggerCombo);
     form->addRow("", ui.connectBtn);
     form->addRow("", ui.applyBtn);
-    form->addRow("", ui.startBtn);
-    form->addRow("", ui.stopBtn);
+
+    connect(ui.calibrationPackBrowseBtn, &QPushButton::clicked, this, [this, &ui]() {
+        if (ui.calibrationPackEdit == nullptr)
+            return;
+
+        const QString currentPath = calibrationPackPath(ui);
+        const QString startDir =
+            currentPath.isEmpty() ? QFileInfo(defaultFx10eCalibrationPackPath()).absolutePath()
+                                : QFileInfo(currentPath).absolutePath();
+        const QString path = QFileDialog::getOpenFileName(
+            this,
+            QStringLiteral("Select calibration pack"),
+            startDir,
+            QStringLiteral("Specim calibration (*.scp);;All files (*.*)"));
+        if (!path.isEmpty())
+            setCalibrationPackDisplay(ui.calibrationPackEdit, path);
+    });
 
     connect(ui.connectBtn, &QPushButton::clicked, this, [this, &ui, title]() {
         if (!coordinator_ || !ui.camera)
@@ -328,8 +507,13 @@ QGroupBox *MainWindow::createLumoCameraGroup(QWidget *parent, const QString &tit
 
         if (disconnectRequested)
         {
-            coordinator_->stopStream(ui.cameraIndex);
-            coordinator_->disconnect(ui.cameraIndex);
+            ui.connectAttemptActive = false;
+            if (ui.connectBtn != nullptr)
+            {
+                ui.connectBtn->setEnabled(false);
+                ui.connectBtn->setText(QStringLiteral("Disconnecting…"));
+            }
+            coordinator_->disconnectOnGuiThread(ui.cameraIndex);
             appendLog(QString("%1: disconnect requested.").arg(title));
             return;
         }
@@ -342,12 +526,21 @@ QGroupBox *MainWindow::createLumoCameraGroup(QWidget *parent, const QString &tit
 
         const CameraSettings connectionSettings = buildCameraSettings(ui);
         ui.camera->prepareConnection(connectionSettings);
-        appendLog(QString("%1: connect sensor (SSP index %2, %3)...")
-                      .arg(title)
-                      .arg(connectionSettings.deviceIndex)
-                      .arg(ui.deviceCombo->currentText()));
+        ui.connectAttemptActive = true;
+        appendLog(QString("%1: connect camera — profile %2 (eBUS picker may appear; not ready until Initialized).")
+                      .arg(title, ui.deviceCombo->currentText()));
 
         coordinator_->connectAndInitializeOnGuiThread(ui.cameraIndex);
+    });
+
+    connect(ui.shutterToggleBtn, &QPushButton::clicked, this, [this, &ui]() {
+        if (!coordinator_)
+            return;
+
+        if (ui.shutterReportedOpen)
+            coordinator_->closeShutter(ui.cameraIndex);
+        else
+            coordinator_->openShutter(ui.cameraIndex);
     });
 
     connect(ui.applyBtn, &QPushButton::clicked, this, [this, &ui, title]() {
@@ -356,49 +549,34 @@ QGroupBox *MainWindow::createLumoCameraGroup(QWidget *parent, const QString &tit
 
         const CameraSettings settings = buildCameraSettings(ui);
         coordinator_->applySettings(ui.cameraIndex, settings);
-        appendLog(QString("%1: apply settings (exposure=%2 ms, fps=%3, trigger=%4)")
+        appendLog(QString("%1: apply settings (fps=%2 Hz, exposure=%3 ms, spectral=%4, spatial=%5, trigger=%6)")
                       .arg(title)
-                      .arg(settings.exposureMs, 0, 'f', 3)
-                      .arg(settings.frameRateHz, 0, 'f', 1)
+                      .arg(settings.frameRateHz, 0, 'f', 2)
+                      .arg(settings.exposureMs, 0, 'f', 2)
+                      .arg(settings.spectralBinning)
+                      .arg(settings.spatialBinning)
                       .arg(ui.triggerCombo->currentText()));
     });
 
-    connect(ui.startBtn, &QPushButton::clicked, this, [this, &ui, title]() {
-        if (!coordinator_)
-            return;
-
-        coordinator_->arm(ui.cameraIndex);
-        coordinator_->startStream(ui.cameraIndex);
-        appendLog(QString("%1: arm + start preview requested.").arg(title));
-    });
-
-    connect(ui.stopBtn, &QPushButton::clicked, this, [this, &ui, title]() {
-        if (!coordinator_)
-            return;
-
-        coordinator_->stopStream(ui.cameraIndex);
-        appendLog(QString("%1: stop preview requested.").arg(title));
-    });
-
+    updateShutterDisplay(ui, false);
     return box;
 }
 
 CameraSettings MainWindow::buildCameraSettings(const LumoCameraUi &ui) const
 {
     CameraSettings settings;
-    settings.exposureMs = ui.exposureSpin->value() * 1000.0;
     settings.frameRateHz = ui.frameRateSpin->value();
+    settings.exposureMs = ui.exposureSpin->value();
+    if (ui.spectralBinningCombo != nullptr)
+        settings.spectralBinning = ui.spectralBinningCombo->currentText().toInt();
+    if (ui.spatialBinningCombo != nullptr)
+        settings.spatialBinning = ui.spatialBinningCombo->currentText().toInt();
     settings.externalTrigger = ui.triggerCombo->currentText() == QLatin1String("External");
     settings.acquisitionTimeoutMs = 5000;
     settings.deviceIndex = ui.deviceCombo->currentData().toInt();
-    settings.lumoProfilesDirectory =
-        QProcessEnvironment::systemEnvironment().value(QStringLiteral("HF_LUMO_PROFILES_DIR")).toStdString();
-
-    const QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    const QString perCameraKey =
-        ui.cameraIndex == 0 ? QStringLiteral("HF_LUMO_GRABBER_CHANNEL_1") : QStringLiteral("HF_LUMO_GRABBER_CHANNEL_2");
-    settings.grabberChannel = env.contains(perCameraKey) ? env.value(perCameraKey).toStdString()
-                                                         : env.value(QStringLiteral("HF_LUMO_GRABBER_CHANNEL")).toStdString();
+    if (ui.deviceCombo != nullptr)
+        settings.profileName = ui.deviceCombo->currentText().toStdString();
+    settings.lumoCalibrationPackPath = calibrationPackPath(ui).toStdString();
     return settings;
 }
 
@@ -716,9 +894,7 @@ void MainWindow::refreshLumoDeviceLists()
     if (camera1Ui_.camera == nullptr)
         return;
 
-    CameraSettings prep;
-    prep.lumoProfilesDirectory =
-        QProcessEnvironment::systemEnvironment().value(QStringLiteral("HF_LUMO_PROFILES_DIR")).toStdString();
+    const CameraSettings prep;
 
     std::vector<LumoDeviceEntry> devices;
     CameraError error;
@@ -728,7 +904,7 @@ void MainWindow::refreshLumoDeviceLists()
         return;
     }
 
-    auto populateCombo = [&devices](QComboBox *combo, const char *preferHint) {
+    auto populateCombo = [&devices](QComboBox *combo) {
         if (combo == nullptr)
             return;
 
@@ -737,16 +913,146 @@ void MainWindow::refreshLumoDeviceLists()
         {
             const QString label = QString::fromStdString(device.name);
             combo->addItem(label, device.index);
-
-            if (preferHint != nullptr && device.name.find(preferHint) != std::string::npos)
-                combo->setCurrentIndex(combo->count() - 1);
         }
     };
 
-    populateCombo(camera1Ui_.deviceCombo, "FX10");
-    populateCombo(camera2Ui_.deviceCombo, "SWIR");
+    auto selectProfileHint = [](QComboBox *combo, const QString &hint) -> bool {
+        if (combo == nullptr)
+            return false;
+        for (int i = 0; i < combo->count(); ++i)
+        {
+            if (combo->itemText(i).contains(hint, Qt::CaseInsensitive))
+            {
+                combo->setCurrentIndex(i);
+                return true;
+            }
+        }
+        return false;
+    };
 
-    appendLog(QString("Lumo: found %1 SSP profile(s).").arg(devices.size()));
+    populateCombo(camera1Ui_.deviceCombo);
+    populateCombo(camera2Ui_.deviceCombo);
+
+    if (!selectProfileHint(camera1Ui_.deviceCombo, QStringLiteral("FX10e with Pleora")))
+        selectProfileHint(camera1Ui_.deviceCombo, QStringLiteral("FX10"));
+    selectProfileHint(camera2Ui_.deviceCombo, QStringLiteral("SWIR"));
+
+    appendLog(QString("Lumo: found %1 SSP profile(s) (from SDK install).").arg(devices.size()));
+    for (const LumoDeviceEntry &device : devices)
+        appendLog(QString("  [%1] %2").arg(device.index).arg(QString::fromStdString(device.name)));
+}
+
+void MainWindow::onCameraError(LumoCameraUi &ui, const CameraError &error)
+{
+    if (!ui.connectAttemptActive)
+        return;
+
+    ui.connectAttemptActive = false;
+    ui.autoStreamStarted = false;
+
+    const QString title = QString("Camera %1 connection failed").arg(ui.cameraIndex + 1);
+    const QString message = QString::fromStdString(error.message);
+    appendLog(QString("%1: %2").arg(title, message));
+    QMessageBox::warning(this, title, message);
+}
+
+void MainWindow::updateShutterDisplay(LumoCameraUi &ui, const bool isOpen)
+{
+    ui.shutterReportedOpen = isOpen;
+
+    if (ui.shutterIndicator != nullptr)
+    {
+        ui.shutterIndicator->setStyleSheet(
+            isOpen ? QStringLiteral("background-color: #e67e22; border-radius: 2px;")
+                   : QStringLiteral("background-color: #666666; border-radius: 2px;"));
+    }
+
+    if (ui.shutterStatusLabel != nullptr)
+    {
+        ui.shutterStatusLabel->setText(isOpen ? QStringLiteral("Opened") : QStringLiteral("Closed"));
+    }
+
+    if (ui.shutterToggleBtn != nullptr)
+        ui.shutterToggleBtn->setText(isOpen ? QStringLiteral("Close") : QStringLiteral("Open"));
+}
+
+void MainWindow::onShutterStateChanged(LumoCameraUi &ui, const bool isOpen)
+{
+    updateShutterDisplay(ui, isOpen);
+}
+
+void MainWindow::onCameraStateChanged(LumoCameraUi &ui, const CameraState state)
+{
+    updateCameraControls(ui, state);
+
+    if (coordinator_ != nullptr
+        && (state == CameraState::Initialized || state == CameraState::Configured
+            || state == CameraState::Armed || state == CameraState::Streaming
+            || state == CameraState::SafeStopped))
+        coordinator_->refreshShutterState(ui.cameraIndex);
+
+    if (state == CameraState::Initialized && coordinator_ != nullptr && !ui.autoStreamStarted)
+    {
+        ui.autoStreamStarted = true;
+        const CameraSettings settings = buildCameraSettings(ui);
+        coordinator_->beginStreaming(ui.cameraIndex, settings);
+        appendLog(QString("Camera %1: streaming started automatically.")
+                      .arg(ui.cameraIndex + 1));
+    }
+
+    if (state == CameraState::Streaming)
+        ui.connectAttemptActive = false;
+
+    if (state == CameraState::Disconnected)
+    {
+        ui.autoStreamStarted = false;
+        ui.connectAttemptActive = false;
+        updateShutterDisplay(ui, false);
+        clearDetectorView(ui);
+    }
+}
+
+void MainWindow::updateDetectorFrame(const FramePacket &frame)
+{
+    LumoCameraUi *ui = nullptr;
+    if (frame.source == CameraBackendId::Camera1)
+        ui = &camera1Ui_;
+    else if (frame.source == CameraBackendId::Camera2)
+        ui = &camera2Ui_;
+
+    if (ui == nullptr || ui->detectorView == nullptr)
+        return;
+
+    const QImage image = framePacketToQImage(frame);
+    if (image.isNull())
+        return;
+
+    ui->detectorView->setPixmap(QPixmap::fromImage(image));
+}
+
+void MainWindow::clearDetectorView(LumoCameraUi &ui)
+{
+    const QString cameraName = QStringLiteral("Camera %1").arg(ui.cameraIndex + 1);
+    if (ui.detectorView != nullptr)
+    {
+        ui.detectorView->clear();
+        setPreviewDisconnectedText(ui.detectorView, QStringLiteral("detector"), cameraName);
+    }
+    if (ui.waterfallView != nullptr)
+    {
+        ui.waterfallView->clear();
+        setPreviewDisconnectedText(ui.waterfallView, QStringLiteral("waterfall"), cameraName);
+    }
+    if (ui.wavelengthView != nullptr)
+    {
+        ui.wavelengthView->clear();
+        setPreviewDisconnectedText(ui.wavelengthView, QStringLiteral("wavelength"), cameraName);
+    }
+    if (ui.pixelStreamView != nullptr)
+    {
+        ui.pixelStreamView->clear();
+        setPreviewDisconnectedText(ui.pixelStreamView, QStringLiteral("pixel stream"), cameraName);
+    }
 }
 
 void MainWindow::updateCameraControls(LumoCameraUi &ui, const CameraState state)
@@ -757,23 +1063,38 @@ void MainWindow::updateCameraControls(LumoCameraUi &ui, const CameraState state)
 
     if (ui.connectBtn != nullptr)
     {
-        ui.connectBtn->setText(connected ? QStringLiteral("Disconnect sensor")
-                                         : QStringLiteral("Connect sensor"));
+        ui.connectBtn->setEnabled(true);
+        ui.connectBtn->setText(connected ? QStringLiteral("Disconnect camera")
+                                         : QStringLiteral("Connect camera"));
     }
 
     if (ui.deviceCombo != nullptr)
         ui.deviceCombo->setEnabled(!connected);
 
+    if (ui.calibrationPackEdit != nullptr)
+        ui.calibrationPackEdit->setEnabled(!connected);
+    if (ui.calibrationPackBrowseBtn != nullptr)
+        ui.calibrationPackBrowseBtn->setEnabled(!connected);
+
+    const bool readyForCameraFeatures = state == CameraState::Initialized || state == CameraState::Configured
+                                        || state == CameraState::Armed || state == CameraState::Streaming
+                                        || state == CameraState::SafeStopped;
+    if (ui.shutterToggleBtn != nullptr)
+        ui.shutterToggleBtn->setEnabled(readyForCameraFeatures);
+    if (ui.spectralBinningCombo != nullptr)
+        ui.spectralBinningCombo->setEnabled(readyForCameraFeatures);
+    if (ui.spatialBinningCombo != nullptr)
+        ui.spatialBinningCombo->setEnabled(readyForCameraFeatures);
+    if (ui.exposureSpin != nullptr)
+        ui.exposureSpin->setEnabled(readyForCameraFeatures);
+    if (ui.frameRateSpin != nullptr)
+        ui.frameRateSpin->setEnabled(readyForCameraFeatures);
+    if (ui.triggerCombo != nullptr)
+        ui.triggerCombo->setEnabled(readyForCameraFeatures);
+
     const bool readyForApply = state == CameraState::Initialized || state == CameraState::Configured
-                               || state == CameraState::Armed || state == CameraState::SafeStopped;
+                               || state == CameraState::Armed || state == CameraState::SafeStopped
+                               || state == CameraState::Streaming;
     if (ui.applyBtn != nullptr)
         ui.applyBtn->setEnabled(readyForApply);
-
-    const bool canPreview = state == CameraState::Configured || state == CameraState::Armed
-                            || state == CameraState::SafeStopped;
-    if (ui.startBtn != nullptr)
-        ui.startBtn->setEnabled(canPreview);
-
-    if (ui.stopBtn != nullptr)
-        ui.stopBtn->setEnabled(state == CameraState::Streaming);
 }

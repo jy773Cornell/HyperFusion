@@ -34,6 +34,7 @@ qt_add_executable(app
     src/main.cpp
     src/MainWindow.cpp
     src/core/CameraWorker.cpp
+    src/core/ICameraController.cpp
     src/adapters/lumo/LumoCamera.cpp
     src/orchestrator/CameraCoordinator.cpp
     include/MainWindow.hpp

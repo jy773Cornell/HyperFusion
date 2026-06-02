@@ -16,6 +16,9 @@ public:
     virtual bool connect(CameraError &error) = 0;
     virtual bool initialize(CameraError &error) = 0;
     virtual bool applySettings(const CameraSettings &settings, CameraError &error) = 0;
+    virtual bool openShutter(CameraError &error);
+    virtual bool closeShutter(CameraError &error);
+    virtual bool shutterIsOpen(bool &isOpen, CameraError &error);
     virtual bool arm(CameraError &error) = 0;
     virtual bool start(CameraError &error) = 0;
     virtual void stop() = 0;

@@ -57,7 +57,6 @@ std::string wideToUtf8(const wchar_t *wide)
 std::mutex g_sdkMutex;
 int g_sdkLoadCount = 0;
 std::atomic<int> g_openSensorHandles{0};
-std::wstring g_pendingProfilesDirectory;
 
 bool checkSiCode(const int code, const char *operation, CameraError &error)
 {
@@ -73,27 +72,11 @@ bool checkSiCode(const int code, const char *operation, CameraError &error)
 bool ensureGlobalSdkLoaded(const CameraSettings &prep, CameraError &error, bool &loadedHere)
 {
     loadedHere = false;
-    if (!prep.lumoProfilesDirectory.empty())
-    {
-        std::lock_guard<std::mutex> sdkLock(g_sdkMutex);
-        g_pendingProfilesDirectory = toWide(prep.lumoProfilesDirectory);
-    }
-
     std::lock_guard<std::mutex> sdkLock(g_sdkMutex);
     if (g_sdkLoadCount > 0)
     {
         loadedHere = false;
         return true;
-    }
-
-    if (!g_pendingProfilesDirectory.empty())
-    {
-        std::vector<SI_WC> profilesDir(g_pendingProfilesDirectory.begin(), g_pendingProfilesDirectory.end());
-        profilesDir.push_back(L'\0');
-        if (!checkSiCode(SI_SetString(SI_SYSTEM, L"ProfilesDirectory", profilesDir.data()),
-                         "SI_SetString(ProfilesDirectory)",
-                         error))
-            return false;
     }
 
     const std::wstring licensePath = toWide(prep.lumoLicensePath);
@@ -151,8 +134,8 @@ void LumoCamera::prepareConnection(const CameraSettings &settings)
     std::lock_guard<std::mutex> lock(mutex_);
     settings_.deviceIndex = settings.deviceIndex;
     settings_.lumoLicensePath = settings.lumoLicensePath;
-    settings_.lumoProfilesDirectory = settings.lumoProfilesDirectory;
-    settings_.grabberChannel = settings.grabberChannel;
+    settings_.lumoCalibrationPackPath = settings.lumoCalibrationPackPath;
+    settings_.profileName = settings.profileName;
 }
 
 std::string LumoCamera::name() const
@@ -284,110 +267,19 @@ bool LumoCamera::checkSi(const int code, const char *operation, CameraError &err
     return checkSiCode(code, operation, error);
 }
 
-bool LumoCamera::ensureGrabberChannelSelected(void *const handlePtr, CameraError &error)
+void LumoCamera::rollbackOpenConnection()
 {
-    SI_H handle = static_cast<SI_H>(handlePtr);
+    unregisterDataCallback();
 
-    auto readChannel = [&]() -> std::string {
-        SI_BOOL readable = SI_FALSE;
-        if (!SI_SUCCEEDED(SI_IsReadable(handle, L"Grabber.Channel", &readable)) || !readable)
-            return {};
-
-        int maxLength = 0;
-        if (!SI_SUCCEEDED(SI_GetStringMaxLength(handle, L"Grabber.Channel", &maxLength)) || maxLength <= 0)
-            return {};
-
-        std::vector<wchar_t> buffer(static_cast<std::size_t>(maxLength) + 2U, L'\0');
-        if (!SI_SUCCEEDED(SI_GetString(handle,
-                                      L"Grabber.Channel",
-                                      buffer.data(),
-                                      static_cast<int>(buffer.size()))))
-            return {};
-
-        return wideToUtf8(buffer.data());
-    };
-
-    auto isImplemented = [&](const wchar_t *feature) -> bool {
-        SI_BOOL implemented = SI_FALSE;
-        return SI_SUCCEEDED(SI_IsImplemented(handle, feature, &implemented)) && implemented;
-    };
-
-    auto tryCommand = [&](const wchar_t *feature) -> bool {
-        if (!isImplemented(feature))
-            return false;
-        return SI_Command(handle, feature) == siNoError;
-    };
-
-    auto applyChannelString = [&](const std::string &channel) -> bool {
-        if (channel.empty())
-            return false;
-
-        const std::wstring channelWide = toWide(channel);
-        std::vector<SI_WC> channelValue(channelWide.begin(), channelWide.end());
-        channelValue.push_back(L'\0');
-        return checkSi(SI_SetString(handle, L"Grabber.Channel", channelValue.data()),
-                       "SI_SetString(Grabber.Channel)",
-                       error);
-    };
-
-    if (!readChannel().empty())
-        return true;
-
-    if (!settings_.grabberChannel.empty())
+    if (handle_ != nullptr)
     {
-        if (applyChannelString(settings_.grabberChannel))
-            return true;
-        return false;
+        SI_Close(static_cast<SI_H>(handle_));
+        handle_ = nullptr;
+        --g_openSensorHandles;
     }
 
-    // Pleora/eBUS: executing Grabber.Channel as a command opens the native device picker on some profiles.
-    static const wchar_t *kGrabberPickerCommands[] = {
-        L"Grabber.Channel",
-        L"Grabber.SelectChannel",
-        L"Grabber.SelectDevice",
-    };
-
-    for (const wchar_t *command : kGrabberPickerCommands)
-    {
-        if (!tryCommand(command))
-            continue;
-
-        if (!readChannel().empty())
-            return true;
-    }
-
-    if (isImplemented(L"Grabber.Channels"))
-    {
-        int channelCount = 0;
-        if (checkSi(SI_GetEnumCount(handle, L"Grabber.Channels", &channelCount),
-                    "SI_GetEnumCount(Grabber.Channels)",
-                    error)
-            && channelCount > 0)
-        {
-            wchar_t channelBuffer[4096] = {};
-            if (checkSi(SI_GetEnumStringByIndex(handle,
-                                                L"Grabber.Channels",
-                                                0,
-                                                channelBuffer,
-                                                static_cast<int>(sizeof(channelBuffer) / sizeof(channelBuffer[0]))),
-                        "SI_GetEnumStringByIndex(Grabber.Channels)",
-                        error))
-            {
-                const std::string firstChannel = wideToUtf8(channelBuffer);
-                if (applyChannelString(firstChannel))
-                    return true;
-            }
-        }
-    }
-
-    error.code = CameraErrorCode::SdkError;
-    error.message =
-        tag()
-        + ": Grabber.Channel is empty. For Pleora GigE, select a device in the eBUS picker (shown during "
-          "connect), set HF_LUMO_GRABBER_CHANNEL to the device connection string, or install/configure "
-          "Pleora eBUS SDK.";
-    error.fatal = false;
-    return false;
+    releaseSdkLoad();
+    state_ = CameraState::Disconnected;
 }
 
 bool LumoCamera::ensureSdkLoaded(CameraError &error)
@@ -397,16 +289,6 @@ bool LumoCamera::ensureSdkLoaded(CameraError &error)
     {
         ++g_sdkLoadCount;
         return true;
-    }
-
-    if (!g_pendingProfilesDirectory.empty())
-    {
-        std::vector<SI_WC> profilesDir(g_pendingProfilesDirectory.begin(), g_pendingProfilesDirectory.end());
-        profilesDir.push_back(L'\0');
-        if (!checkSiCode(SI_SetString(SI_SYSTEM, L"ProfilesDirectory", profilesDir.data()),
-                         "SI_SetString(ProfilesDirectory)",
-                         error))
-            return false;
     }
 
     const std::wstring licensePath = toWide(settings_.lumoLicensePath);
@@ -425,7 +307,7 @@ void LumoCamera::releaseSdkLoad()
         return;
 
     --g_sdkLoadCount;
-    if (g_sdkLoadCount == 0)
+    if (g_sdkLoadCount == 0 && g_openSensorHandles.load() == 0)
         SI_Unload();
 }
 
@@ -479,6 +361,12 @@ void LumoCamera::onFrame(const std::uint8_t *buffer,
     if (buffer == nullptr || frameSize <= 0)
         return;
 
+    {
+        std::lock_guard<std::mutex> stateLock(mutex_);
+        if (state_ != CameraState::Streaming && state_ != CameraState::Armed)
+            return;
+    }
+
     std::lock_guard<std::mutex> lock(frameMutex_);
     if (static_cast<std::int64_t>(latestFrameBytes_.size()) < frameSize)
         latestFrameBytes_.resize(static_cast<std::size_t>(frameSize));
@@ -519,7 +407,7 @@ bool LumoCamera::connect(CameraError &error)
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (state_ == CameraState::Fault)
-        return expectState(CameraState::Disconnected, error);
+        state_ = CameraState::Disconnected;
 
     if (state_ == CameraState::Streaming)
     {
@@ -542,23 +430,17 @@ bool LumoCamera::connect(CameraError &error)
     if (state_ != CameraState::Disconnected)
         return expectState(CameraState::Disconnected, error);
 
-    if (!settings_.lumoProfilesDirectory.empty())
-    {
-        std::lock_guard<std::mutex> sdkLock(g_sdkMutex);
-        g_pendingProfilesDirectory = toWide(settings_.lumoProfilesDirectory);
-    }
-
     if (!ensureSdkLoaded(error))
-    {
-        setFault(error);
         return false;
-    }
 
     SI_H handle = 0;
     if (!checkSi(SI_Open(settings_.deviceIndex, &handle), "SI_Open", error))
     {
         releaseSdkLoad();
-        setFault(error);
+        if (error.message.find("Loading the module failed") != std::string::npos)
+        {
+            error.message += " Ensure SpecSensor and Pleora/eBUS DLL folders are on PATH (SDK bin\\x64).";
+        }
         return false;
     }
 
@@ -588,21 +470,64 @@ bool LumoCamera::initialize(CameraError &error)
         return expectState(CameraState::Connected, error);
 
     SI_H handle = static_cast<SI_H>(handle_);
-    if (!ensureGrabberChannelSelected(handle, error))
+
+    wchar_t deviceName[4096] = {};
+    const bool hasDeviceName =
+        SI_SUCCEEDED(SI_GetEnumStringByIndex(SI_SYSTEM,
+                                             L"DeviceName",
+                                             settings_.deviceIndex,
+                                             deviceName,
+                                             static_cast<int>(sizeof(deviceName) / sizeof(deviceName[0]))));
+    const std::string deviceNameUtf8 = hasDeviceName ? wideToUtf8(deviceName) : std::string();
+    const bool isFx10eProfile =
+        deviceNameUtf8.find("FX10e") != std::string::npos
+        || settings_.profileName.find("FX10e") != std::string::npos;
+
+    if (isFx10eProfile && !settings_.lumoCalibrationPackPath.empty())
     {
-        setFault(error);
-        return false;
+        const std::wstring calibWide = toWide(settings_.lumoCalibrationPackPath);
+        std::vector<SI_WC> calibValue(calibWide.begin(), calibWide.end());
+        calibValue.push_back(L'\0');
+        if (!checkSi(SI_SetString(handle, L"Camera.CalibrationPack", calibValue.data()),
+                     "SI_SetString(Camera.CalibrationPack)",
+                     error))
+        {
+            rollbackOpenConnection();
+            return false;
+        }
     }
 
     if (!checkSi(SI_Command(handle, L"Initialize"), "SI_Command(Initialize)", error))
     {
-        setFault(error);
+        if (error.message.find("Invalid camera channel") != std::string::npos)
+        {
+            error.message =
+                tag()
+                + ": Initialize failed (invalid grabber channel). Pick another SSP profile from the list.";
+        }
+        rollbackOpenConnection();
+        return false;
+    }
+
+    SI_BOOL initialized = SI_FALSE;
+    if (!checkSi(SI_GetBool(handle, L"IsInitialized", &initialized), "SI_GetBool(IsInitialized)", error))
+    {
+        rollbackOpenConnection();
+        return false;
+    }
+
+    if (!initialized)
+    {
+        error.code = CameraErrorCode::SdkError;
+        error.message = tag() + ": SI_Command(Initialize) returned OK but IsInitialized is false.";
+        error.fatal = false;
+        rollbackOpenConnection();
         return false;
     }
 
     if (!refreshImageGeometry(error))
     {
-        setFault(error);
+        rollbackOpenConnection();
         return false;
     }
 
@@ -614,38 +539,182 @@ bool LumoCamera::applySettings(const CameraSettings &settings, CameraError &erro
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (state_ != CameraState::Initialized && state_ != CameraState::Configured
-        && state_ != CameraState::SafeStopped)
+        && state_ != CameraState::SafeStopped && state_ != CameraState::Armed)
         return expectState(CameraState::Initialized, error);
 
     settings_ = settings;
     SI_H handle = static_cast<SI_H>(handle_);
-
-    if (!checkSi(SI_SetFloat(handle, L"Camera.ExposureTime", settings_.exposureMs),
-                 "SI_SetFloat(Camera.ExposureTime)",
-                 error))
-        return false;
 
     if (!checkSi(SI_SetFloat(handle, L"Camera.FrameRate", settings_.frameRateHz),
                  "SI_SetFloat(Camera.FrameRate)",
                  error))
         return false;
 
-    const wchar_t *triggerMode = settings_.externalTrigger ? L"External" : L"Internal";
-    if (!checkSi(SI_SetEnumIndexByString(handle, L"Camera.Trigger.Mode", triggerMode),
-                 "SI_SetEnumIndexByString(Camera.Trigger.Mode)",
+    double exposureMs = settings_.exposureMs;
+    double exposureMin = 0.0;
+    double exposureMax = 0.0;
+    if (SI_SUCCEEDED(SI_GetFloatMin(handle, L"Camera.ExposureTime", &exposureMin))
+        && SI_SUCCEEDED(SI_GetFloatMax(handle, L"Camera.ExposureTime", &exposureMax))
+        && exposureMax > exposureMin)
+    {
+        exposureMs = std::clamp(exposureMs, exposureMin, exposureMax);
+        settings_.exposureMs = exposureMs;
+    }
+
+    if (!checkSi(SI_SetFloat(handle, L"Camera.ExposureTime", exposureMs),
+                 "SI_SetFloat(Camera.ExposureTime)",
                  error))
+    {
+        error.message +=
+            " (max exposure depends on frame rate — lower exposure or reduce fps).";
+        return false;
+    }
+
+    const wchar_t *triggerMode = settings_.externalTrigger ? L"External" : L"Internal";
+    {
+        SI_BOOL implemented = SI_FALSE;
+        SI_BOOL writable = SI_FALSE;
+        if (SI_SUCCEEDED(SI_IsImplemented(handle, L"Camera.Trigger.Mode", &implemented)) && implemented
+            && SI_SUCCEEDED(SI_IsWritable(handle, L"Camera.Trigger.Mode", &writable)) && writable)
+        {
+            if (!checkSi(SI_SetEnumIndexByString(handle, L"Camera.Trigger.Mode", triggerMode),
+                         "SI_SetEnumIndexByString(Camera.Trigger.Mode)",
+                         error))
+                return false;
+        }
+    }
+
+    {
+        SI_BOOL implemented = SI_FALSE;
+        SI_BOOL writable = SI_FALSE;
+        if (SI_SUCCEEDED(SI_IsImplemented(handle, L"Acquisition.Timeout", &implemented)) && implemented
+            && SI_SUCCEEDED(SI_IsWritable(handle, L"Acquisition.Timeout", &writable)) && writable)
+        {
+            const double timeoutMs = static_cast<double>(settings_.acquisitionTimeoutMs);
+            if (!checkSi(SI_SetFloat(handle, L"Acquisition.Timeout", timeoutMs),
+                         "SI_SetFloat(Acquisition.Timeout)",
+                         error))
+                return false;
+        }
+    }
+
+    const auto setBinning = [this, handle](const wchar_t *feature,
+                                           const int binning,
+                                           const char *label,
+                                           CameraError &applyError) -> bool {
+        if (binning != 1 && binning != 2 && binning != 4 && binning != 8)
+        {
+            applyError.code = CameraErrorCode::InternalError;
+            applyError.message = tag() + std::string(": invalid ") + label + " binning value.";
+            applyError.fatal = false;
+            return false;
+        }
+
+        SI_BOOL implemented = SI_FALSE;
+        SI_BOOL writable = SI_FALSE;
+        if (!SI_SUCCEEDED(SI_IsImplemented(handle, feature, &implemented)) || !implemented
+            || !SI_SUCCEEDED(SI_IsWritable(handle, feature, &writable)) || !writable)
+            return true;
+
+        const std::wstring value = std::to_wstring(binning);
+        if (!checkSi(SI_SetEnumIndexByString(handle, feature, value.c_str()),
+                     label,
+                     applyError))
+            return false;
+
+        return true;
+    };
+
+    if (!setBinning(L"Camera.Binning.Spectral",
+                    settings_.spectralBinning,
+                    "SI_SetEnumIndexByString(Camera.Binning.Spectral)",
+                    error))
         return false;
 
-    const double timeoutMs = static_cast<double>(settings_.acquisitionTimeoutMs);
-    if (!checkSi(SI_SetFloat(handle, L"Acquisition.Timeout", timeoutMs),
-                 "SI_SetFloat(Acquisition.Timeout)",
-                 error))
+    if (!setBinning(L"Camera.Binning.Spatial",
+                    settings_.spatialBinning,
+                    "SI_SetEnumIndexByString(Camera.Binning.Spatial)",
+                    error))
         return false;
 
     if (!refreshImageGeometry(error))
         return false;
 
     state_ = CameraState::Configured;
+    return true;
+}
+
+bool LumoCamera::openShutter(CameraError &error)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (state_ != CameraState::Initialized && state_ != CameraState::Configured
+        && state_ != CameraState::Armed && state_ != CameraState::Streaming
+        && state_ != CameraState::SafeStopped)
+        return expectState(CameraState::Initialized, error);
+
+    SI_H handle = static_cast<SI_H>(handle_);
+    SI_BOOL implemented = SI_FALSE;
+    if (!SI_SUCCEEDED(SI_IsImplemented(handle, L"Camera.OpenShutter", &implemented)) || !implemented)
+    {
+        error.code = CameraErrorCode::NotImplemented;
+        error.message = tag() + ": Camera.OpenShutter is not available on this profile.";
+        error.fatal = false;
+        return false;
+    }
+
+    return checkSi(SI_Command(handle, L"Camera.OpenShutter"), "SI_Command(Camera.OpenShutter)", error);
+}
+
+bool LumoCamera::closeShutter(CameraError &error)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (state_ != CameraState::Initialized && state_ != CameraState::Configured
+        && state_ != CameraState::Armed && state_ != CameraState::Streaming
+        && state_ != CameraState::SafeStopped)
+        return expectState(CameraState::Initialized, error);
+
+    SI_H handle = static_cast<SI_H>(handle_);
+    SI_BOOL implemented = SI_FALSE;
+    if (!SI_SUCCEEDED(SI_IsImplemented(handle, L"Camera.CloseShutter", &implemented)) || !implemented)
+    {
+        error.code = CameraErrorCode::NotImplemented;
+        error.message = tag() + ": Camera.CloseShutter is not available on this profile.";
+        error.fatal = false;
+        return false;
+    }
+
+    return checkSi(SI_Command(handle, L"Camera.CloseShutter"), "SI_Command(Camera.CloseShutter)", error);
+}
+
+bool LumoCamera::shutterIsOpen(bool &isOpen, CameraError &error)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    isOpen = false;
+
+    if (state_ == CameraState::Disconnected || state_ == CameraState::Connected
+        || state_ == CameraState::Fault)
+    {
+        error.code = CameraErrorCode::InvalidState;
+        error.message = tag() + ": shutter status requires an initialized camera.";
+        error.fatal = false;
+        return false;
+    }
+
+    SI_H handle = static_cast<SI_H>(handle_);
+    SI_BOOL implemented = SI_FALSE;
+    if (!SI_SUCCEEDED(SI_IsImplemented(handle, L"Camera.Shutter.IsOpen", &implemented)) || !implemented)
+    {
+        error.code = CameraErrorCode::NotImplemented;
+        error.message = tag() + ": Camera.Shutter.IsOpen is not available on this profile.";
+        error.fatal = false;
+        return false;
+    }
+
+    SI_BOOL open = SI_FALSE;
+    if (!checkSi(SI_GetBool(handle, L"Camera.Shutter.IsOpen", &open), "SI_GetBool(Camera.Shutter.IsOpen)", error))
+        return false;
+
+    isOpen = open == SI_TRUE;
     return true;
 }
 
@@ -711,13 +780,21 @@ void LumoCamera::disconnect()
     if (state_ == CameraState::Disconnected)
         return;
 
-    if (state_ == CameraState::Streaming)
+    if (state_ == CameraState::Streaming && handle_ != nullptr)
     {
         SI_H handle = static_cast<SI_H>(handle_);
         SI_Command(handle, L"Acquisition.Stop");
     }
 
     unregisterDataCallback();
+
+    {
+        std::lock_guard<std::mutex> frameLock(frameMutex_);
+        frameReady_ = false;
+    }
+    frameCv_.notify_all();
+
+    state_ = CameraState::Disconnected;
 
     if (handle_ != nullptr)
     {
@@ -727,7 +804,6 @@ void LumoCamera::disconnect()
     }
 
     releaseSdkLoad();
-    state_ = CameraState::Disconnected;
 }
 
 bool LumoCamera::pollFrame(FramePacket &frame, const std::uint32_t timeoutMs, CameraError &error)
@@ -827,6 +903,25 @@ bool LumoCamera::initialize(CameraError &error)
 bool LumoCamera::applySettings(const CameraSettings &settings, CameraError &error)
 {
     (void)settings;
+    (void)error;
+    return false;
+}
+
+bool LumoCamera::openShutter(CameraError &error)
+{
+    (void)error;
+    return false;
+}
+
+bool LumoCamera::closeShutter(CameraError &error)
+{
+    (void)error;
+    return false;
+}
+
+bool LumoCamera::shutterIsOpen(bool &isOpen, CameraError &error)
+{
+    isOpen = false;
     (void)error;
     return false;
 }

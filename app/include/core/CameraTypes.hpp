@@ -44,6 +44,10 @@ struct CameraSettings
 {
     double exposureMs = 15.0;
     double frameRateHz = 100.0;
+    /// Camera.Binning.Spectral enum value (1, 2, 4, or 8 on FX10e).
+    int spectralBinning = 1;
+    /// Camera.Binning.Spatial enum value (1, 2, 4, or 8 on FX10e).
+    int spatialBinning = 1;
     bool externalTrigger = false;
     std::uint32_t acquisitionTimeoutMs = 1000;
     std::string profileName;
@@ -51,10 +55,8 @@ struct CameraSettings
     int deviceIndex = 0;
     /// Lumo license file path; empty uses default search.
     std::string lumoLicensePath;
-    /// SSP search directory; applied to ProfilesDirectory before SI_Load.
-    std::string lumoProfilesDirectory;
-    /// Pleora/eBUS grabber channel (Grabber.Channel). Empty = SDK picker / auto-select when possible.
-    std::string grabberChannel;
+    /// Camera.CalibrationPack path (.scp), applied for FX10e SSP profiles when set.
+    std::string lumoCalibrationPackPath;
 };
 
 struct FramePacket

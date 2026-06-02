@@ -18,8 +18,11 @@ public:
     using StateCallback = std::function<void(CameraState)>;
     using ErrorCallback = std::function<void(const CameraError &)>;
     using FrameCallback = std::function<void(const FramePacket &)>;
-    /// Runs a task on the Qt GUI thread (e.g. BlockingQueuedConnection for modal SDK UI).
+    using ShutterStateCallback = std::function<void(bool isOpen)>;
+    /// Runs a task on the Qt GUI thread (BlockingQueuedConnection — for modal SDK UI only).
     using GuiTaskRunner = std::function<void(std::function<void()>)>;
+    /// Posts a task to the GUI thread without blocking the control thread (disconnect teardown).
+    using GuiAsyncTaskRunner = std::function<void(std::function<void()>)>;
 
     explicit CameraWorker(std::shared_ptr<ICameraController> controller);
     ~CameraWorker();
@@ -33,10 +36,18 @@ public:
     /// Connect to SDK, then Initialize on the GUI thread (single queued operation).
     void requestConnectAndInitializeOnGuiThread();
     void requestApplySettings(const CameraSettings &settings);
+    void requestBeginStreaming(const CameraSettings &settings);
     void requestArm();
     void requestStartStreaming();
     void requestStopStreaming();
     void requestDisconnect();
+    /// Stop streaming and disconnect on the GUI thread (required for Pleora teardown).
+    void requestDisconnectOnGuiThread();
+    void requestOpenShutter();
+    void requestCloseShutter();
+    void requestQueryShutterState();
+    /// Synchronous teardown for application shutdown (call from GUI thread).
+    void shutdownSync();
 
     CameraState currentState() const;
     std::string name() const;
@@ -44,7 +55,9 @@ public:
     void setStateCallback(StateCallback callback);
     void setErrorCallback(ErrorCallback callback);
     void setFrameCallback(FrameCallback callback);
+    void setShutterStateCallback(ShutterStateCallback callback);
     void setGuiTaskRunner(GuiTaskRunner runner);
+    void setGuiAsyncTaskRunner(GuiAsyncTaskRunner runner);
 
 private:
     using ControlCommand = std::function<void()>;
@@ -54,6 +67,7 @@ private:
     void streamLoop();
     void notifyState(CameraState state);
     void notifyError(const CameraError &error);
+    void publishShutterState();
 
     std::shared_ptr<ICameraController> controller_;
 
@@ -61,7 +75,9 @@ private:
     StateCallback stateCallback_;
     ErrorCallback errorCallback_;
     FrameCallback frameCallback_;
+    ShutterStateCallback shutterStateCallback_;
     GuiTaskRunner guiTaskRunner_;
+    GuiAsyncTaskRunner guiAsyncTaskRunner_;
 
     mutable std::mutex commandMutex_;
     std::condition_variable commandCv_;

@@ -98,11 +98,9 @@ if (-not (Test-Path -LiteralPath $gcc) -or -not (Test-Path -LiteralPath $gpp)) {
 $mingwBin = Join-Path $MingwPath "bin"
 $qtBin = Join-Path $QtPrefixPath "bin"
 $lumoBin = Join-Path $LumoSdkRoot "bin\x64"
-$lumoProfiles = Join-Path $LumoSdkRoot "profiles"
 # Ensure MinGW/Qt DLLs win over other tools on PATH (notably Git's sh.exe, which can break MinGW Makefiles).
 $env:PATH = "$mingwBin;$qtBin;$lumoBin;$env:PATH"
 $env:LUMO_SDK_ROOT = $LumoSdkRoot
-$env:HF_LUMO_PROFILES_DIR = $lumoProfiles
 
 Write-Host "==> Qt prefix: $QtPrefixPath"
 Write-Host "==> MinGW:   $MingwPath"

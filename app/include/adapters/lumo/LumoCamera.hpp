@@ -29,6 +29,9 @@ public:
     bool connect(CameraError &error) override;
     bool initialize(CameraError &error) override;
     bool applySettings(const CameraSettings &settings, CameraError &error) override;
+    bool openShutter(CameraError &error) override;
+    bool closeShutter(CameraError &error) override;
+    bool shutterIsOpen(bool &isOpen, CameraError &error) override;
     bool arm(CameraError &error) override;
     bool start(CameraError &error) override;
     void stop() override;
@@ -52,7 +55,7 @@ private:
     bool ensureSdkLoaded(CameraError &error);
     void releaseSdkLoad();
     bool checkSi(int code, const char *operation, CameraError &error);
-    bool ensureGrabberChannelSelected(void *handle, CameraError &error);
+    void rollbackOpenConnection();
     bool refreshImageGeometry(CameraError &error);
     bool registerDataCallback(CameraError &error);
     void unregisterDataCallback();

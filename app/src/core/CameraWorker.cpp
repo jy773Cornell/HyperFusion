@@ -103,19 +103,25 @@ void CameraWorker::requestConnectAndInitializeOnGuiThread()
             if (stateBefore == CameraState::Disconnected || stateBefore == CameraState::Fault)
             {
                 if (!controller_->connect(error))
+                {
+                    notifyState(controller_->state());
                     return;
-
-                notifyState(controller_->state());
+                }
             }
 
             if (controller_->initialize(error))
             {
                 success = true;
-                notifyState(controller_->state());
             }
+            else if (controller_->state() != CameraState::Disconnected)
+            {
+                controller_->disconnect();
+            }
+
+            notifyState(controller_->state());
         });
 
-        if (!success && error.code != CameraErrorCode::None)
+        if (!success)
             notifyError(error);
     });
 }
@@ -130,10 +136,75 @@ void CameraWorker::requestApplySettings(const CameraSettings &settings)
 {
     enqueueCommand([this, settings]() {
         CameraError error;
-        if (controller_->applySettings(settings, error))
-            notifyState(controller_->state());
-        else
+
+        const bool resumeStreaming = streamEnabled_.load()
+                                     || controller_->state() == CameraState::Streaming;
+        if (resumeStreaming)
+        {
+            streamEnabled_ = false;
+            controller_->stop();
+        }
+
+        if (!controller_->applySettings(settings, error))
+        {
             notifyError(error);
+            notifyState(controller_->state());
+            return;
+        }
+
+        if (!resumeStreaming)
+        {
+            notifyState(controller_->state());
+            return;
+        }
+
+        if (!controller_->arm(error))
+        {
+            notifyError(error);
+            notifyState(controller_->state());
+            return;
+        }
+
+        if (!controller_->start(error))
+        {
+            notifyError(error);
+            notifyState(controller_->state());
+            return;
+        }
+
+        streamEnabled_ = true;
+        notifyState(controller_->state());
+    });
+}
+
+void CameraWorker::requestBeginStreaming(const CameraSettings &settings)
+{
+    enqueueCommand([this, settings]() {
+        CameraError error;
+
+        if (!controller_->applySettings(settings, error))
+        {
+            notifyError(error);
+            notifyState(controller_->state());
+            return;
+        }
+
+        if (!controller_->arm(error))
+        {
+            notifyError(error);
+            notifyState(controller_->state());
+            return;
+        }
+
+        if (!controller_->start(error))
+        {
+            notifyError(error);
+            notifyState(controller_->state());
+            return;
+        }
+
+        streamEnabled_ = true;
+        notifyState(controller_->state());
     });
 }
 
@@ -175,11 +246,83 @@ void CameraWorker::requestStopStreaming()
 
 void CameraWorker::requestDisconnect()
 {
+    requestDisconnectOnGuiThread();
+}
+
+void CameraWorker::requestDisconnectOnGuiThread()
+{
     enqueueCommand([this]() {
         streamEnabled_ = false;
-        controller_->disconnect();
-        notifyState(controller_->state());
+        controller_->stop();
+
+        const auto teardown = [this]() {
+            controller_->disconnect();
+            notifyState(controller_->state());
+        };
+
+        if (guiAsyncTaskRunner_)
+            guiAsyncTaskRunner_(teardown);
+        else if (guiTaskRunner_)
+            guiTaskRunner_(teardown);
+        else
+            teardown();
     });
+}
+
+void CameraWorker::setGuiAsyncTaskRunner(GuiAsyncTaskRunner runner)
+{
+    std::lock_guard<std::mutex> lock(callbackMutex_);
+    guiAsyncTaskRunner_ = std::move(runner);
+}
+
+void CameraWorker::requestOpenShutter()
+{
+    enqueueCommand([this]() {
+        CameraError error;
+        if (!controller_->openShutter(error))
+            notifyError(error);
+        else
+            publishShutterState();
+    });
+}
+
+void CameraWorker::requestCloseShutter()
+{
+    enqueueCommand([this]() {
+        CameraError error;
+        if (!controller_->closeShutter(error))
+            notifyError(error);
+        else
+            publishShutterState();
+    });
+}
+
+void CameraWorker::requestQueryShutterState()
+{
+    enqueueCommand([this]() { publishShutterState(); });
+}
+
+void CameraWorker::publishShutterState()
+{
+    bool isOpen = false;
+    CameraError error;
+    if (!controller_->shutterIsOpen(isOpen, error))
+        return;
+
+    std::lock_guard<std::mutex> lock(callbackMutex_);
+    if (shutterStateCallback_)
+        shutterStateCallback_(isOpen);
+}
+
+void CameraWorker::shutdownSync()
+{
+    streamEnabled_ = false;
+    if (controller_)
+    {
+        controller_->stop();
+        controller_->disconnect();
+    }
+    stop();
 }
 
 CameraState CameraWorker::currentState() const
@@ -208,6 +351,12 @@ void CameraWorker::setFrameCallback(FrameCallback callback)
 {
     std::lock_guard<std::mutex> lock(callbackMutex_);
     frameCallback_ = std::move(callback);
+}
+
+void CameraWorker::setShutterStateCallback(ShutterStateCallback callback)
+{
+    std::lock_guard<std::mutex> lock(callbackMutex_);
+    shutterStateCallback_ = std::move(callback);
 }
 
 void CameraWorker::enqueueCommand(ControlCommand command)
