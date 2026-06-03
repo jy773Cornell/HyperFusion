@@ -10,10 +10,12 @@
 #include <string>
 #include <vector>
 
-class LumoCamera final : public ICameraController
+class LumoCamera : public ICameraController
 {
 public:
-    explicit LumoCamera(CameraBackendId backendId, std::string instanceLabel);
+    explicit LumoCamera(CameraBackendId backendId,
+                        std::string instanceLabel,
+                        LumoSensorKind sensorKind = LumoSensorKind::Fx10ePleora);
     ~LumoCamera() override;
 
     void prepareConnection(const CameraSettings &settings);
@@ -25,10 +27,14 @@ public:
 
     std::string name() const override;
     CameraBackendId backendId() const override;
+    LumoSensorKind sensorKind() const override;
+    bool requiresGuiThreadForSdkLifecycle() const override;
 
     bool connect(CameraError &error) override;
     bool initialize(CameraError &error) override;
-    bool applySettings(const CameraSettings &settings, CameraError &error) override;
+    bool applySettings(const CameraSettings &settings,
+                       CameraError &error,
+                       CameraTimingApplyResult *timingOut = nullptr) override;
     bool openShutter(CameraError &error) override;
     bool closeShutter(CameraError &error) override;
     bool shutterIsOpen(bool &isOpen, CameraError &error) override;
@@ -57,13 +63,20 @@ private:
     bool checkSi(int code, const char *operation, CameraError &error);
     void rollbackOpenConnection();
     bool refreshImageGeometry(CameraError &error);
+    bool applyCameraTiming(void *handle,
+                           const CameraSettings &requested,
+                           CameraError &error,
+                           CameraTimingApplyResult *timingOut);
     bool registerDataCallback(CameraError &error);
     void unregisterDataCallback();
     void onFrame(const std::uint8_t *buffer, std::int64_t frameSize, std::int64_t frameNumber);
+    /// Stop acquisition and wake any blocked pollFrame (must not hold mutex_ while waiting on frameMutex_).
+    void haltAcquisition();
 #endif
 
     const CameraBackendId backendId_;
     const std::string instanceLabel_;
+    const LumoSensorKind sensorKind_;
 
     mutable std::mutex mutex_;
     CameraState state_ = CameraState::Disconnected;

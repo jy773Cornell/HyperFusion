@@ -113,9 +113,12 @@ std::uint64_t steadyNowNs()
 #endif
 } // namespace
 
-LumoCamera::LumoCamera(const CameraBackendId backendId, std::string instanceLabel)
+LumoCamera::LumoCamera(const CameraBackendId backendId,
+                       std::string instanceLabel,
+                       const LumoSensorKind sensorKind)
     : backendId_(backendId),
-      instanceLabel_(std::move(instanceLabel))
+      instanceLabel_(std::move(instanceLabel)),
+      sensorKind_(sensorKind)
 {
 }
 
@@ -141,15 +144,29 @@ void LumoCamera::prepareConnection(const CameraSettings &settings)
 std::string LumoCamera::name() const
 {
 #if defined(HF_HAVE_LUMO_SDK)
-    return instanceLabel_ + " (Lumo SDK)";
+    if (sensorKind_ == LumoSensorKind::Swir3Ni)
+        return instanceLabel_ + " (Lumo SDK / NI)";
+    return instanceLabel_ + " (Lumo SDK / Pleora)";
 #else
-    return instanceLabel_ + " (Lumo stub)";
+    if (sensorKind_ == LumoSensorKind::Swir3Ni)
+        return instanceLabel_ + " (Lumo stub / NI)";
+    return instanceLabel_ + " (Lumo stub / Pleora)";
 #endif
 }
 
 CameraBackendId LumoCamera::backendId() const
 {
     return backendId_;
+}
+
+LumoSensorKind LumoCamera::sensorKind() const
+{
+    return sensorKind_;
+}
+
+bool LumoCamera::requiresGuiThreadForSdkLifecycle() const
+{
+    return true;
 }
 
 namespace
@@ -535,7 +552,92 @@ bool LumoCamera::initialize(CameraError &error)
     return true;
 }
 
-bool LumoCamera::applySettings(const CameraSettings &settings, CameraError &error)
+bool LumoCamera::applyCameraTiming(void *handlePtr,
+                                   const CameraSettings &requested,
+                                   CameraError &error,
+                                   CameraTimingApplyResult *timingOut)
+{
+    SI_H handle = static_cast<SI_H>(handlePtr);
+    CameraTimingApplyResult timing;
+    timing.requestedFrameRateHz = requested.frameRateHz;
+    timing.requestedExposureMs = requested.exposureMs;
+
+    {
+        SI_BOOL implemented = SI_FALSE;
+        SI_BOOL writable = SI_FALSE;
+        if (SI_SUCCEEDED(SI_IsImplemented(handle, L"Camera.ExposureTime.Auto", &implemented))
+            && implemented
+            && SI_SUCCEEDED(SI_IsWritable(handle, L"Camera.ExposureTime.Auto", &writable))
+            && writable)
+        {
+            if (!checkSi(SI_SetBool(handle, L"Camera.ExposureTime.Auto", SI_TRUE),
+                         "SI_SetBool(Camera.ExposureTime.Auto)",
+                         error))
+                return false;
+            timing.exposureTimeAutoEnabled = true;
+        }
+        else
+        {
+            SI_BOOL autoEnabled = SI_FALSE;
+            if (SI_SUCCEEDED(SI_GetBool(handle, L"Camera.ExposureTime.Auto", &autoEnabled)))
+                timing.exposureTimeAutoEnabled = (autoEnabled == SI_TRUE);
+        }
+    }
+
+    if (!checkSi(SI_SetFloat(handle, L"Camera.FrameRate", requested.frameRateHz),
+                 "SI_SetFloat(Camera.FrameRate)",
+                 error))
+        return false;
+
+    double exposureMs = requested.exposureMs;
+    double exposureMin = 0.0;
+    double exposureMax = 0.0;
+    if (SI_SUCCEEDED(SI_GetFloatMin(handle, L"Camera.ExposureTime", &exposureMin))
+        && SI_SUCCEEDED(SI_GetFloatMax(handle, L"Camera.ExposureTime", &exposureMax))
+        && exposureMax > exposureMin)
+        exposureMs = std::clamp(exposureMs, exposureMin, exposureMax);
+
+    if (!checkSi(SI_SetFloat(handle, L"Camera.ExposureTime", exposureMs),
+                 "SI_SetFloat(Camera.ExposureTime)",
+                 error))
+    {
+        error.message +=
+            " (timing budget: readout + exposure ≈ 1000 / frame rate ms; "
+            "with Camera.ExposureTime.Auto, exposure may be maximized for the set fps).";
+        return false;
+    }
+
+    double appliedFrameRateHz = requested.frameRateHz;
+    double appliedExposureMs = exposureMs;
+    if (!checkSi(SI_GetFloat(handle, L"Camera.FrameRate", &appliedFrameRateHz),
+                 "SI_GetFloat(Camera.FrameRate)",
+                 error))
+        return false;
+    if (!checkSi(SI_GetFloat(handle, L"Camera.ExposureTime", &appliedExposureMs),
+                 "SI_GetFloat(Camera.ExposureTime)",
+                 error))
+        return false;
+
+    double readoutTimeMs = 0.0;
+    if (SI_SUCCEEDED(SI_GetFloat(handle, L"Camera.Image.ReadoutTime", &readoutTimeMs)))
+        timing.readoutTimeMs = readoutTimeMs;
+
+    timing.appliedFrameRateHz = appliedFrameRateHz;
+    timing.appliedExposureMs = appliedExposureMs;
+    timing.valid = true;
+
+    settings_.frameRateHz = appliedFrameRateHz;
+    settings_.exposureMs = appliedExposureMs;
+
+    if (timingOut != nullptr)
+        *timingOut = timing;
+
+    return true;
+}
+
+bool LumoCamera::applySettings(const CameraSettings &settings,
+                               CameraError &error,
+                               CameraTimingApplyResult *timingOut)
 {
     std::lock_guard<std::mutex> lock(mutex_);
     if (state_ != CameraState::Initialized && state_ != CameraState::Configured
@@ -545,30 +647,8 @@ bool LumoCamera::applySettings(const CameraSettings &settings, CameraError &erro
     settings_ = settings;
     SI_H handle = static_cast<SI_H>(handle_);
 
-    if (!checkSi(SI_SetFloat(handle, L"Camera.FrameRate", settings_.frameRateHz),
-                 "SI_SetFloat(Camera.FrameRate)",
-                 error))
+    if (!applyCameraTiming(handle_, settings, error, timingOut))
         return false;
-
-    double exposureMs = settings_.exposureMs;
-    double exposureMin = 0.0;
-    double exposureMax = 0.0;
-    if (SI_SUCCEEDED(SI_GetFloatMin(handle, L"Camera.ExposureTime", &exposureMin))
-        && SI_SUCCEEDED(SI_GetFloatMax(handle, L"Camera.ExposureTime", &exposureMax))
-        && exposureMax > exposureMin)
-    {
-        exposureMs = std::clamp(exposureMs, exposureMin, exposureMax);
-        settings_.exposureMs = exposureMs;
-    }
-
-    if (!checkSi(SI_SetFloat(handle, L"Camera.ExposureTime", exposureMs),
-                 "SI_SetFloat(Camera.ExposureTime)",
-                 error))
-    {
-        error.message +=
-            " (max exposure depends on frame rate — lower exposure or reduce fps).";
-        return false;
-    }
 
     const wchar_t *triggerMode = settings_.externalTrigger ? L"External" : L"Internal";
     {
@@ -756,37 +836,20 @@ bool LumoCamera::start(CameraError &error)
     return true;
 }
 
-void LumoCamera::stop()
+void LumoCamera::haltAcquisition()
 {
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (state_ != CameraState::Streaming)
-        return;
-
-    SI_H handle = static_cast<SI_H>(handle_);
-    SI_Command(handle, L"Acquisition.Stop");
-    unregisterDataCallback();
+    SI_H handle = nullptr;
+    bool shouldStopCommand = false;
 
     {
-        std::lock_guard<std::mutex> frameLock(frameMutex_);
-        frameReady_ = false;
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (state_ != CameraState::Streaming && state_ != CameraState::Armed)
+            return;
+
+        shouldStopCommand = state_ == CameraState::Streaming;
+        state_ = CameraState::SafeStopped;
+        handle = static_cast<SI_H>(handle_);
     }
-
-    state_ = CameraState::SafeStopped;
-}
-
-void LumoCamera::disconnect()
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    if (state_ == CameraState::Disconnected)
-        return;
-
-    if (state_ == CameraState::Streaming && handle_ != nullptr)
-    {
-        SI_H handle = static_cast<SI_H>(handle_);
-        SI_Command(handle, L"Acquisition.Stop");
-    }
-
-    unregisterDataCallback();
 
     {
         std::lock_guard<std::mutex> frameLock(frameMutex_);
@@ -794,12 +857,43 @@ void LumoCamera::disconnect()
     }
     frameCv_.notify_all();
 
-    state_ = CameraState::Disconnected;
+    if (handle != nullptr && shouldStopCommand)
+        SI_Command(handle, L"Acquisition.Stop");
 
-    if (handle_ != nullptr)
+    unregisterDataCallback();
+}
+
+void LumoCamera::stop()
+{
+    haltAcquisition();
+}
+
+void LumoCamera::disconnect()
+{
+    haltAcquisition();
+
+    void *handleToClose = nullptr;
     {
-        SI_Close(static_cast<SI_H>(handle_));
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (state_ == CameraState::Disconnected)
+            return;
+
+        handleToClose = handle_;
         handle_ = nullptr;
+        state_ = CameraState::Disconnected;
+    }
+
+    {
+        std::lock_guard<std::mutex> frameLock(frameMutex_);
+        frameReady_ = false;
+        latestFrameNumber_ = 0;
+        latestFrameBytes_.clear();
+    }
+    frameCv_.notify_all();
+
+    if (handleToClose != nullptr)
+    {
+        SI_Close(static_cast<SI_H>(handleToClose));
         --g_openSensorHandles;
     }
 
@@ -823,8 +917,19 @@ bool LumoCamera::pollFrame(FramePacket &frame, const std::uint32_t timeoutMs, Ca
     }
 
     std::unique_lock<std::mutex> frameLock(frameMutex_);
-  const bool signaled = frameCv_.wait_for(
+    const bool signaled = frameCv_.wait_for(
         frameLock, std::chrono::milliseconds(timeoutMs), [this]() { return frameReady_; });
+
+    {
+        std::lock_guard<std::mutex> stateLock(mutex_);
+        if (state_ != CameraState::Streaming)
+        {
+            error.code = CameraErrorCode::InvalidState;
+            error.message = tag() + " stream stopped.";
+            error.fatal = false;
+            return false;
+        }
+    }
 
     if (!signaled)
     {
@@ -900,10 +1005,20 @@ bool LumoCamera::initialize(CameraError &error)
     return false;
 }
 
-bool LumoCamera::applySettings(const CameraSettings &settings, CameraError &error)
+bool LumoCamera::applySettings(const CameraSettings &settings,
+                               CameraError &error,
+                               CameraTimingApplyResult *timingOut)
 {
     (void)settings;
     (void)error;
+    if (timingOut != nullptr)
+    {
+        timingOut->valid = true;
+        timingOut->requestedFrameRateHz = settings.frameRateHz;
+        timingOut->requestedExposureMs = settings.exposureMs;
+        timingOut->appliedFrameRateHz = settings.frameRateHz;
+        timingOut->appliedExposureMs = settings.exposureMs;
+    }
     return false;
 }
 

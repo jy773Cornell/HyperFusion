@@ -1,6 +1,7 @@
 // Camera backend interface contract for lifecycle and frame acquisition.
 #pragma once
 
+#include "adapters/lumo/LumoDeviceTypes.hpp"
 #include "core/CameraTypes.hpp"
 
 #include <string>
@@ -12,10 +13,16 @@ public:
 
     virtual std::string name() const = 0;
     virtual CameraBackendId backendId() const = 0;
+    virtual LumoSensorKind sensorKind() const { return LumoSensorKind::Fx10ePleora; }
+
+    /// Pleora (FX10e) init/teardown must run on the Qt GUI thread; NI (SWIR3) uses the same path today.
+    virtual bool requiresGuiThreadForSdkLifecycle() const { return true; }
 
     virtual bool connect(CameraError &error) = 0;
     virtual bool initialize(CameraError &error) = 0;
-    virtual bool applySettings(const CameraSettings &settings, CameraError &error) = 0;
+    virtual bool applySettings(const CameraSettings &settings,
+                               CameraError &error,
+                               CameraTimingApplyResult *timingOut = nullptr) = 0;
     virtual bool openShutter(CameraError &error);
     virtual bool closeShutter(CameraError &error);
     virtual bool shutterIsOpen(bool &isOpen, CameraError &error);

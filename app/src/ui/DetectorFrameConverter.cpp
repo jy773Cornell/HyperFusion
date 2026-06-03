@@ -1,3 +1,5 @@
+// Converts 16-bit camera frame packets to 8-bit grayscale QImages for Qt detector panes.
+// Applies per-frame min–max scaling; does not touch hardware or SDK state.
 #include "ui/DetectorFrameConverter.hpp"
 
 #include <QImage>

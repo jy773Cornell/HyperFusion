@@ -1,4 +1,6 @@
 // Threaded camera worker implementation for command/control and streaming loops.
+// Both FX10e (Pleora) and SWIR3 (NI grabber) use LumoCamera / Swir3NiCamera behind this worker:
+// control thread for apply/arm/stream; GUI thread for connect/initialize/disconnect (SDK requirement).
 #include "core/CameraWorker.hpp"
 
 #include <chrono>
@@ -92,7 +94,7 @@ void CameraWorker::requestConnectAndInitializeOnGuiThread()
         bool success = false;
 
         const auto runOnGui = [this](const std::function<void()> &task) {
-            if (guiTaskRunner_)
+            if (controller_->requiresGuiThreadForSdkLifecycle() && guiTaskRunner_)
                 guiTaskRunner_(task);
             else
                 task();
@@ -132,6 +134,16 @@ void CameraWorker::setGuiTaskRunner(GuiTaskRunner runner)
     guiTaskRunner_ = std::move(runner);
 }
 
+void CameraWorker::waitForStreamIdle()
+{
+    for (int attempt = 0; attempt < 200; ++attempt)
+    {
+        if (!streamInPoll_.load())
+            return;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+}
+
 void CameraWorker::requestApplySettings(const CameraSettings &settings)
 {
     enqueueCommand([this, settings]() {
@@ -142,15 +154,22 @@ void CameraWorker::requestApplySettings(const CameraSettings &settings)
         if (resumeStreaming)
         {
             streamEnabled_ = false;
+            waitForStreamIdle();
             controller_->stop();
         }
 
-        if (!controller_->applySettings(settings, error))
+        CameraTimingApplyResult timing;
+        if (!controller_->applySettings(settings, error, &timing))
         {
             notifyError(error);
             notifyState(controller_->state());
             return;
         }
+
+        CameraSettingsApplyReport report;
+        report.requested = settings;
+        report.timing = timing;
+        notifySettingsApplied(report);
 
         if (!resumeStreaming)
         {
@@ -182,12 +201,18 @@ void CameraWorker::requestBeginStreaming(const CameraSettings &settings)
     enqueueCommand([this, settings]() {
         CameraError error;
 
-        if (!controller_->applySettings(settings, error))
+        CameraTimingApplyResult timing;
+        if (!controller_->applySettings(settings, error, &timing))
         {
             notifyError(error);
             notifyState(controller_->state());
             return;
         }
+
+        CameraSettingsApplyReport report;
+        report.requested = settings;
+        report.timing = timing;
+        notifySettingsApplied(report);
 
         if (!controller_->arm(error))
         {
@@ -239,6 +264,7 @@ void CameraWorker::requestStopStreaming()
 {
     enqueueCommand([this]() {
         streamEnabled_ = false;
+        waitForStreamIdle();
         controller_->stop();
         notifyState(controller_->state());
     });
@@ -253,19 +279,17 @@ void CameraWorker::requestDisconnectOnGuiThread()
 {
     enqueueCommand([this]() {
         streamEnabled_ = false;
+        waitForStreamIdle();
+
         controller_->stop();
 
-        const auto teardown = [this]() {
-            controller_->disconnect();
-            notifyState(controller_->state());
-        };
-
-        if (guiAsyncTaskRunner_)
-            guiAsyncTaskRunner_(teardown);
-        else if (guiTaskRunner_)
-            guiTaskRunner_(teardown);
+        const auto runDisconnect = [this]() { controller_->disconnect(); };
+        if (controller_->requiresGuiThreadForSdkLifecycle() && guiTaskRunner_)
+            guiTaskRunner_(runDisconnect);
         else
-            teardown();
+            runDisconnect();
+
+        notifyState(controller_->state());
     });
 }
 
@@ -317,6 +341,14 @@ void CameraWorker::publishShutterState()
 void CameraWorker::shutdownSync()
 {
     streamEnabled_ = false;
+    waitForStreamIdle();
+
+    {
+        std::lock_guard<std::mutex> lock(callbackMutex_);
+        frameCallback_ = nullptr;
+        settingsAppliedCallback_ = nullptr;
+    }
+
     if (controller_)
     {
         controller_->stop();
@@ -357,6 +389,12 @@ void CameraWorker::setShutterStateCallback(ShutterStateCallback callback)
 {
     std::lock_guard<std::mutex> lock(callbackMutex_);
     shutterStateCallback_ = std::move(callback);
+}
+
+void CameraWorker::setSettingsAppliedCallback(SettingsAppliedCallback callback)
+{
+    std::lock_guard<std::mutex> lock(callbackMutex_);
+    settingsAppliedCallback_ = std::move(callback);
 }
 
 void CameraWorker::enqueueCommand(ControlCommand command)
@@ -400,7 +438,14 @@ void CameraWorker::streamLoop()
 
         FramePacket frame;
         CameraError error;
-        if (controller_->pollFrame(frame, kFramePollTimeoutMs, error))
+        streamInPoll_.store(true);
+        const bool gotFrame = controller_->pollFrame(frame, kFramePollTimeoutMs, error);
+        streamInPoll_.store(false);
+
+        if (!streamEnabled_.load())
+            continue;
+
+        if (gotFrame)
         {
             std::lock_guard<std::mutex> lock(callbackMutex_);
             if (frameCallback_)
@@ -409,6 +454,9 @@ void CameraWorker::streamLoop()
         }
 
         if (error.code == CameraErrorCode::Timeout)
+            continue;
+
+        if (error.code == CameraErrorCode::InvalidState)
             continue;
 
         notifyError(error);
@@ -430,4 +478,11 @@ void CameraWorker::notifyError(const CameraError &error)
     std::lock_guard<std::mutex> lock(callbackMutex_);
     if (errorCallback_)
         errorCallback_(error);
+}
+
+void CameraWorker::notifySettingsApplied(const CameraSettingsApplyReport &report)
+{
+    std::lock_guard<std::mutex> lock(callbackMutex_);
+    if (settingsAppliedCallback_)
+        settingsAppliedCallback_(report);
 }

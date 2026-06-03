@@ -42,8 +42,8 @@ struct CameraError
 
 struct CameraSettings
 {
-    double exposureMs = 15.0;
-    double frameRateHz = 100.0;
+    double exposureMs = 18.0;
+    double frameRateHz = 50.0;
     /// Camera.Binning.Spectral enum value (1, 2, 4, or 8 on FX10e).
     int spectralBinning = 1;
     /// Camera.Binning.Spatial enum value (1, 2, 4, or 8 on FX10e).
@@ -57,6 +57,28 @@ struct CameraSettings
     std::string lumoLicensePath;
     /// Camera.CalibrationPack path (.scp), applied for FX10e SSP profiles when set.
     std::string lumoCalibrationPackPath;
+    /// False-color RGB band indices (from calibration pack wavelength table).
+    int redBandIndex = 193;
+    int greenBandIndex = 112;
+    int blueBandIndex = 25;
+};
+
+/// SDK readback after applySettings (Lumo Camera.FrameRate / Camera.ExposureTime).
+struct CameraTimingApplyResult
+{
+    bool valid = false;
+    bool exposureTimeAutoEnabled = false;
+    double readoutTimeMs = 0.0;
+    double requestedFrameRateHz = 0.0;
+    double requestedExposureMs = 0.0;
+    double appliedFrameRateHz = 0.0;
+    double appliedExposureMs = 0.0;
+};
+
+struct CameraSettingsApplyReport
+{
+    CameraSettings requested;
+    CameraTimingApplyResult timing;
 };
 
 struct FramePacket

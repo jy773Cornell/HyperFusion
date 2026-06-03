@@ -1,166 +1,148 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-  Configure, build, and run the HyperFusion Qt app on native Windows using Qt's MinGW kit.
+  Configure, build, and optionally run the HyperFusion Qt app on Windows (MSVC + Qt 6.11 MSVC kit).
 
 .EXAMPLE
   .\build_app.ps1
 
 .EXAMPLE
-  .\build_app.ps1 -QtPrefixPath "C:\Qt\6.11.0\mingw_64" -Config Debug
+  .\build_app.ps1 -Config Debug -NoRun
 
 .EXAMPLE
-  $env:QT_PREFIX_PATH = "C:\Qt\6.11.0\mingw_64"
-  $env:MINGW_PATH = "C:\Qt\Tools\mingw1310_64"
+  $env:QT_PREFIX_PATH = "C:\Qt\6.11.1\msvc2022_64"
   .\build_app.ps1
 #>
 param(
     [ValidateSet("Release", "Debug", "RelWithDebInfo", "MinSizeRel")]
     [string]$Config = "Release",
 
-    [string]$QtPrefixPath = $(if ($env:QT_PREFIX_PATH) { $env:QT_PREFIX_PATH } else { "C:\Qt\6.11.0\mingw_64" }),
+    [string]$QtPrefixPath = $(if ($env:QT_PREFIX_PATH) { $env:QT_PREFIX_PATH } else { "C:\Qt\6.11.1\msvc2022_64" }),
 
-    # Optional override if auto-detection fails:
-    # Example: C:\Qt\Tools\mingw1310_64
-    [string]$MingwPath = $env:MINGW_PATH,
+    [string]$LumoSdkRoot = $(if ($env:LUMO_SDK_ROOT) { $env:LUMO_SDK_ROOT } else { "C:\Program Files (x86)\Specim\SDKs\SpecSensor\2020_519" }),
 
-    # Specim Lumo Sensor SDK (FX10e). Override if installed elsewhere.
-    [string]$LumoSdkRoot = $(if ($env:LUMO_SDK_ROOT) { $env:LUMO_SDK_ROOT } else { "C:\Program Files (x86)\Specim\SDKs\SpecSensor\2020_519" })
+    [string]$ZmlRoot = $(if ($env:ZML_ROOT) { $env:ZML_ROOT } else { "C:\Program Files\Zaber Motion Library" }),
+
+    [switch]$NoRun,
+
+    [switch]$NoClean
 )
 
 $ErrorActionPreference = "Stop"
 
-function Find-DefaultMingwFromQtLayout {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$QtPrefix
-    )
+$vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+if (-not (Test-Path -LiteralPath $vswhere)) {
+    Write-Error @"
+Visual Studio Installer (vswhere) not found.
 
-    # Typical layout:
-    #   C:\Qt\6.11.0\mingw_64
-    #   C:\Qt\Tools\mingwXXXX_64
-    $qtRoot = Split-Path -Parent (Split-Path -Parent $QtPrefix)
-    $toolsDir = Join-Path $qtRoot "Tools"
-    if (-not (Test-Path -LiteralPath $toolsDir)) {
-        return $null
-    }
+Install Visual Studio with workload: Desktop development with C++
+(including MSVC build tools and Windows SDK).
+"@
+}
 
-    $candidates = Get-ChildItem -LiteralPath $toolsDir -Directory -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -like "mingw*_64" } |
-    Sort-Object Name -Descending
+$vsPath = & $vswhere -latest -property installationPath
+$vsName = & $vswhere -latest -property displayName
+if (-not $vsPath) {
+    Write-Error "No Visual Studio installation found."
+}
 
-    foreach ($d in $candidates) {
-        $gcc = Join-Path $d.FullName "bin\gcc.exe"
-        $gpp = Join-Path $d.FullName "bin\g++.exe"
-        if ((Test-Path -LiteralPath $gcc) -and (Test-Path -LiteralPath $gpp)) {
-            return $d.FullName
-        }
-    }
+$msvcToolsRoot = Join-Path $vsPath "VC\Tools\MSVC"
+if (-not (Test-Path -LiteralPath $msvcToolsRoot)) {
+    Write-Error "Visual Studio is installed but MSVC toolset is missing at: $msvcToolsRoot`nAdd workload 'Desktop development with C++' in Visual Studio Installer."
+}
 
-    return $null
+# VS 2026 (internal v18) vs VS 2022 (v17) — pick a CMake generator that exists locally.
+$cmakeHelp = & cmake --help 2>&1 | Out-String
+if ($vsPath -match '[\\/]18[\\/]' -and $cmakeHelp -match 'Visual Studio 18 2026') {
+    $CmakeGenerator = 'Visual Studio 18 2026'
+} elseif ($cmakeHelp -match 'Visual Studio 17 2022') {
+    $CmakeGenerator = 'Visual Studio 17 2022'
+} else {
+    Write-Error "No supported Visual Studio CMake generator found. Install VS 2022/2026 with C++ and CMake 3.24+."
+}
+
+if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+    Write-Error "cmake not found on PATH. Install CMake (VS component or standalone) and reopen the terminal."
+}
+
+$qtConfig = Join-Path $QtPrefixPath "lib\cmake\Qt6\Qt6Config.cmake"
+if (-not (Test-Path -LiteralPath $qtConfig)) {
+    Write-Error "Qt6Config.cmake not found at: $qtConfig`nSet -QtPrefixPath or QT_PREFIX_PATH (e.g. C:\Qt\6.11.1\msvc2022_64)."
 }
 
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
 $AppDir = Join-Path $Root "app"
 $BuildDir = Join-Path $AppDir "build"
 
-if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
-    Write-Error "cmake not found on PATH. Install CMake and reopen the terminal."
-}
-
-$qtConfig = Join-Path $QtPrefixPath "lib\cmake\Qt6\Qt6Config.cmake"
-if (-not (Test-Path -LiteralPath $qtConfig)) {
-    Write-Error "Qt6Config.cmake not found at: $qtConfig`nCheck -QtPrefixPath / QT_PREFIX_PATH."
-}
-
-if (-not $MingwPath -or $MingwPath.Trim().Length -eq 0) {
-    $MingwPath = Find-DefaultMingwFromQtLayout -QtPrefix $QtPrefixPath
-}
-
-if (-not $MingwPath) {
-    Write-Error @"
-Could not auto-detect MinGW toolchain under C:\Qt\Tools\mingw*_64.
-
-Fix: install Qt's MinGW component in Qt Maintenance Tool, or set MINGW_PATH explicitly:
-
-  `$env:MINGW_PATH = 'C:\Qt\Tools\mingw1310_64'
-  .\build_app.ps1
-"@
-}
-
-$gcc = Join-Path $MingwPath "bin\gcc.exe"
-$gpp = Join-Path $MingwPath "bin\g++.exe"
-$mingwMake = Join-Path $MingwPath "bin\mingw32-make.exe"
-if (-not (Test-Path -LiteralPath $gcc) -or -not (Test-Path -LiteralPath $gpp)) {
-    Write-Error "MinGW bin tools not found. Expected:`n  $gcc`n  $gpp"
-}
-
-$mingwBin = Join-Path $MingwPath "bin"
 $qtBin = Join-Path $QtPrefixPath "bin"
 $lumoBin = Join-Path $LumoSdkRoot "bin\x64"
-# Ensure MinGW/Qt DLLs win over other tools on PATH (notably Git's sh.exe, which can break MinGW Makefiles).
-$env:PATH = "$mingwBin;$qtBin;$lumoBin;$env:PATH"
+$zmlBin = Join-Path $ZmlRoot "bin\Release"
+$env:PATH = "$qtBin;$lumoBin;$zmlBin;$env:PATH"
 $env:LUMO_SDK_ROOT = $LumoSdkRoot
+$env:ZML_ROOT = $ZmlRoot
 
-Write-Host "==> Qt prefix: $QtPrefixPath"
-Write-Host "==> MinGW:   $MingwPath"
-Write-Host "==> Lumo SDK: $LumoSdkRoot"
-Write-Host "==> Removing old build dir: $BuildDir"
-if (Test-Path -LiteralPath $BuildDir) {
-    Remove-Item -Recurse -Force -LiteralPath $BuildDir
-}
-
-$useNinja = $false
-if (Get-Command ninja -ErrorAction SilentlyContinue) {
-    $useNinja = $true
-}
-
-if ($useNinja) {
-    Write-Host "==> Configuring (Ninja, MinGW)"
-    & cmake -S $AppDir -B $BuildDir -G Ninja `
-        "-DCMAKE_PREFIX_PATH=$QtPrefixPath" `
-        "-DCMAKE_SH=CMAKE_SH-NOTFOUND" `
-        "-DCMAKE_C_COMPILER=$gcc" `
-        "-DCMAKE_CXX_COMPILER=$gpp" `
-        "-DLUMO_SDK_ROOT=$LumoSdkRoot" `
-        "-DCMAKE_BUILD_TYPE=$Config"
+Write-Host "==> Visual Studio: $vsName"
+Write-Host "==> VS path:       $vsPath"
+Write-Host "==> CMake generator: $CmakeGenerator"
+Write-Host "==> Qt prefix:    $QtPrefixPath"
+Write-Host "==> Lumo SDK:     $LumoSdkRoot"
+Write-Host "==> ZML root:     $ZmlRoot"
+Write-Host "==> Config:       $Config"
+if ($NoClean) {
+    Write-Host "==> Keeping existing build dir: $BuildDir"
 } else {
-    Write-Warning "ninja not found on PATH; falling back to 'MinGW Makefiles'."
-    if (-not (Test-Path -LiteralPath $mingwMake)) {
-        Write-Error @"
-mingw32-make.exe not found at:
-  $mingwMake
-
-Fix options (pick one):
-1) Install Qt's MinGW toolchain component (Qt Maintenance Tool) so mingw32-make exists under Tools\mingw*_64\bin
-2) Put ninja.exe on PATH and rerun (preferred): then this script uses Ninja instead
-"@
+    Write-Host "==> Removing old build dir: $BuildDir"
+    if (Test-Path -LiteralPath $BuildDir) {
+        try {
+            Remove-Item -Recurse -Force -LiteralPath $BuildDir
+        } catch {
+            Write-Warning "Could not remove $BuildDir (in use?). Reconfiguring in place."
+        }
     }
-
-    Write-Host "==> Configuring (MinGW Makefiles, MinGW)"
-    & cmake -S $AppDir -B $BuildDir -G "MinGW Makefiles" `
-        "-DCMAKE_PREFIX_PATH=$QtPrefixPath" `
-        "-DCMAKE_SH=CMAKE_SH-NOTFOUND" `
-        "-DCMAKE_C_COMPILER=$gcc" `
-        "-DCMAKE_CXX_COMPILER=$gpp" `
-        "-DCMAKE_MAKE_PROGRAM=$mingwMake" `
-        "-DLUMO_SDK_ROOT=$LumoSdkRoot" `
-        "-DCMAKE_BUILD_TYPE=$Config"
 }
+
+Write-Host "==> Configuring ($CmakeGenerator, x64)"
+& cmake -S $AppDir -B $BuildDir -G $CmakeGenerator -A x64 `
+    "-DCMAKE_GENERATOR_INSTANCE=$vsPath" `
+    "-DCMAKE_PREFIX_PATH=$QtPrefixPath" `
+    "-DLUMO_SDK_ROOT=$LumoSdkRoot" `
+    "-DZML_ROOT=$ZmlRoot"
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "CMake configure failed (exit $LASTEXITCODE)."
 }
 
 Write-Host "==> Building"
-& cmake --build $BuildDir
+& cmake --build $BuildDir --config $Config
 if ($LASTEXITCODE -ne 0) {
     Write-Error "CMake build failed (exit $LASTEXITCODE)."
 }
 
-$exe = Join-Path $BuildDir "app.exe"
+$exeDir = Join-Path $BuildDir $Config
+$exe = Join-Path $exeDir "app.exe"
 if (-not (Test-Path -LiteralPath $exe)) {
     Write-Error "Expected binary not found: $exe"
+}
+
+$windeployqt = Join-Path $QtPrefixPath "bin\windeployqt.exe"
+if (Test-Path -LiteralPath $windeployqt) {
+    Write-Host "==> Deploying Qt runtime DLLs (windeployqt)"
+    & $windeployqt --no-translations $exe
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warning "windeployqt exited with code $LASTEXITCODE (app may still run if Qt bin is on PATH)."
+    }
+}
+
+# Lumo runtime DLL next to app.exe when SDK is present.
+$lumoDll = Join-Path $LumoSdkRoot "bin\x64\SpecSensor.dll"
+if (Test-Path -LiteralPath $lumoDll) {
+    Copy-Item -LiteralPath $lumoDll -Destination $exeDir -Force
+    Write-Host "==> Copied SpecSensor.dll to $exeDir"
+}
+
+if ($NoRun) {
+    Write-Host "==> Built: $exe"
+    exit 0
 }
 
 Write-Host "==> Running $exe"

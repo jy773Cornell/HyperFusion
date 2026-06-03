@@ -37,6 +37,7 @@ CameraCoordinator::CameraCoordinator(std::vector<std::shared_ptr<ICameraControll
     stateCallbacks_.resize(cameras.size());
     errorCallbacks_.resize(cameras.size());
     shutterStateCallbacks_.resize(cameras.size());
+    settingsAppliedCallbacks_.resize(cameras.size());
 
     for (std::size_t index = 0; index < cameras.size(); ++index)
     {
@@ -189,6 +190,16 @@ void CameraCoordinator::setCameraShutterStateCallback(const std::size_t cameraIn
     shutterStateCallbacks_[cameraIndex] = std::move(callback);
 }
 
+void CameraCoordinator::setCameraSettingsAppliedCallback(
+    const std::size_t cameraIndex,
+    std::function<void(const CameraSettingsApplyReport &)> callback)
+{
+    if (cameraIndex >= settingsAppliedCallbacks_.size())
+        throw std::out_of_range("CameraCoordinator: camera index out of range");
+
+    settingsAppliedCallbacks_[cameraIndex] = std::move(callback);
+}
+
 void CameraCoordinator::setGuiTaskRunner(CameraWorker::GuiTaskRunner runner)
 {
     for (auto &worker : workers_)
@@ -231,6 +242,12 @@ void CameraCoordinator::wireWorkerCallbacks(const std::size_t cameraIndex, Camer
     worker.setShutterStateCallback([this, cameraIndex](const bool isOpen) {
         if (cameraIndex < shutterStateCallbacks_.size() && shutterStateCallbacks_[cameraIndex])
             shutterStateCallbacks_[cameraIndex](isOpen);
+    });
+
+    worker.setSettingsAppliedCallback([this, cameraIndex](const CameraSettingsApplyReport &report) {
+        if (cameraIndex < settingsAppliedCallbacks_.size()
+            && settingsAppliedCallbacks_[cameraIndex])
+            settingsAppliedCallbacks_[cameraIndex](report);
     });
 }
 

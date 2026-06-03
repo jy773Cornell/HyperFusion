@@ -1,11 +1,23 @@
-// Main window implementation for stream views, settings tabs, and logging.
+// Qt main window: settings tabs, stream previews, camera controls, and application log.
+// Hardware access goes through CameraCoordinator; this file is UI layout and wiring only.
 #include "MainWindow.hpp"
 
 #include "adapters/lumo/LumoCamera.hpp"
+#include "adapters/lumo/Swir3NiCamera.hpp"
+#include "adapters/zaber/ZaberStageController.hpp"
+#include "adapters/lumo/CalpackBandCatalog.hpp"
+#include "core/StageWorker.hpp"
 #include "orchestrator/CameraCoordinator.hpp"
+#include "ui/DetectorCrosshairWidget.hpp"
+#include "ui/ProfilePlotWidget.hpp"
+#include "ui/ProfileProcessor.hpp"
+
+#include <algorithm>
+#include <cmath>
 
 #include <QComboBox>
 #include <QMetaObject>
+#include <QSignalBlocker>
 #include <QCheckBox>
 #include <QDateTime>
 #include <QDoubleSpinBox>
@@ -32,9 +44,12 @@
 #include <QImage>
 #include <QMessageBox>
 #include <QPixmap>
+#include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QTimer>
 #include <QWidget>
+
+#include "ui/SerialPortEnumerator.hpp"
 
 #include <algorithm>
 #include <vector>
@@ -83,6 +98,22 @@ QImage framePacketToQImage(const FramePacket &frame)
 
 constexpr auto kFx10eCalibrationFileName = "3210441_20211027_calpack.scp";
 constexpr auto kCalibrationPackPathProperty = "hf_calibrationPackPath";
+constexpr int kDefaultRedBandIndex = 193;
+constexpr int kDefaultGreenBandIndex = 112;
+constexpr int kDefaultBlueBandIndex = 25;
+constexpr int kFullCalpackBandCount = 448;
+
+int scaledDefaultBandIndex(const int fullCalpackIndex, const int tableBandCount)
+{
+    if (tableBandCount <= 0)
+        return 0;
+    if (tableBandCount >= kFullCalpackBandCount)
+        return std::clamp(fullCalpackIndex, 0, tableBandCount - 1);
+
+    const int scaled =
+        (fullCalpackIndex * (tableBandCount - 1)) / (kFullCalpackBandCount - 1);
+    return std::clamp(scaled, 0, tableBandCount - 1);
+}
 
 void setPreviewDisconnectedText(QLabel *label, const QString &paneTitle, const QString &cameraName)
 {
@@ -91,7 +122,279 @@ void setPreviewDisconnectedText(QLabel *label, const QString &paneTitle, const Q
 
     label->setText(cameraName + QStringLiteral(" ") + paneTitle + QStringLiteral(" (disconnected)"));
 }
+
+QString defaultCameraTabName(const std::size_t cameraIndex)
+{
+    return QStringLiteral("Camera %1").arg(cameraIndex + 1);
+}
+
+QString ordinalSuffix(const int oneBased)
+{
+    const int mod100 = oneBased % 100;
+    if (mod100 >= 11 && mod100 <= 13)
+        return QStringLiteral("th");
+
+    switch (oneBased % 10)
+    {
+    case 1:
+        return QStringLiteral("st");
+    case 2:
+        return QStringLiteral("nd");
+    case 3:
+        return QStringLiteral("rd");
+    default:
+        return QStringLiteral("th");
+    }
+}
+
+QString formatOrdinalPixel(const int zeroBasedSpatialIndex)
+{
+    const int pixelNumber = zeroBasedSpatialIndex + 1;
+    return QStringLiteral("%1%2 pixel").arg(pixelNumber).arg(ordinalSuffix(pixelNumber));
+}
+
+std::vector<double> buildWavelengthNmLookup(const std::vector<SpectralBand> &bands, const int bandCount);
+
+QString formatStageTopology(const StageTopology &topology)
+{
+    if (topology.devices.empty())
+        return QStringLiteral("Not connected.");
+
+    QString text;
+    if (!topology.portName.empty())
+    {
+        text += QStringLiteral("Port: %1 @ %2\n\n")
+                    .arg(QString::fromStdString(topology.portName))
+                    .arg(topology.baudRate);
+    }
+
+    for (const StageDeviceInfo &device : topology.devices)
+    {
+        text += QStringLiteral("Device %1: %2\n")
+                    .arg(device.deviceAddress)
+                    .arg(QString::fromStdString(device.name));
+        text += QStringLiteral("  Serial: %1\n").arg(device.serialNumber);
+        text += QStringLiteral("  Firmware: %1\n")
+                    .arg(QString::fromStdString(device.firmwareVersion));
+        text += QStringLiteral("  Axes: %1\n").arg(device.axisCount);
+
+        for (const StageAxisInfo &axis : device.axes)
+        {
+            text += QStringLiteral("    Axis %1: %2")
+                        .arg(axis.axisNumber)
+                        .arg(QString::fromStdString(axis.peripheralName));
+            if (axis.peripheralSerialNumber != 0)
+                text += QStringLiteral(" (SN %1)").arg(axis.peripheralSerialNumber);
+            if (axis.axisNumber == 1)
+                text += QStringLiteral(" — right");
+            else if (axis.axisNumber == 2)
+                text += QStringLiteral(" — left");
+            text += QLatin1Char('\n');
+        }
+
+        text += QLatin1Char('\n');
+    }
+
+    if (!topology.stageType.empty() || topology.travelLengthMm > 0.0 || topology.lockstepEnabled)
+    {
+        text += QStringLiteral("Configuration\n");
+        if (!topology.stageType.empty())
+            text += QStringLiteral("  Stage: %1\n").arg(QString::fromStdString(topology.stageType));
+        if (topology.travelLengthMm > 0.0)
+            text += QStringLiteral("  Travel limit: %1 mm\n").arg(topology.travelLengthMm, 0, 'f', 0);
+        if (topology.lockstepEnabled)
+        {
+            text += QStringLiteral("  Lockstep group %1: axis %2 (primary), axis %3\n")
+                        .arg(topology.lockstepGroupId)
+                        .arg(topology.lockstepPrimaryAxis)
+                        .arg(topology.lockstepSecondaryAxis);
+        }
+    }
+
+    return text.trimmed();
+}
 } // namespace
+
+QString MainWindow::shortProfileTabName(const QString &profileName)
+{
+    QString name = profileName.trimmed();
+    if (name.isEmpty())
+        return {};
+
+    const int withIndex = name.indexOf(QStringLiteral(" with "), Qt::CaseInsensitive);
+    if (withIndex > 0)
+        name = name.left(withIndex).trimmed();
+
+    return name;
+}
+
+QString MainWindow::profileTabNameForUi(const LumoCameraUi &ui) const
+{
+    if (ui.deviceCombo != nullptr && ui.deviceCombo->count() > 0)
+    {
+        const QString shortName = shortProfileTabName(ui.deviceCombo->currentText());
+        if (!shortName.isEmpty())
+            return shortName;
+    }
+
+    return defaultCameraTabName(ui.cameraIndex);
+}
+
+void MainWindow::updateCameraTabLabel(const LumoCameraUi &ui)
+{
+    const QString tabName = profileTabNameForUi(ui);
+    const int tabIndex = static_cast<int>(ui.cameraIndex);
+
+    if (cameraSettingsTabs_ != nullptr && tabIndex >= 0 && tabIndex < cameraSettingsTabs_->count())
+        cameraSettingsTabs_->setTabText(tabIndex, tabName);
+
+    if (streamTabs_ != nullptr && tabIndex >= 0 && tabIndex < streamTabs_->count())
+        streamTabs_->setTabText(tabIndex, tabName);
+}
+
+void MainWindow::onCameraSettingsTabChanged(const int index)
+{
+    if (index < 0 || index > 1)
+        return;
+
+    QSignalBlocker settingsBlocker(settingsTabs_);
+    QSignalBlocker streamBlocker(streamTabs_);
+
+    if (settingsTabs_ != nullptr && settingsTabs_->currentIndex() != kSettingsTabCamera)
+        settingsTabs_->setCurrentIndex(kSettingsTabCamera);
+
+    if (streamTabs_ != nullptr && streamTabs_->currentIndex() != index)
+        streamTabs_->setCurrentIndex(index);
+}
+
+void MainWindow::onSettingsTabChanged(const int index)
+{
+    if (index == kSettingsTabStage)
+        refreshStageComPortList();
+}
+
+void MainWindow::selectBandComboIndex(QComboBox *combo, const int bandIndex)
+{
+    if (combo == nullptr)
+        return;
+
+    for (int i = 0; i < combo->count(); ++i)
+    {
+        if (combo->itemData(i).toInt() == bandIndex)
+        {
+            combo->setCurrentIndex(i);
+            return;
+        }
+    }
+}
+
+void MainWindow::refreshBandCombos(LumoCameraUi &ui)
+{
+    if (ui.redBandCombo == nullptr || ui.greenBandCombo == nullptr || ui.blueBandCombo == nullptr)
+        return;
+
+    QString calpackPath = calibrationPackPath(ui);
+    if (calpackPath.isEmpty())
+        calpackPath = defaultFx10eCalibrationPackPath();
+
+    if (calpackPath.isEmpty() || !QFileInfo::exists(calpackPath))
+    {
+        for (QComboBox *combo : {ui.redBandCombo, ui.greenBandCombo, ui.blueBandCombo})
+        {
+            combo->clear();
+            combo->addItem(QStringLiteral("(Set calibration pack — Browse…)"));
+            combo->setEnabled(true);
+        }
+        appendLog(QStringLiteral("%1: calibration pack not set or not found — use Browse to load "
+                                "an .scp file for RGB band selection.")
+                      .arg(profileTabNameForUi(ui)));
+        return;
+    }
+
+    int spectralBinning = 1;
+    if (ui.spectralBinningCombo != nullptr && ui.spectralBinningCombo->currentIndex() >= 0)
+        spectralBinning = ui.spectralBinningCombo->currentText().toInt();
+
+    std::vector<SpectralBand> bands;
+    std::string error;
+    if (!CalpackBandCatalog::loadFromCalpack(calpackPath, spectralBinning, bands, error))
+    {
+        for (QComboBox *combo : {ui.redBandCombo, ui.greenBandCombo, ui.blueBandCombo})
+        {
+            combo->clear();
+            combo->addItem(QStringLiteral("(Failed to read calibration pack)"));
+        }
+        appendLog(QStringLiteral("%1: band list — %2")
+                      .arg(profileTabNameForUi(ui), QString::fromStdString(error)));
+        return;
+    }
+
+    const auto populateCombo = [&bands](QComboBox *combo) {
+        combo->clear();
+        for (const SpectralBand &band : bands)
+            combo->addItem(CalpackBandCatalog::formatBandLabel(band), band.index);
+    };
+
+    const int prevRed =
+        ui.redBandCombo->currentIndex() >= 0 ? ui.redBandCombo->currentData().toInt() : -1;
+    const int prevGreen =
+        ui.greenBandCombo->currentIndex() >= 0 ? ui.greenBandCombo->currentData().toInt() : -1;
+    const int prevBlue =
+        ui.blueBandCombo->currentIndex() >= 0 ? ui.blueBandCombo->currentData().toInt() : -1;
+
+    populateCombo(ui.redBandCombo);
+    populateCombo(ui.greenBandCombo);
+    populateCombo(ui.blueBandCombo);
+    ui.spectralBands = bands;
+
+    if (prevRed >= 0)
+        selectBandComboIndex(ui.redBandCombo, prevRed);
+    else
+        selectBandComboIndex(ui.redBandCombo,
+                             scaledDefaultBandIndex(kDefaultRedBandIndex,
+                                                    static_cast<int>(bands.size())));
+    if (prevGreen >= 0)
+        selectBandComboIndex(ui.greenBandCombo, prevGreen);
+    else
+        selectBandComboIndex(ui.greenBandCombo,
+                             scaledDefaultBandIndex(kDefaultGreenBandIndex,
+                                                    static_cast<int>(bands.size())));
+    if (prevBlue >= 0)
+        selectBandComboIndex(ui.blueBandCombo, prevBlue);
+    else
+        selectBandComboIndex(ui.blueBandCombo,
+                             scaledDefaultBandIndex(kDefaultBlueBandIndex,
+                                                    static_cast<int>(bands.size())));
+
+    syncWaterfallBands(ui);
+    syncProfileRgbMarkers(ui);
+
+    appendLog(QStringLiteral("%1: loaded %2 spectral bands (binning %3) from %4")
+                  .arg(profileTabNameForUi(ui))
+                  .arg(bands.size())
+                  .arg(spectralBinning)
+                  .arg(QFileInfo(calpackPath).fileName()));
+}
+
+void MainWindow::onStreamTabChanged(const int index)
+{
+    QSignalBlocker settingsBlocker(settingsTabs_);
+    QSignalBlocker cameraSettingsBlocker(cameraSettingsTabs_);
+
+    if (index == 0 || index == 1)
+    {
+        if (settingsTabs_ != nullptr && settingsTabs_->currentIndex() != kSettingsTabCamera)
+            settingsTabs_->setCurrentIndex(kSettingsTabCamera);
+
+        if (cameraSettingsTabs_ != nullptr && cameraSettingsTabs_->currentIndex() != index)
+            cameraSettingsTabs_->setCurrentIndex(index);
+        return;
+    }
+
+    if (index == 2 && settingsTabs_ != nullptr
+        && settingsTabs_->currentIndex() != kSettingsTabUr3e)
+        settingsTabs_->setCurrentIndex(kSettingsTabUr3e);
+}
 
 QString MainWindow::calibrationPackPath(const LumoCameraUi &ui)
 {
@@ -125,11 +428,18 @@ QString MainWindow::defaultFx10eCalibrationPackPath()
     const QString fileName = QString::fromLatin1(kFx10eCalibrationFileName);
     const QString appDir = QCoreApplication::applicationDirPath();
 
-    const QStringList candidates = {
+    QStringList candidates = {
         QDir(appDir).filePath(QStringLiteral("calibration/") + fileName),
         QDir(appDir).filePath(QStringLiteral("../calibration/") + fileName),
+        QDir(appDir).filePath(QStringLiteral("../../calibration/") + fileName),
         QDir(appDir).filePath(QStringLiteral("../../app/calibration/") + fileName),
+        QDir(appDir).filePath(QStringLiteral("../../../app/calibration/") + fileName),
     };
+
+#ifdef HF_APP_SOURCE_DIR
+    candidates.prepend(
+        QDir(QString::fromUtf8(HF_APP_SOURCE_DIR)).filePath(QStringLiteral("calibration/") + fileName));
+#endif
 
     for (const QString &candidate : candidates)
     {
@@ -137,7 +447,7 @@ QString MainWindow::defaultFx10eCalibrationPackPath()
             return QDir::cleanPath(candidate);
     }
 
-    return QDir::cleanPath(QDir(appDir).filePath(QStringLiteral("../calibration/") + fileName));
+    return {};
 }
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
@@ -171,9 +481,15 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     rootLayout->addWidget(logBox, 0);
     setCentralWidget(central);
 
-    camera1Ui_.camera = std::make_shared<LumoCamera>(CameraBackendId::Camera1, "Camera 1");
+    camera1Ui_.sensorKind = LumoSensorKind::Fx10ePleora;
+    camera1Ui_.camera = std::make_shared<LumoCamera>(CameraBackendId::Camera1,
+                                                      QStringLiteral("FX10e").toStdString(),
+                                                      LumoSensorKind::Fx10ePleora);
     camera1Ui_.cameraIndex = 0;
-    camera2Ui_.camera = std::make_shared<LumoCamera>(CameraBackendId::Camera2, "Camera 2");
+
+    camera2Ui_.sensorKind = LumoSensorKind::Swir3Ni;
+    camera2Ui_.camera =
+        std::make_shared<Swir3NiCamera>(CameraBackendId::Camera2, QStringLiteral("SWIR3").toStdString());
     camera2Ui_.cameraIndex = 1;
 
     coordinator_ = std::make_unique<CameraCoordinator>(
@@ -244,21 +560,56 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
             Qt::QueuedConnection);
     });
 
+    coordinator_->setCameraSettingsAppliedCallback(0, [this](const CameraSettingsApplyReport &report) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, report]() { onSettingsApplied(camera1Ui_, report); },
+            Qt::QueuedConnection);
+    });
+
+    coordinator_->setCameraSettingsAppliedCallback(1, [this](const CameraSettingsApplyReport &report) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, report]() { onSettingsApplied(camera2Ui_, report); },
+            Qt::QueuedConnection);
+    });
+
+    setupWaterfallProcessors();
+    setupProfileProcessors();
+
     coordinator_->setFrameCallback([this](const FramePacket &frame) {
         QMetaObject::invokeMethod(
             this,
-            [this, frame]() { updateDetectorFrame(frame); },
+            [this, frame]() { onStreamFrame(frame); },
             Qt::QueuedConnection);
     });
 
     coordinator_->start();
     appendLog("HyperFusion UI initialized; camera coordinator started.");
 
-    QTimer::singleShot(0, this, [this]() { refreshLumoDeviceLists(); });
+    QTimer::singleShot(0, this, [this]() {
+        refreshLumoDeviceLists();
+        refreshBandCombos(camera1Ui_);
+        refreshBandCombos(camera2Ui_);
+    });
+
+    setupStageWorker();
 }
 
 MainWindow::~MainWindow()
 {
+    if (waterfallProcessor1_)
+        waterfallProcessor1_->stop();
+    if (waterfallProcessor2_)
+        waterfallProcessor2_->stop();
+    if (profileProcessor1_)
+        profileProcessor1_->stop();
+    if (profileProcessor2_)
+        profileProcessor2_->stop();
+
+    if (stageWorker_)
+        stageWorker_->stop();
+
     if (!coordinator_)
         return;
 
@@ -270,12 +621,16 @@ QWidget *MainWindow::createStreamTabsPanel()
     auto *panel = new QWidget(this);
     auto *layout = new QVBoxLayout(panel);
 
-    auto *tabs = new QTabWidget(panel);
-    tabs->addTab(createStreamTabPage(QStringLiteral("Camera 1"), camera1Ui_), "Camera 1");
-    tabs->addTab(createStreamTabPage(QStringLiteral("Camera 2"), camera2Ui_), "Camera 2");
-    tabs->addTab(createRgbUr3eStreamTab(), "UR3e");
+    streamTabs_ = new QTabWidget(panel);
+    streamTabs_->addTab(createStreamTabPage(profileTabNameForUi(camera1Ui_), camera1Ui_),
+                        profileTabNameForUi(camera1Ui_));
+    streamTabs_->addTab(createStreamTabPage(profileTabNameForUi(camera2Ui_), camera2Ui_),
+                        profileTabNameForUi(camera2Ui_));
+    streamTabs_->addTab(createRgbUr3eStreamTab(), QStringLiteral("UR3e"));
 
-    layout->addWidget(tabs, 1);
+    connect(streamTabs_, &QTabWidget::currentChanged, this, &MainWindow::onStreamTabChanged);
+
+    layout->addWidget(streamTabs_, 1);
     return panel;
 }
 
@@ -286,25 +641,45 @@ QWidget *MainWindow::createStreamTabPage(const QString &cameraName, LumoCameraUi
     grid->setContentsMargins(8, 8, 8, 8);
     grid->setSpacing(10);
 
-    QLabel *detectorLabel = nullptr;
     QLabel *waterfallLabel = nullptr;
-    QLabel *wavelengthLabel = nullptr;
-    QLabel *pixelStreamLabel = nullptr;
 
-    auto *detectorPane = createPreviewPane(QStringLiteral("Detector"), detectorLabel);
+    cameraUi.detectorView = new ui::DetectorCrosshairWidget(tab);
+    cameraUi.wavelengthView =
+        new ui::ProfilePlotWidget(ui::ProfilePlotWidget::Mode::Wavelength, tab);
+    cameraUi.pixelStreamView = new ui::ProfilePlotWidget(ui::ProfilePlotWidget::Mode::Spatial, tab);
+
+    auto *detectorPane = createStreamPane(QStringLiteral("Detector"), cameraUi.detectorView);
     auto *waterfallPane = createPreviewPane(QStringLiteral("Waterfall"), waterfallLabel);
-    auto *wavelengthPane = createPreviewPane(QStringLiteral("Wavelength"), wavelengthLabel);
-    auto *pixelStreamPane = createPreviewPane(QStringLiteral("Pixel stream"), pixelStreamLabel);
+    auto *wavelengthPane = createStreamPane(QStringLiteral("Wavelength"), cameraUi.wavelengthView);
+    auto *pixelStreamPane = createStreamPane(QStringLiteral("Pixel"), cameraUi.pixelStreamView);
 
-    cameraUi.detectorView = detectorLabel;
+    cameraUi.detectorPane = detectorPane;
+    cameraUi.waterfallPane = waterfallPane;
+    cameraUi.wavelengthPane = wavelengthPane;
+    cameraUi.pixelStreamPane = pixelStreamPane;
     cameraUi.waterfallView = waterfallLabel;
-    cameraUi.wavelengthView = wavelengthLabel;
-    cameraUi.pixelStreamView = pixelStreamLabel;
 
-    setPreviewDisconnectedText(cameraUi.detectorView, QStringLiteral("detector"), cameraName);
+    connect(cameraUi.detectorView,
+            &ui::DetectorCrosshairWidget::linesChanged,
+            this,
+            [this, &cameraUi](const int spatialIndex, const int bandIndex) {
+                onProfileLinesChanged(cameraUi, spatialIndex, bandIndex);
+            });
+    if (cameraUi.waterfallView != nullptr)
+    {
+        cameraUi.waterfallView->setScaledContents(true);
+        cameraUi.waterfallView->setAlignment(Qt::AlignCenter);
+    }
+    updateStreamPaneTitles(cameraUi);
+
+    const QString detectorMsg = cameraName + QStringLiteral(" detector (disconnected)");
+    const QString wavelengthMsg = cameraName + QStringLiteral(" wavelength (disconnected)");
+    const QString pixelMsg = cameraName + QStringLiteral(" pixel (disconnected)");
+    cameraUi.detectorView->clearDisplay(detectorMsg);
+    cameraUi.wavelengthView->clearDisplay(wavelengthMsg);
+    cameraUi.pixelStreamView->clearDisplay(pixelMsg);
     setPreviewDisconnectedText(cameraUi.waterfallView, QStringLiteral("waterfall"), cameraName);
-    setPreviewDisconnectedText(cameraUi.wavelengthView, QStringLiteral("wavelength"), cameraName);
-    setPreviewDisconnectedText(cameraUi.pixelStreamView, QStringLiteral("pixel stream"), cameraName);
+    syncProfileRgbMarkers(cameraUi);
 
     grid->addWidget(detectorPane, 0, 0);
     grid->addWidget(waterfallPane, 0, 1);
@@ -347,6 +722,24 @@ QWidget *MainWindow::createRgbUr3eStreamTab()
     return tab;
 }
 
+QGroupBox *MainWindow::createStreamPane(const QString &title, QWidget *contentWidget)
+{
+    auto *box = new QGroupBox(title, this);
+    auto *layout = new QVBoxLayout(box);
+
+    auto *placeholder = new QFrame(box);
+    placeholder->setFrameShape(QFrame::StyledPanel);
+    placeholder->setMinimumSize(320, 200);
+    placeholder->setStyleSheet(QStringLiteral("background-color: #111111;"));
+
+    auto *placeholderLayout = new QVBoxLayout(placeholder);
+    placeholderLayout->setContentsMargins(6, 6, 6, 6);
+    placeholderLayout->addWidget(contentWidget, 1);
+
+    layout->addWidget(placeholder, 1);
+    return box;
+}
+
 QGroupBox *MainWindow::createPreviewPane(const QString &title, QLabel *&labelOut)
 {
     auto *box = new QGroupBox(title, this);
@@ -377,14 +770,19 @@ QWidget *MainWindow::createSettingsPanel()
     panel->setMaximumWidth(520);
     auto *layout = new QVBoxLayout(panel);
 
-    auto *tabs = new QTabWidget(panel);
-    tabs->addTab(createCameraSettingsTab(), "Camera");
-    tabs->addTab(createStageSettingsTab(), "Stage");
-    tabs->addTab(createLightSettingsTab(), "Light");
-    tabs->addTab(createUr3eSettingsTab(), "UR3e");
-    tabs->addTab(createCaptureSettingsTab(), "Capture");
+    settingsTabs_ = new QTabWidget(panel);
+    settingsTabs_->addTab(createCameraSettingsTab(), QStringLiteral("Camera"));
+    settingsTabs_->addTab(createStageSettingsTab(), QStringLiteral("Stage"));
+    settingsTabs_->addTab(createLightSettingsTab(), QStringLiteral("Light"));
+    settingsTabs_->addTab(createUr3eSettingsTab(), QStringLiteral("UR3e"));
+    settingsTabs_->addTab(createCaptureSettingsTab(), QStringLiteral("Capture"));
 
-    layout->addWidget(tabs, 1);
+    connect(settingsTabs_,
+            &QTabWidget::currentChanged,
+            this,
+            &MainWindow::onSettingsTabChanged);
+
+    layout->addWidget(settingsTabs_, 1);
     return panel;
 }
 
@@ -392,40 +790,56 @@ QWidget *MainWindow::createCameraSettingsTab()
 {
     auto *page = new QWidget(this);
     auto *layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
 
-    layout->addWidget(createLumoCameraGroup(page, QStringLiteral("Camera 1"), camera1Ui_));
-    layout->addWidget(createLumoCameraGroup(page, QStringLiteral("Camera 2"), camera2Ui_));
-    layout->addStretch();
+    cameraSettingsTabs_ = new QTabWidget(page);
+    cameraSettingsTabs_->addTab(createLumoCameraGroup(cameraSettingsTabs_, camera1Ui_, LumoSensorKind::Fx10ePleora),
+                                defaultCameraTabName(camera1Ui_.cameraIndex));
+    cameraSettingsTabs_->addTab(createLumoCameraGroup(cameraSettingsTabs_, camera2Ui_, LumoSensorKind::Swir3Ni),
+                                defaultCameraTabName(camera2Ui_.cameraIndex));
+
+    connect(cameraSettingsTabs_,
+            &QTabWidget::currentChanged,
+            this,
+            &MainWindow::onCameraSettingsTabChanged);
+
+    layout->addWidget(cameraSettingsTabs_, 1);
     return page;
 }
 
-QGroupBox *MainWindow::createLumoCameraGroup(QWidget *parent, const QString &title, LumoCameraUi &ui)
+QWidget *MainWindow::createLumoCameraGroup(QWidget *parent,
+                                           LumoCameraUi &ui,
+                                           const LumoSensorKind sensorKind)
 {
-    auto *box = new QGroupBox(title, parent);
-    auto *form = new QFormLayout(box);
+    ui.sensorKind = sensorKind;
+    const bool fx10eDefaults = sensorKind == LumoSensorKind::Fx10ePleora;
 
-    ui.deviceCombo = new QComboBox(box);
+    auto *page = new QWidget(parent);
+    auto *form = new QFormLayout(page);
+    form->setContentsMargins(8, 8, 8, 8);
+
+    ui.deviceCombo = new QComboBox(page);
     ui.deviceCombo->setMinimumWidth(260);
 
-    ui.calibrationPackEdit = new QLineEdit(box);
+    ui.calibrationPackEdit = new QLineEdit(page);
     ui.calibrationPackEdit->setMinimumWidth(0);
     ui.calibrationPackEdit->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
 
-    ui.calibrationPackBrowseBtn = new QPushButton(QStringLiteral("Browse…"), box);
+    ui.calibrationPackBrowseBtn = new QPushButton(QStringLiteral("Browse…"), page);
     ui.calibrationPackBrowseBtn->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
     ui.calibrationPackBrowseBtn->setFixedWidth(72);
 
-    if (title == QStringLiteral("Camera 1"))
+    if (fx10eDefaults)
         setCalibrationPackDisplay(ui.calibrationPackEdit, defaultFx10eCalibrationPackPath());
 
-    auto *calibrationRow = new QWidget(box);
+    auto *calibrationRow = new QWidget(page);
     auto *calibrationLayout = new QHBoxLayout(calibrationRow);
     calibrationLayout->setContentsMargins(0, 0, 0, 0);
     calibrationLayout->setSpacing(6);
     calibrationLayout->addWidget(ui.calibrationPackEdit, 1);
     calibrationLayout->addWidget(ui.calibrationPackBrowseBtn, 0);
 
-    auto *shutterRow = new QWidget(box);
+    auto *shutterRow = new QWidget(page);
     auto *shutterLayout = new QHBoxLayout(shutterRow);
     shutterLayout->setContentsMargins(0, 0, 0, 0);
     shutterLayout->setSpacing(8);
@@ -439,21 +853,21 @@ QGroupBox *MainWindow::createLumoCameraGroup(QWidget *parent, const QString &tit
     shutterLayout->addWidget(ui.shutterStatusLabel, 1);
     shutterLayout->addWidget(ui.shutterToggleBtn);
 
-    ui.frameRateSpin = new QDoubleSpinBox(box);
+    ui.frameRateSpin = new QDoubleSpinBox(page);
     ui.frameRateSpin->setRange(1.0, 500.0);
     ui.frameRateSpin->setDecimals(2);
-    ui.frameRateSpin->setValue(title == QStringLiteral("Camera 1") ? 133.0 : 100.0);
+    ui.frameRateSpin->setValue(50.0);
     ui.frameRateSpin->setSuffix(QStringLiteral(" Hz"));
 
-    ui.exposureSpin = new QDoubleSpinBox(box);
+    ui.exposureSpin = new QDoubleSpinBox(page);
     ui.exposureSpin->setRange(0.01, 400.0);
     ui.exposureSpin->setDecimals(2);
     ui.exposureSpin->setSingleStep(0.1);
-    ui.exposureSpin->setValue(title == QStringLiteral("Camera 1") ? 2.0 : 3.0);
+    ui.exposureSpin->setValue(18.0);
     ui.exposureSpin->setSuffix(QStringLiteral(" ms"));
 
-    ui.spectralBinningCombo = new QComboBox(box);
-    ui.spatialBinningCombo = new QComboBox(box);
+    ui.spectralBinningCombo = new QComboBox(page);
+    ui.spatialBinningCombo = new QComboBox(page);
     for (QComboBox *binningCombo : {ui.spectralBinningCombo, ui.spatialBinningCombo})
     {
         binningCombo->addItems({QStringLiteral("1"),
@@ -461,12 +875,25 @@ QGroupBox *MainWindow::createLumoCameraGroup(QWidget *parent, const QString &tit
                                 QStringLiteral("4"),
                                 QStringLiteral("8")});
     }
+    if (ui.spectralBinningCombo != nullptr)
+    {
+        connect(ui.spectralBinningCombo,
+                &QComboBox::currentIndexChanged,
+                this,
+                [this, &ui](const int) { refreshBandCombos(ui); });
+    }
 
-    ui.triggerCombo = new QComboBox(box);
+    ui.triggerCombo = new QComboBox(page);
     ui.triggerCombo->addItems({"Internal", "External"});
 
-    ui.connectBtn = new QPushButton("Connect camera", box);
-    ui.applyBtn = new QPushButton("Apply settings", box);
+    ui.redBandCombo = new QComboBox(page);
+    ui.greenBandCombo = new QComboBox(page);
+    ui.blueBandCombo = new QComboBox(page);
+    for (QComboBox *combo : {ui.redBandCombo, ui.greenBandCombo, ui.blueBandCombo})
+        combo->setMinimumWidth(220);
+
+    ui.connectBtn = new QPushButton("Connect camera", page);
+    ui.applyBtn = new QPushButton("Apply settings", page);
 
     ui.applyBtn->setEnabled(false);
 
@@ -478,6 +905,9 @@ QGroupBox *MainWindow::createLumoCameraGroup(QWidget *parent, const QString &tit
     form->addRow("Spectral binning", ui.spectralBinningCombo);
     form->addRow("Spatial binning", ui.spatialBinningCombo);
     form->addRow("Trigger mode", ui.triggerCombo);
+    form->addRow("Red band", ui.redBandCombo);
+    form->addRow("Green band", ui.greenBandCombo);
+    form->addRow("Blue band", ui.blueBandCombo);
     form->addRow("", ui.connectBtn);
     form->addRow("", ui.applyBtn);
 
@@ -495,13 +925,22 @@ QGroupBox *MainWindow::createLumoCameraGroup(QWidget *parent, const QString &tit
             startDir,
             QStringLiteral("Specim calibration (*.scp);;All files (*.*)"));
         if (!path.isEmpty())
+        {
             setCalibrationPackDisplay(ui.calibrationPackEdit, path);
+            refreshBandCombos(ui);
+        }
     });
 
-    connect(ui.connectBtn, &QPushButton::clicked, this, [this, &ui, title]() {
+    connect(ui.deviceCombo,
+            &QComboBox::currentIndexChanged,
+            this,
+            [this, &ui](const int) { updateCameraTabLabel(ui); });
+
+    connect(ui.connectBtn, &QPushButton::clicked, this, [this, &ui]() {
         if (!coordinator_ || !ui.camera)
             return;
 
+        const QString cameraLabel = profileTabNameForUi(ui);
         const bool disconnectRequested =
             ui.state != CameraState::Disconnected && ui.state != CameraState::Fault;
 
@@ -514,21 +953,24 @@ QGroupBox *MainWindow::createLumoCameraGroup(QWidget *parent, const QString &tit
                 ui.connectBtn->setText(QStringLiteral("Disconnecting…"));
             }
             coordinator_->disconnectOnGuiThread(ui.cameraIndex);
-            appendLog(QString("%1: disconnect requested.").arg(title));
+            appendLog(QString("%1: disconnect requested.").arg(cameraLabel));
             return;
         }
 
         if (ui.deviceCombo->count() == 0)
         {
-            appendLog(QString("%1: refresh SSP profiles before connecting.").arg(title));
+            appendLog(QString("%1: refresh SSP profiles before connecting.").arg(cameraLabel));
             return;
         }
 
         const CameraSettings connectionSettings = buildCameraSettings(ui);
         ui.camera->prepareConnection(connectionSettings);
         ui.connectAttemptActive = true;
-        appendLog(QString("%1: connect camera — profile %2 (eBUS picker may appear; not ready until Initialized).")
-                      .arg(title, ui.deviceCombo->currentText()));
+        const QString grabberNote = ui.sensorKind == LumoSensorKind::Swir3Ni
+                                        ? QStringLiteral("NI frame grabber — configure in NI MAX if prompted")
+                                        : QStringLiteral("Pleora eBUS picker may appear");
+        appendLog(QString("%1: connect camera — profile %2 (%3; not ready until Initialized).")
+                      .arg(cameraLabel, ui.deviceCombo->currentText(), grabberNote));
 
         coordinator_->connectAndInitializeOnGuiThread(ui.cameraIndex);
     });
@@ -543,23 +985,51 @@ QGroupBox *MainWindow::createLumoCameraGroup(QWidget *parent, const QString &tit
             coordinator_->openShutter(ui.cameraIndex);
     });
 
-    connect(ui.applyBtn, &QPushButton::clicked, this, [this, &ui, title]() {
+    connect(ui.applyBtn, &QPushButton::clicked, this, [this, &ui]() {
         if (!coordinator_)
             return;
 
+        const QString cameraLabel = profileTabNameForUi(ui);
         const CameraSettings settings = buildCameraSettings(ui);
         coordinator_->applySettings(ui.cameraIndex, settings);
-        appendLog(QString("%1: apply settings (fps=%2 Hz, exposure=%3 ms, spectral=%4, spatial=%5, trigger=%6)")
-                      .arg(title)
+        syncWaterfallBands(ui);
+        syncProfileRgbMarkers(ui);
+        if (ui::WaterfallProcessor *processor = waterfallProcessorFor(ui))
+            processor->reset();
+
+        appendLog(QString("%1: apply settings (fps=%2 Hz, exposure=%3 ms, spectral=%4, spatial=%5, "
+                          "RGB=%6/%7/%8, trigger=%9)")
+                      .arg(cameraLabel)
                       .arg(settings.frameRateHz, 0, 'f', 2)
                       .arg(settings.exposureMs, 0, 'f', 2)
                       .arg(settings.spectralBinning)
                       .arg(settings.spatialBinning)
+                      .arg(settings.redBandIndex)
+                      .arg(settings.greenBandIndex)
+                      .arg(settings.blueBandIndex)
                       .arg(ui.triggerCombo->currentText()));
     });
 
+    const auto onBandSelectionChanged = [this, &ui]() {
+        syncWaterfallBands(ui);
+        syncProfileRgbMarkers(ui);
+        if (ui::WaterfallProcessor *processor = waterfallProcessorFor(ui))
+            processor->reset();
+        if (ui::ProfileProcessor *profileProcessor = profileProcessorFor(ui))
+            profileProcessor->requestRefresh();
+    };
+    if (ui.redBandCombo != nullptr)
+        connect(ui.redBandCombo, &QComboBox::currentIndexChanged, this, onBandSelectionChanged);
+    if (ui.greenBandCombo != nullptr)
+        connect(ui.greenBandCombo, &QComboBox::currentIndexChanged, this, onBandSelectionChanged);
+    if (ui.blueBandCombo != nullptr)
+        connect(ui.blueBandCombo, &QComboBox::currentIndexChanged, this, onBandSelectionChanged);
+
     updateShutterDisplay(ui, false);
-    return box;
+    if (!calibrationPackPath(ui).isEmpty())
+        refreshBandCombos(ui);
+
+    return page;
 }
 
 CameraSettings MainWindow::buildCameraSettings(const LumoCameraUi &ui) const
@@ -577,7 +1047,173 @@ CameraSettings MainWindow::buildCameraSettings(const LumoCameraUi &ui) const
     if (ui.deviceCombo != nullptr)
         settings.profileName = ui.deviceCombo->currentText().toStdString();
     settings.lumoCalibrationPackPath = calibrationPackPath(ui).toStdString();
+    const auto bandIndexFromCombo = [](const QComboBox *combo) -> int {
+        if (combo == nullptr || combo->count() == 0 || combo->currentIndex() < 0)
+            return -1;
+        const QVariant data = combo->currentData();
+        if (!data.isValid())
+            return -1;
+        return data.toInt();
+    };
+
+    const int red = bandIndexFromCombo(ui.redBandCombo);
+    const int green = bandIndexFromCombo(ui.greenBandCombo);
+    const int blue = bandIndexFromCombo(ui.blueBandCombo);
+    if (red >= 0)
+        settings.redBandIndex = red;
+    if (green >= 0)
+        settings.greenBandIndex = green;
+    if (blue >= 0)
+        settings.blueBandIndex = blue;
     return settings;
+}
+
+void MainWindow::refreshStageComPortList()
+{
+    if (stagePortCombo_ == nullptr)
+        return;
+
+    QString previousPort = stagePortCombo_->currentData().toString();
+    if (previousPort.isEmpty())
+        previousPort = stagePortCombo_->currentText();
+
+    QSignalBlocker blocker(stagePortCombo_);
+    stagePortCombo_->clear();
+
+    const QStringList ports = ui::enumerateSerialPortNames();
+    const QString preferredPort = QStringLiteral("COM4");
+    int selectIndex = -1;
+
+    for (const QString &portName : ports)
+    {
+        stagePortCombo_->addItem(portName, portName);
+
+        if (portName.compare(previousPort, Qt::CaseInsensitive) == 0)
+            selectIndex = stagePortCombo_->count() - 1;
+        else if (selectIndex < 0 && portName.compare(preferredPort, Qt::CaseInsensitive) == 0)
+            selectIndex = stagePortCombo_->count() - 1;
+    }
+
+    if (stagePortCombo_->count() == 0)
+    {
+        stagePortCombo_->addItem(QStringLiteral("(no serial ports found)"), QString());
+        stagePortCombo_->setEnabled(false);
+        return;
+    }
+
+    stagePortCombo_->setEnabled(true);
+    if (selectIndex >= 0)
+        stagePortCombo_->setCurrentIndex(selectIndex);
+    else
+        stagePortCombo_->setCurrentIndex(0);
+}
+
+QString MainWindow::selectedStagePortName() const
+{
+    if (stagePortCombo_ == nullptr)
+        return QStringLiteral("COM4");
+
+    const QString portName = stagePortCombo_->currentData().toString();
+    return portName.isEmpty() ? stagePortCombo_->currentText() : portName;
+}
+
+void MainWindow::setupStageWorker()
+{
+    auto controller = std::make_shared<ZaberStageController>();
+    stageWorker_ = std::make_unique<StageWorker>(controller);
+    stageWorker_->setStateCallback([this](const StageState state) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, state]() { onStageStateChanged(state); },
+            Qt::QueuedConnection);
+    });
+    stageWorker_->setTopologyCallback([this](const StageTopology &topology) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, topology]() { onStageTopologyChanged(topology); },
+            Qt::QueuedConnection);
+    });
+    stageWorker_->setErrorCallback([this](const StageError &error) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, error]() { onStageError(error); },
+            Qt::QueuedConnection);
+    });
+    stageWorker_->start();
+}
+
+void MainWindow::updateStageConnectionControls(const StageState state)
+{
+    const bool connected = state == StageState::Connected;
+    const bool busy = state == StageState::Connecting;
+
+    if (stagePortCombo_ != nullptr)
+        stagePortCombo_->setEnabled(!connected && !busy);
+    if (stageBaudCombo_ != nullptr)
+        stageBaudCombo_->setEnabled(!connected && !busy);
+    if (stageConnectBtn_ != nullptr)
+        stageConnectBtn_->setEnabled(!connected && !busy);
+    if (stageDisconnectBtn_ != nullptr)
+        stageDisconnectBtn_->setEnabled(connected);
+}
+
+void MainWindow::updateStageDeviceDisplay(const StageTopology &topology)
+{
+    if (stageDeviceDisplay_ == nullptr)
+        return;
+
+    stageDeviceDisplay_->setPlainText(formatStageTopology(topology));
+}
+
+void MainWindow::clearStageDeviceDisplay()
+{
+    updateStageDeviceDisplay({});
+}
+
+void MainWindow::onStageStateChanged(const StageState state)
+{
+    updateStageConnectionControls(state);
+
+    if (state == StageState::Disconnected || state == StageState::Fault)
+        clearStageDeviceDisplay();
+}
+
+void MainWindow::onStageTopologyChanged(const StageTopology &topology)
+{
+    updateStageDeviceDisplay(topology);
+
+    if (topology.devices.empty())
+        return;
+
+    appendLog(QString("Stage: detected %1 device(s) on %2")
+                  .arg(topology.devices.size())
+                  .arg(QString::fromStdString(topology.portName)));
+
+    for (const StageDeviceInfo &device : topology.devices)
+    {
+        appendLog(QString("Stage: device %1 = %2 (%3 axis(es), FW %4)")
+                      .arg(device.deviceAddress)
+                      .arg(QString::fromStdString(device.name))
+                      .arg(device.axisCount)
+                      .arg(QString::fromStdString(device.firmwareVersion)));
+    }
+
+    if (topology.lockstepEnabled)
+    {
+        appendLog(QString("Stage: lockstep group %1 enabled (primary axis %2, secondary axis %3, travel %4 mm)")
+                      .arg(topology.lockstepGroupId)
+                      .arg(topology.lockstepPrimaryAxis)
+                      .arg(topology.lockstepSecondaryAxis)
+                      .arg(topology.travelLengthMm, 0, 'f', 0));
+    }
+}
+
+void MainWindow::onStageError(const StageError &error)
+{
+    if (error.message.empty())
+        return;
+
+    appendLog(QString("Stage error: %1").arg(QString::fromStdString(error.message)));
 }
 
 QWidget *MainWindow::createStageSettingsTab()
@@ -587,64 +1223,72 @@ QWidget *MainWindow::createStageSettingsTab()
 
     auto *connBox = new QGroupBox("Connection", page);
     auto *connForm = new QFormLayout(connBox);
-    auto *portEdit = new QLineEdit(connBox);
-    portEdit->setPlaceholderText("COM port or device path");
-    portEdit->setText("COM3");
-    auto *baudCombo = new QComboBox(connBox);
-    baudCombo->addItems({"9600", "19200", "38400", "57600", "115200"});
-    baudCombo->setCurrentText("115200");
-    auto *connectBtn = new QPushButton("Connect", connBox);
-    auto *disconnectBtn = new QPushButton("Disconnect", connBox);
-    disconnectBtn->setEnabled(false);
-    connForm->addRow("Port", portEdit);
-    connForm->addRow("Baud", baudCombo);
-    connForm->addRow("", connectBtn);
-    connForm->addRow("", disconnectBtn);
+    stagePortCombo_ = new QComboBox(connBox);
+    stagePortCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    stagePortCombo_->setMinimumContentsLength(18);
 
-    connect(connectBtn, &QPushButton::clicked, this, [this, portEdit, baudCombo, disconnectBtn]() {
-        appendLog(QString("Stage: connect requested (%1 @ %2)")
-                      .arg(portEdit->text(), baudCombo->currentText()));
-        disconnectBtn->setEnabled(true);
+    auto *refreshPortsBtn = new QPushButton("Refresh", connBox);
+    refreshPortsBtn->setToolTip("Rescan available COM ports");
+    auto *portRow = new QWidget(connBox);
+    auto *portRowLayout = new QHBoxLayout(portRow);
+    portRowLayout->setContentsMargins(0, 0, 0, 0);
+    portRowLayout->addWidget(stagePortCombo_, 1);
+    portRowLayout->addWidget(refreshPortsBtn);
+
+    stageBaudCombo_ = new QComboBox(connBox);
+    stageBaudCombo_->addItems({"9600", "19200", "38400", "57600", "115200"});
+    stageBaudCombo_->setCurrentText("115200");
+    stageConnectBtn_ = new QPushButton("Connect", connBox);
+    stageDisconnectBtn_ = new QPushButton("Disconnect", connBox);
+    stageDisconnectBtn_->setEnabled(false);
+    connForm->addRow("Port", portRow);
+    connForm->addRow("Baud", stageBaudCombo_);
+    connForm->addRow("", stageConnectBtn_);
+    connForm->addRow("", stageDisconnectBtn_);
+
+    refreshStageComPortList();
+
+    connect(refreshPortsBtn, &QPushButton::clicked, this, &MainWindow::refreshStageComPortList);
+    connect(stageConnectBtn_, &QPushButton::clicked, this, [this]() {
+        if (stageWorker_ == nullptr)
+            return;
+
+        const QString portName = selectedStagePortName();
+        if (portName.isEmpty() || portName.startsWith('('))
+        {
+            appendLog("Stage: connect requested but no COM port is selected");
+            return;
+        }
+
+        StageConnectSettings settings;
+        settings.portName = portName.toStdString();
+        settings.baudRate = stageBaudCombo_->currentText().toInt();
+
+        appendLog(QString("Stage: connecting to %1 @ %2...")
+                      .arg(portName, stageBaudCombo_->currentText()));
+        stageWorker_->requestConnect(settings);
     });
-    connect(disconnectBtn, &QPushButton::clicked, this, [this, disconnectBtn]() {
-        appendLog("Stage: disconnect requested (not implemented)");
-        disconnectBtn->setEnabled(false);
+    connect(stageDisconnectBtn_, &QPushButton::clicked, this, [this]() {
+        if (stageWorker_ == nullptr)
+            return;
+
+        appendLog("Stage: disconnect requested");
+        stageWorker_->requestDisconnect();
     });
 
-    auto *motionBox = new QGroupBox("Motion", page);
-    auto *motionForm = new QFormLayout(motionBox);
-    auto *posSpin = new QDoubleSpinBox(motionBox);
-    posSpin->setRange(-10000.0, 10000.0);
-    posSpin->setDecimals(3);
-    posSpin->setSuffix(" mm");
-    auto *speedSpin = new QDoubleSpinBox(motionBox);
-    speedSpin->setRange(0.1, 5000.0);
-    speedSpin->setDecimals(1);
-    speedSpin->setValue(25.0);
-    speedSpin->setSuffix(" mm/min");
-    auto *moveAbsBtn = new QPushButton("Move absolute", motionBox);
-    auto *homeBtn = new QPushButton("Home", motionBox);
-    auto *stopBtn = new QPushButton("E-stop", motionBox);
-    motionForm->addRow("Target position", posSpin);
-    motionForm->addRow("Speed", speedSpin);
-    motionForm->addRow("", moveAbsBtn);
-    motionForm->addRow("", homeBtn);
-    motionForm->addRow("", stopBtn);
-
-    connect(moveAbsBtn, &QPushButton::clicked, this, [this, posSpin, speedSpin]() {
-        appendLog(QString("Stage: move absolute requested (pos=%1 mm, speed=%2 mm/min)")
-                      .arg(posSpin->value(), 0, 'f', 3)
-                      .arg(speedSpin->value(), 0, 'f', 1));
-    });
-    connect(homeBtn, &QPushButton::clicked, this, [this]() {
-        appendLog("Stage: home requested (not implemented)");
-    });
-    connect(stopBtn, &QPushButton::clicked, this, [this]() {
-        appendLog("Stage: E-stop requested (not implemented)");
-    });
+    auto *deviceBox = new QGroupBox("Device", page);
+    deviceBox->setCheckable(true);
+    deviceBox->setChecked(false);
+    auto *deviceLayout = new QVBoxLayout(deviceBox);
+    stageDeviceDisplay_ = new QPlainTextEdit(deviceBox);
+    stageDeviceDisplay_->setReadOnly(true);
+    stageDeviceDisplay_->setPlaceholderText("Connect to discover the controller and axes.");
+    stageDeviceDisplay_->setMinimumHeight(180);
+    stageDeviceDisplay_->setMaximumHeight(320);
+    deviceLayout->addWidget(stageDeviceDisplay_);
 
     layout->addWidget(connBox);
-    layout->addWidget(motionBox);
+    layout->addWidget(deviceBox);
     layout->addStretch();
     return page;
 }
@@ -935,11 +1579,81 @@ void MainWindow::refreshLumoDeviceLists()
 
     if (!selectProfileHint(camera1Ui_.deviceCombo, QStringLiteral("FX10e with Pleora")))
         selectProfileHint(camera1Ui_.deviceCombo, QStringLiteral("FX10"));
-    selectProfileHint(camera2Ui_.deviceCombo, QStringLiteral("SWIR"));
+    if (!selectProfileHint(camera2Ui_.deviceCombo, QStringLiteral("SWIR3 with NI")))
+        selectProfileHint(camera2Ui_.deviceCombo, QStringLiteral("SWIR"));
+
+    updateCameraTabLabel(camera1Ui_);
+    updateCameraTabLabel(camera2Ui_);
 
     appendLog(QString("Lumo: found %1 SSP profile(s) (from SDK install).").arg(devices.size()));
     for (const LumoDeviceEntry &device : devices)
         appendLog(QString("  [%1] %2").arg(device.index).arg(QString::fromStdString(device.name)));
+}
+
+void MainWindow::onSettingsApplied(LumoCameraUi &ui, const CameraSettingsApplyReport &report)
+{
+    const CameraTimingApplyResult &timing = report.timing;
+    if (!timing.valid)
+        return;
+
+    constexpr double kHzTolerance = 0.05;
+    constexpr double kMsTolerance = 0.05;
+    const bool frameRateDiffers =
+        std::abs(timing.requestedFrameRateHz - timing.appliedFrameRateHz) > kHzTolerance;
+    const bool exposureDiffers =
+        std::abs(timing.requestedExposureMs - timing.appliedExposureMs) > kMsTolerance;
+
+    if (ui.frameRateSpin != nullptr)
+    {
+        QSignalBlocker blocker(ui.frameRateSpin);
+        ui.frameRateSpin->setValue(timing.appliedFrameRateHz);
+    }
+    if (ui.exposureSpin != nullptr)
+    {
+        QSignalBlocker blocker(ui.exposureSpin);
+        ui.exposureSpin->setValue(timing.appliedExposureMs);
+    }
+
+    if (!frameRateDiffers && !exposureDiffers)
+        return;
+
+    const QString cameraLabel = QStringLiteral("Camera %1").arg(ui.cameraIndex + 1);
+    QString reason;
+    if (timing.exposureTimeAutoEnabled)
+    {
+        reason = QStringLiteral(
+            "Camera.ExposureTime.Auto is enabled. When frame rate is applied, the Lumo SDK "
+            "sets exposure so readout time + exposure time fits the frame period "
+            "(1000 / frame rate ms).");
+    }
+    else
+    {
+        reason = QStringLiteral(
+            "The Lumo SDK limited timing to the valid range for the current frame rate "
+            "(readout + exposure must fit within the frame period).");
+    }
+
+    const QString message = QStringLiteral(
+                                "%1\n\n"
+                                "Requested:  %2 Hz, %3 ms\n"
+                                "Applied:    %4 Hz, %5 ms\n"
+                                "Readout:    %6 ms (Camera.Image.ReadoutTime)")
+                                .arg(reason)
+                                .arg(timing.requestedFrameRateHz, 0, 'f', 2)
+                                .arg(timing.requestedExposureMs, 0, 'f', 2)
+                                .arg(timing.appliedFrameRateHz, 0, 'f', 2)
+                                .arg(timing.appliedExposureMs, 0, 'f', 2)
+                                .arg(timing.readoutTimeMs, 0, 'f', 2);
+
+    QMessageBox::information(this,
+                             QStringLiteral("%1 timing adjusted").arg(cameraLabel),
+                             message);
+    appendLog(QStringLiteral("%1: timing adjusted — requested %2 Hz / %3 ms, applied %4 Hz / %5 ms")
+                  .arg(cameraLabel)
+                  .arg(timing.requestedFrameRateHz, 0, 'f', 2)
+                  .arg(timing.requestedExposureMs, 0, 'f', 2)
+                  .arg(timing.appliedFrameRateHz, 0, 'f', 2)
+                  .arg(timing.appliedExposureMs, 0, 'f', 2));
 }
 
 void MainWindow::onCameraError(LumoCameraUi &ui, const CameraError &error)
@@ -994,6 +1708,14 @@ void MainWindow::onCameraStateChanged(LumoCameraUi &ui, const CameraState state)
     if (state == CameraState::Initialized && coordinator_ != nullptr && !ui.autoStreamStarted)
     {
         ui.autoStreamStarted = true;
+        refreshBandCombos(ui);
+        syncWaterfallBands(ui);
+        syncProfileRgbMarkers(ui);
+        if (ui::WaterfallProcessor *processor = waterfallProcessorFor(ui))
+            processor->reset();
+        if (ui::ProfileProcessor *profileProcessor = profileProcessorFor(ui))
+            profileProcessor->reset();
+
         const CameraSettings settings = buildCameraSettings(ui);
         coordinator_->beginStreaming(ui.cameraIndex, settings);
         appendLog(QString("Camera %1: streaming started automatically.")
@@ -1012,6 +1734,301 @@ void MainWindow::onCameraStateChanged(LumoCameraUi &ui, const CameraState state)
     }
 }
 
+void MainWindow::updateStreamPaneTitles(LumoCameraUi &ui)
+{
+    const int width = ui.frameWidth;
+    const int height = ui.frameHeight;
+
+    if (ui.detectorPane != nullptr)
+    {
+        if (width > 0 && height > 0)
+        {
+            ui.detectorPane->setTitle(
+                QStringLiteral("Detector (%1 × %2)").arg(width).arg(height));
+        }
+        else
+            ui.detectorPane->setTitle(QStringLiteral("Detector"));
+    }
+
+    updateProfilePaneTitles(ui);
+}
+
+void MainWindow::updateProfilePaneTitles(LumoCameraUi &ui)
+{
+    const int width = ui.frameWidth;
+    const int bands = ui.frameHeight;
+
+    int spatialIndex = 0;
+    int bandIndex = 0;
+    if (ui.detectorView != nullptr && width > 0 && bands > 0)
+    {
+        spatialIndex = ui.detectorView->spatialIndex();
+        bandIndex = ui.detectorView->bandIndex();
+    }
+
+    if (ui.wavelengthPane != nullptr)
+    {
+        if (bands > 0 && width > 0)
+        {
+            ui.wavelengthPane->setTitle(
+                QStringLiteral("Wavelength (%1 bands @ %2)")
+                    .arg(bands)
+                    .arg(formatOrdinalPixel(spatialIndex)));
+        }
+        else if (bands > 0)
+            ui.wavelengthPane->setTitle(QStringLiteral("Wavelength (%1 bands)").arg(bands));
+        else
+            ui.wavelengthPane->setTitle(QStringLiteral("Wavelength"));
+    }
+
+    if (ui.pixelStreamPane != nullptr)
+    {
+        if (width > 0 && bands > 0)
+        {
+            const std::vector<double> wlLookup = buildWavelengthNmLookup(ui.spectralBands, bands);
+            double wavelengthNm = 0.0;
+            if (bandIndex >= 0 && bandIndex < static_cast<int>(wlLookup.size()))
+                wavelengthNm = wlLookup[static_cast<std::size_t>(bandIndex)];
+
+            ui.pixelStreamPane->setTitle(
+                QStringLiteral("Pixel (%1 positions @ %2 nm)")
+                    .arg(width)
+                    .arg(wavelengthNm, 0, 'f', 2));
+        }
+        else if (width > 0)
+            ui.pixelStreamPane->setTitle(QStringLiteral("Pixel (%1 positions)").arg(width));
+        else
+            ui.pixelStreamPane->setTitle(QStringLiteral("Pixel"));
+    }
+}
+
+void MainWindow::setupWaterfallProcessors()
+{
+    waterfallProcessor1_ = std::make_unique<ui::WaterfallProcessor>();
+    waterfallProcessor2_ = std::make_unique<ui::WaterfallProcessor>();
+
+    const auto wireProcessor = [this](ui::WaterfallProcessor &processor, LumoCameraUi &ui) {
+        processor.setImageReadyCallback([this, &ui](QImage image) {
+            QMetaObject::invokeMethod(
+                this,
+                [this, &ui, image = std::move(image)]() { updateWaterfallView(ui, image); },
+                Qt::QueuedConnection);
+        });
+        processor.start();
+        syncWaterfallBands(ui);
+    };
+
+    wireProcessor(*waterfallProcessor1_, camera1Ui_);
+    wireProcessor(*waterfallProcessor2_, camera2Ui_);
+}
+
+ui::WaterfallProcessor *MainWindow::waterfallProcessorFor(const LumoCameraUi &ui)
+{
+    if (ui.cameraIndex == 0)
+        return waterfallProcessor1_.get();
+    if (ui.cameraIndex == 1)
+        return waterfallProcessor2_.get();
+    return nullptr;
+}
+
+void MainWindow::syncWaterfallBands(LumoCameraUi &ui)
+{
+    ui::WaterfallProcessor *processor = waterfallProcessorFor(ui);
+    if (processor == nullptr)
+        return;
+
+    const CameraSettings settings = buildCameraSettings(ui);
+    const int spectralBin = std::max(1, settings.spectralBinning);
+    const int frameBands = ui.frameHeight > 0 ? ui.frameHeight : 0;
+
+    ui::RgbBandIndices bands;
+    bands.red = settings.redBandIndex;
+    bands.green = settings.greenBandIndex;
+    bands.blue = settings.blueBandIndex;
+    if (frameBands > 0)
+    {
+        bands.red = ui::mapCalpackBandToBilRow(bands.red, frameBands, spectralBin);
+        bands.green = ui::mapCalpackBandToBilRow(bands.green, frameBands, spectralBin);
+        bands.blue = ui::mapCalpackBandToBilRow(bands.blue, frameBands, spectralBin);
+    }
+    processor->setBandIndices(bands);
+}
+
+void MainWindow::onStreamFrame(const FramePacket &frame)
+{
+    updateDetectorFrame(frame);
+
+    LumoCameraUi *ui = nullptr;
+    if (frame.source == CameraBackendId::Camera1)
+        ui = &camera1Ui_;
+    else if (frame.source == CameraBackendId::Camera2)
+        ui = &camera2Ui_;
+
+    if (ui == nullptr)
+        return;
+
+    if (ui::WaterfallProcessor *waterfallProcessor = waterfallProcessorFor(*ui))
+        waterfallProcessor->submitFrame(frame);
+
+    if (ui::ProfileProcessor *profileProcessor = profileProcessorFor(*ui))
+        profileProcessor->submitFrame(frame);
+}
+
+void MainWindow::setupProfileProcessors()
+{
+    profileProcessor1_ = std::make_unique<ui::ProfileProcessor>();
+    profileProcessor2_ = std::make_unique<ui::ProfileProcessor>();
+
+    const auto wireProcessor = [this](ui::ProfileProcessor &processor, LumoCameraUi &ui) {
+        processor.setProfilesReadyCallback([this, &ui](ui::ProfileExtraction profiles) {
+            QMetaObject::invokeMethod(
+                this,
+                [this, &ui, profiles = std::move(profiles)]() { updateProfilePlots(ui, profiles); },
+                Qt::QueuedConnection);
+        });
+        processor.start();
+
+        if (ui.detectorView != nullptr)
+        {
+            ui::ProfileCursor cursor;
+            cursor.spatialX = ui.detectorView->spatialIndex();
+            cursor.bandY = ui.detectorView->bandIndex();
+            processor.setCursor(cursor);
+        }
+        syncProfileRgbMarkers(ui);
+    };
+
+    wireProcessor(*profileProcessor1_, camera1Ui_);
+    wireProcessor(*profileProcessor2_, camera2Ui_);
+}
+
+ui::ProfileProcessor *MainWindow::profileProcessorFor(const LumoCameraUi &ui)
+{
+    if (ui.cameraIndex == 0)
+        return profileProcessor1_.get();
+    if (ui.cameraIndex == 1)
+        return profileProcessor2_.get();
+    return nullptr;
+}
+
+void MainWindow::syncProfileRgbMarkers(LumoCameraUi &ui)
+{
+    if (ui.wavelengthView == nullptr)
+        return;
+
+    const CameraSettings settings = buildCameraSettings(ui);
+    const int spectralBin = std::max(1, settings.spectralBinning);
+    const int frameBands = ui.frameHeight > 0 ? ui.frameHeight : 0;
+
+    int red = settings.redBandIndex;
+    int green = settings.greenBandIndex;
+    int blue = settings.blueBandIndex;
+    if (frameBands > 0)
+    {
+        red = ui::mapCalpackBandToBilRow(red, frameBands, spectralBin);
+        green = ui::mapCalpackBandToBilRow(green, frameBands, spectralBin);
+        blue = ui::mapCalpackBandToBilRow(blue, frameBands, spectralBin);
+    }
+
+    ui.wavelengthView->setRgbBandMarkers(red, green, blue);
+}
+
+void MainWindow::onProfileLinesChanged(LumoCameraUi &ui,
+                                       const int spatialIndex,
+                                       const int bandIndex)
+{
+    Q_UNUSED(spatialIndex);
+    Q_UNUSED(bandIndex);
+
+    updateProfilePaneTitles(ui);
+
+    ui::ProfileProcessor *processor = profileProcessorFor(ui);
+    if (processor == nullptr)
+        return;
+
+    ui::ProfileCursor cursor;
+    cursor.spatialX = spatialIndex;
+    cursor.bandY = bandIndex;
+    processor->setCursor(cursor);
+    processor->requestRefresh();
+}
+
+namespace
+{
+std::vector<double> buildWavelengthNmLookup(const std::vector<SpectralBand> &bands, const int bandCount)
+{
+    if (bandCount <= 0)
+        return {};
+
+    std::vector<double> lookup(static_cast<std::size_t>(bandCount), 0.0);
+    for (const SpectralBand &band : bands)
+    {
+        if (band.index >= 0 && band.index < bandCount)
+            lookup[static_cast<std::size_t>(band.index)] = band.wavelengthNm;
+    }
+
+    int firstKnown = -1;
+    int lastKnown = -1;
+    for (int i = 0; i < bandCount; ++i)
+    {
+        if (lookup[static_cast<std::size_t>(i)] > 0.0)
+        {
+            if (firstKnown < 0)
+                firstKnown = i;
+            lastKnown = i;
+        }
+    }
+
+    if (firstKnown < 0)
+    {
+        for (int i = 0; i < bandCount; ++i)
+            lookup[static_cast<std::size_t>(i)] = static_cast<double>(i);
+        return lookup;
+    }
+
+    const double wlStart = lookup[static_cast<std::size_t>(firstKnown)];
+    const double wlEnd = lookup[static_cast<std::size_t>(lastKnown)];
+    for (int i = 0; i < bandCount; ++i)
+    {
+        if (lookup[static_cast<std::size_t>(i)] > 0.0)
+            continue;
+
+        const double t = (bandCount > 1)
+                             ? static_cast<double>(i) / static_cast<double>(bandCount - 1)
+                             : 0.0;
+        lookup[static_cast<std::size_t>(i)] = wlStart + (wlEnd - wlStart) * t;
+    }
+
+    return lookup;
+}
+} // namespace
+
+void MainWindow::updateProfilePlots(LumoCameraUi &ui, const ui::ProfileExtraction &profiles)
+{
+    if (!profiles.valid)
+        return;
+
+    if (ui.wavelengthView != nullptr && !profiles.wavelengthDn.empty())
+    {
+        const int bandMax = std::max(0, profiles.frameBands - 1);
+        ui.wavelengthView->setWavelengthAxis(buildWavelengthNmLookup(ui.spectralBands, profiles.frameBands));
+        ui.wavelengthView->setProfile(profiles.wavelengthDn, bandMax);
+    }
+
+    if (ui.pixelStreamView != nullptr && !profiles.spatialDn.empty())
+    {
+        ui.pixelStreamView->setProfile(profiles.spatialDn, std::max(0, profiles.frameWidth - 1));
+    }
+}
+
+void MainWindow::updateWaterfallView(LumoCameraUi &ui, const QImage &image)
+{
+    if (ui.waterfallView == nullptr || image.isNull())
+        return;
+
+    ui.waterfallView->setPixmap(QPixmap::fromImage(image));
+}
+
 void MainWindow::updateDetectorFrame(const FramePacket &frame)
 {
     LumoCameraUi *ui = nullptr;
@@ -1023,36 +2040,49 @@ void MainWindow::updateDetectorFrame(const FramePacket &frame)
     if (ui == nullptr || ui->detectorView == nullptr)
         return;
 
+    const bool geometryChanged =
+        frame.width > 0 && frame.height > 0
+        && (ui->frameWidth != frame.width || ui->frameHeight != frame.height);
+    if (geometryChanged)
+    {
+        ui->frameWidth = frame.width;
+        ui->frameHeight = frame.height;
+        ui->detectorView->setFrameSize(frame.width, frame.height);
+        updateStreamPaneTitles(*ui);
+        syncWaterfallBands(*ui);
+        syncProfileRgbMarkers(*ui);
+    }
+
     const QImage image = framePacketToQImage(frame);
     if (image.isNull())
         return;
 
-    ui->detectorView->setPixmap(QPixmap::fromImage(image));
+    ui->detectorView->setDetectorImage(QPixmap::fromImage(image));
 }
 
 void MainWindow::clearDetectorView(LumoCameraUi &ui)
 {
+    ui.frameWidth = 0;
+    ui.frameHeight = 0;
+    updateStreamPaneTitles(ui);
+
+    if (ui::WaterfallProcessor *processor = waterfallProcessorFor(ui))
+        processor->reset();
+    if (ui::ProfileProcessor *profileProcessor = profileProcessorFor(ui))
+        profileProcessor->reset();
+
     const QString cameraName = QStringLiteral("Camera %1").arg(ui.cameraIndex + 1);
     if (ui.detectorView != nullptr)
-    {
-        ui.detectorView->clear();
-        setPreviewDisconnectedText(ui.detectorView, QStringLiteral("detector"), cameraName);
-    }
+        ui.detectorView->clearDisplay(cameraName + QStringLiteral(" detector (disconnected)"));
     if (ui.waterfallView != nullptr)
     {
         ui.waterfallView->clear();
         setPreviewDisconnectedText(ui.waterfallView, QStringLiteral("waterfall"), cameraName);
     }
     if (ui.wavelengthView != nullptr)
-    {
-        ui.wavelengthView->clear();
-        setPreviewDisconnectedText(ui.wavelengthView, QStringLiteral("wavelength"), cameraName);
-    }
+        ui.wavelengthView->clearDisplay(cameraName + QStringLiteral(" wavelength (disconnected)"));
     if (ui.pixelStreamView != nullptr)
-    {
-        ui.pixelStreamView->clear();
-        setPreviewDisconnectedText(ui.pixelStreamView, QStringLiteral("pixel stream"), cameraName);
-    }
+        ui.pixelStreamView->clearDisplay(cameraName + QStringLiteral(" pixel (disconnected)"));
 }
 
 void MainWindow::updateCameraControls(LumoCameraUi &ui, const CameraState state)
@@ -1091,6 +2121,12 @@ void MainWindow::updateCameraControls(LumoCameraUi &ui, const CameraState state)
         ui.frameRateSpin->setEnabled(readyForCameraFeatures);
     if (ui.triggerCombo != nullptr)
         ui.triggerCombo->setEnabled(readyForCameraFeatures);
+    if (ui.redBandCombo != nullptr)
+        ui.redBandCombo->setEnabled(readyForCameraFeatures);
+    if (ui.greenBandCombo != nullptr)
+        ui.greenBandCombo->setEnabled(readyForCameraFeatures);
+    if (ui.blueBandCombo != nullptr)
+        ui.blueBandCombo->setEnabled(readyForCameraFeatures);
 
     const bool readyForApply = state == CameraState::Initialized || state == CameraState::Configured
                                || state == CameraState::Armed || state == CameraState::SafeStopped

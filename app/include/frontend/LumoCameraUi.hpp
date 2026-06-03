@@ -25,6 +25,12 @@ struct LumoCameraUi
     QPushButton *connectBtn = nullptr;
     QPushButton *applyBtn = nullptr;
     QDoubleSpinBox *exposureSpin = nullptr;
+    int frameWidth = 0;
+    int frameHeight = 0;
+
+    class QGroupBox *detectorPane = nullptr;
+    class QGroupBox *wavelengthPane = nullptr;
+    class QGroupBox *pixelStreamPane = nullptr;
     QLabel *detectorView = nullptr;
     QLabel *waterfallView = nullptr;
     QLabel *wavelengthView = nullptr;
@@ -36,4 +42,7 @@ struct LumoCameraUi
     QLabel *shutterStatusLabel = nullptr;
     QPushButton *shutterToggleBtn = nullptr;
     QComboBox *triggerCombo = nullptr;
+    QComboBox *redBandCombo = nullptr;
+    QComboBox *greenBandCombo = nullptr;
+    QComboBox *blueBandCombo = nullptr;
 };

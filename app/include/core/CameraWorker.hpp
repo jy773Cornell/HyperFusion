@@ -19,6 +19,7 @@ public:
     using ErrorCallback = std::function<void(const CameraError &)>;
     using FrameCallback = std::function<void(const FramePacket &)>;
     using ShutterStateCallback = std::function<void(bool isOpen)>;
+    using SettingsAppliedCallback = std::function<void(const CameraSettingsApplyReport &)>;
     /// Runs a task on the Qt GUI thread (BlockingQueuedConnection — for modal SDK UI only).
     using GuiTaskRunner = std::function<void(std::function<void()>)>;
     /// Posts a task to the GUI thread without blocking the control thread (disconnect teardown).
@@ -56,6 +57,7 @@ public:
     void setErrorCallback(ErrorCallback callback);
     void setFrameCallback(FrameCallback callback);
     void setShutterStateCallback(ShutterStateCallback callback);
+    void setSettingsAppliedCallback(SettingsAppliedCallback callback);
     void setGuiTaskRunner(GuiTaskRunner runner);
     void setGuiAsyncTaskRunner(GuiAsyncTaskRunner runner);
 
@@ -67,7 +69,9 @@ private:
     void streamLoop();
     void notifyState(CameraState state);
     void notifyError(const CameraError &error);
+    void notifySettingsApplied(const CameraSettingsApplyReport &report);
     void publishShutterState();
+    void waitForStreamIdle();
 
     std::shared_ptr<ICameraController> controller_;
 
@@ -76,6 +80,7 @@ private:
     ErrorCallback errorCallback_;
     FrameCallback frameCallback_;
     ShutterStateCallback shutterStateCallback_;
+    SettingsAppliedCallback settingsAppliedCallback_;
     GuiTaskRunner guiTaskRunner_;
     GuiAsyncTaskRunner guiAsyncTaskRunner_;
 
@@ -85,6 +90,7 @@ private:
 
     std::atomic<bool> running_{false};
     std::atomic<bool> streamEnabled_{false};
+    std::atomic<bool> streamInPoll_{false};
 
     std::thread controlThread_;
     std::thread streamThread_;

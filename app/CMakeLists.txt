@@ -22,6 +22,22 @@ endif()
 
 set(LUMO_SDK_ROOT "${LUMO_SDK_ROOT}" CACHE PATH "Specim Lumo Sensor SDK root (include/, bin/x64/)")
 
+# Zaber Motion Library (stage backend — optional until adapters/zaber is added).
+if(DEFINED ENV{ZML_ROOT} AND NOT "$ENV{ZML_ROOT}" STREQUAL "")
+    set(ZML_ROOT "$ENV{ZML_ROOT}")
+endif()
+if(NOT ZML_ROOT)
+    set(ZML_ROOT "C:/Program Files/Zaber Motion Library")
+endif()
+set(ZML_ROOT "${ZML_ROOT}" CACHE PATH "Zaber Motion Library root (include/, lib/Release/, bin/Release/)")
+if(EXISTS "${ZML_ROOT}/include/zaber/motion/ascii.h")
+    set(HF_HAVE_ZML ON)
+    message(STATUS "Zaber Motion Library found at ${ZML_ROOT}")
+else()
+    set(HF_HAVE_ZML OFF)
+    message(STATUS "Zaber Motion Library not found at ${ZML_ROOT}")
+endif()
+
 set(HF_HAVE_LUMO_SDK OFF)
 if(LUMO_SDK_ROOT AND EXISTS "${LUMO_SDK_ROOT}/include/SI_sensor.h")
     set(HF_HAVE_LUMO_SDK ON)
@@ -34,16 +50,38 @@ qt_add_executable(app
     src/main.cpp
     src/MainWindow.cpp
     src/core/CameraWorker.cpp
+    src/core/StageWorker.cpp
     src/core/ICameraController.cpp
+    src/adapters/zaber/ZaberStageController.cpp
+    src/adapters/zaber/ZaberStageConfigurator.cpp
+    src/adapters/lumo/CalpackBandCatalog.cpp
     src/adapters/lumo/LumoCamera.cpp
+    src/adapters/lumo/Swir3NiCamera.cpp
     src/orchestrator/CameraCoordinator.cpp
+    src/ui/BilProfileExtractor.cpp
+    src/ui/DetectorCrosshairWidget.cpp
+    src/ui/ProfilePlotWidget.cpp
+    src/ui/ProfileProcessor.cpp
+    src/ui/RgbBandExtractor.cpp
+    src/ui/SerialPortEnumerator.cpp
+    src/ui/WaterfallProcessor.cpp
     include/MainWindow.hpp
     include/core/CameraTypes.hpp
     include/core/ICameraController.hpp
     include/core/CameraWorker.hpp
+    include/core/StageTypes.hpp
+    include/core/IStageController.hpp
+    include/core/StageWorker.hpp
+    include/adapters/zaber/ZaberStageController.hpp
+    include/adapters/zaber/ZaberStageConfigurator.hpp
+    include/adapters/zaber/ZaberStageProfile.hpp
+    include/adapters/lumo/CalpackBandCatalog.hpp
     include/adapters/lumo/LumoCamera.hpp
+    include/adapters/lumo/Swir3NiCamera.hpp
     include/adapters/lumo/LumoDeviceTypes.hpp
     include/orchestrator/CameraCoordinator.hpp
+    include/ui/DetectorCrosshairWidget.hpp
+    include/ui/ProfilePlotWidget.hpp
 )
 
 target_include_directories(app PRIVATE include)
@@ -66,4 +104,42 @@ if(HF_HAVE_LUMO_SDK)
     endif()
 endif()
 
-target_link_libraries(app PRIVATE Qt6::Widgets)
+if(HF_HAVE_ZML)
+    target_compile_definitions(app PRIVATE HF_HAVE_ZML)
+    target_include_directories(app PRIVATE "${ZML_ROOT}/include")
+    find_library(ZML_LIB zaber-motion PATHS "${ZML_ROOT}/lib/Release" NO_DEFAULT_PATH)
+    if(ZML_LIB)
+        target_link_libraries(app PRIVATE "${ZML_LIB}")
+        message(STATUS "Linked Zaber Motion Library: ${ZML_LIB}")
+    else()
+        message(FATAL_ERROR "zaber-motion.lib not found under ${ZML_ROOT}/lib/Release")
+    endif()
+
+    foreach(_zml_dll IN ITEMS zaber-motion.dll zaber-motion-core.dll)
+        set(_zml_dll_path "${ZML_ROOT}/bin/Release/${_zml_dll}")
+        if(EXISTS "${_zml_dll_path}")
+            add_custom_command(
+                TARGET app POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_zml_dll_path}"
+                        "$<TARGET_FILE_DIR:app>/${_zml_dll}"
+                COMMENT "Copying ${_zml_dll} to output directory")
+        endif()
+    endforeach()
+endif()
+
+target_link_libraries(app PRIVATE Qt6::Widgets Qt6::Core)
+
+# Ship calibration packs beside app.exe (RGB band dropdowns).
+set(HF_CALIBRATION_DIR "${CMAKE_CURRENT_SOURCE_DIR}/calibration")
+if(EXISTS "${HF_CALIBRATION_DIR}")
+    add_custom_command(
+        TARGET app POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${HF_CALIBRATION_DIR}"
+                "$<TARGET_FILE_DIR:app>/calibration"
+        COMMENT "Copying calibration packs to output directory")
+endif()
+
+file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}" HF_APP_SOURCE_DIR)
+target_compile_definitions(app PRIVATE "HF_APP_SOURCE_DIR=\"${HF_APP_SOURCE_DIR}\"")

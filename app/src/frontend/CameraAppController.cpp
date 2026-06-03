@@ -1,6 +1,9 @@
+// Camera session logic for the Qt UI: coordinator wiring, connect/stream policy, profile tabs.
+// Keeps MainWindow focused on layout; posts state, frames, and errors back via Qt signals.
 #include "frontend/CameraAppController.hpp"
 
 #include "adapters/lumo/LumoCamera.hpp"
+#include "adapters/lumo/Swir3NiCamera.hpp"
 #include "frontend/LumoCameraUi.hpp"
 #include "orchestrator/CameraCoordinator.hpp"
 #include "ui/DetectorFrameConverter.hpp"
@@ -31,9 +34,12 @@ void CameraAppController::bindCameras(LumoCameraUi &camera1, LumoCameraUi &camer
     camera2_ = &camera2;
 
     if (camera1_.camera == nullptr)
-        camera1_.camera = std::make_shared<LumoCamera>(CameraBackendId::Camera1, "Camera 1");
+        camera1_.camera = std::make_shared<LumoCamera>(CameraBackendId::Camera1,
+                                                         "FX10e",
+                                                         LumoSensorKind::Fx10ePleora);
     if (camera2_.camera == nullptr)
-        camera2_.camera = std::make_shared<LumoCamera>(CameraBackendId::Camera2, "Camera 2");
+        camera2_.camera =
+            std::make_shared<Swir3NiCamera>(CameraBackendId::Camera2, "SWIR3");
 
     camera1_.cameraIndex = 0;
     camera2_.cameraIndex = 1;

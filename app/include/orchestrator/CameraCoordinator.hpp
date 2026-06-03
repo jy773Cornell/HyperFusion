@@ -43,6 +43,9 @@ public:
                                 std::function<void(const CameraError &)> callback);
     void setCameraShutterStateCallback(std::size_t cameraIndex,
                                        std::function<void(bool isOpen)> callback);
+    void setCameraSettingsAppliedCallback(
+        std::size_t cameraIndex,
+        std::function<void(const CameraSettingsApplyReport &)> callback);
     void setGuiTaskRunner(CameraWorker::GuiTaskRunner runner);
     void setGuiAsyncTaskRunner(CameraWorker::GuiAsyncTaskRunner runner);
 
@@ -57,4 +60,5 @@ private:
     std::vector<std::function<void(CameraState)>> stateCallbacks_;
     std::vector<std::function<void(const CameraError &)>> errorCallbacks_;
     std::vector<std::function<void(bool)>> shutterStateCallbacks_;
+    std::vector<std::function<void(const CameraSettingsApplyReport &)>> settingsAppliedCallbacks_;
 };
