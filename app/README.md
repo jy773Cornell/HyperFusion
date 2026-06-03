@@ -4,6 +4,9 @@ USER
   Install Lumo Sensor SDK (Specim).
   Install Zaber Motion Library (ZML) when using the scan stage.
 
+  Note on LC40B / orientation
+The Launcher wizard (stage type LC40B, motor orientation Right/Left) writes a full peripheral configuration to the controller via ZML’s internal device database — typically done once with Save without Testing. HyperFusion re-applies the runtime settings each connect (travel limits + lockstep). Motor direction/orientation should already be stored on the X-MCC2 from that Launcher save; if axes move the wrong way on first use, save the Launcher config once, then reconnect in HyperFusion.
+
 DEVELOPER — one-time
   Visual Studio 2022 or 2026: workload "Desktop development with C++"
     + MSVC build tools (e.g. v14.44) + Windows SDK

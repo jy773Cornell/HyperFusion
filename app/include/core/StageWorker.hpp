@@ -25,6 +25,14 @@ public:
 
     void requestConnect(const StageConnectSettings &settings);
     void requestDisconnect();
+    void requestStopMotion();
+    void requestHome();
+    void requestMoveRelativeMm(double distanceMm);
+    void requestMoveAbsoluteMm(double positionMm);
+    void requestMoveVelocityMm(double velocityMmPerSec);
+
+    using PositionCallback = std::function<void(double positionMm, bool ok)>;
+    void requestPrimaryPosition(PositionCallback callback);
 
     StageState currentState() const;
     StageTopology currentTopology() const;
@@ -37,6 +45,7 @@ private:
     using ControlCommand = std::function<void()>;
 
     void enqueueCommand(ControlCommand command);
+    void enqueuePriorityCommand(ControlCommand command);
     void controlLoop();
     void notifyState(StageState state);
     void notifyTopology(const StageTopology &topology);

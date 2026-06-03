@@ -8,6 +8,7 @@ enum class StageState
 {
     Disconnected,
     Connecting,
+    Homing,
     Connected,
     Fault
 };
@@ -65,4 +66,7 @@ struct StageTopology
     int lockstepSecondaryAxis = 0;
     double travelLengthMm = 0.0;
     std::string stageType;
+    bool axesHomed = false;
+    double maxSpeedMmPerSec = 0.0;
+    double lockstepSecondaryOffsetMm = 0.0;
 };

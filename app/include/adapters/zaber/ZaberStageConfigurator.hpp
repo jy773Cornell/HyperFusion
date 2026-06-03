@@ -13,6 +13,7 @@ class ZaberStageConfigurator
 {
 public:
 #ifdef HF_HAVE_ZML
-    static bool configure(zaber::motion::ascii::Connection &connection, StageTopology &topology, StageError &error);
+    static bool prepare(zaber::motion::ascii::Connection &connection, StageTopology &topology, StageError &error);
+    static bool enableLockstep(zaber::motion::ascii::Connection &connection, StageTopology &topology, StageError &error);
 #endif
 };

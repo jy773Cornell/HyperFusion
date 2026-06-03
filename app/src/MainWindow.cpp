@@ -5,12 +5,14 @@
 #include "adapters/lumo/LumoCamera.hpp"
 #include "adapters/lumo/Swir3NiCamera.hpp"
 #include "adapters/zaber/ZaberStageController.hpp"
+#include "adapters/zaber/ZaberStageProfile.hpp"
 #include "adapters/lumo/CalpackBandCatalog.hpp"
 #include "core/StageWorker.hpp"
 #include "orchestrator/CameraCoordinator.hpp"
 #include "ui/DetectorCrosshairWidget.hpp"
 #include "ui/ProfilePlotWidget.hpp"
 #include "ui/ProfileProcessor.hpp"
+#include "ui/StageAxisWidget.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -30,7 +32,6 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
-#include <QSlider>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QTabWidget>
@@ -43,10 +44,14 @@
 #include <QFileInfo>
 #include <QImage>
 #include <QMessageBox>
+#include <QPainter>
 #include <QPixmap>
+#include <QPolygon>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QStyle>
 #include <QTimer>
+#include <QToolButton>
 #include <QWidget>
 
 #include "ui/SerialPortEnumerator.hpp"
@@ -202,16 +207,181 @@ QString formatStageTopology(const StageTopology &topology)
             text += QStringLiteral("  Stage: %1\n").arg(QString::fromStdString(topology.stageType));
         if (topology.travelLengthMm > 0.0)
             text += QStringLiteral("  Travel limit: %1 mm\n").arg(topology.travelLengthMm, 0, 'f', 0);
+        if (topology.maxSpeedMmPerSec > 0.0)
+            text += QStringLiteral("  Max speed: %1 mm/s\n").arg(topology.maxSpeedMmPerSec, 0, 'f', 0);
         if (topology.lockstepEnabled)
         {
             text += QStringLiteral("  Lockstep group %1: axis %2 (primary), axis %3\n")
                         .arg(topology.lockstepGroupId)
                         .arg(topology.lockstepPrimaryAxis)
                         .arg(topology.lockstepSecondaryAxis);
+            text += QStringLiteral("  Lockstep offset (axis %1): %2 mm\n")
+                        .arg(topology.lockstepSecondaryAxis)
+                        .arg(topology.lockstepSecondaryOffsetMm, 0, 'f', 0);
+            text += QStringLiteral("  Motion: command primary axis %1 only\n")
+                        .arg(topology.lockstepPrimaryAxis);
         }
+        if (topology.axesHomed)
+            text += QStringLiteral("  Homing: lockstep localized (+%1 mm, home sensor)\n")
+                        .arg(zaber_stage::kHomingLocalizationPremoveMm, 0, 'f', 0);
     }
 
     return text.trimmed();
+}
+
+QIcon makeHomeIcon(const int size = 22)
+{
+    QPixmap pixmap(size, size);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    const QColor fill(70, 70, 70);
+    const QPen outline(QColor(40, 40, 40), 1.2);
+    painter.setPen(outline);
+    painter.setBrush(fill);
+
+    const int pad = 2;
+    const int roofPeakX = size / 2;
+    const int roofPeakY = pad;
+    const int roofLeftX = pad + 1;
+    const int roofRightX = size - pad - 1;
+    const int roofBaseY = size / 2 - 1;
+    const QPolygon roof{{roofPeakX, roofPeakY}, {roofLeftX, roofBaseY}, {roofRightX, roofBaseY}};
+    painter.drawPolygon(roof);
+
+    const QRect body(pad + 3, roofBaseY, size - 2 * (pad + 3), size - roofBaseY - pad);
+    painter.drawRect(body);
+
+    painter.setBrush(QColor(230, 230, 230));
+    painter.setPen(Qt::NoPen);
+    painter.drawRect(body.center().x() - 2, body.bottom() - 5, 4, 5);
+
+    return QIcon(pixmap);
+}
+
+QToolButton *makeStageToolButton(QWidget *parent, const QStyle::StandardPixmap icon, const QString &tooltip)
+{
+    auto *button = new QToolButton(parent);
+    button->setIcon(parent->style()->standardIcon(icon));
+    button->setToolTip(tooltip);
+    button->setAutoRaise(true);
+    button->setIconSize(QSize(28, 28));
+    button->setMinimumSize(44, 44);
+    return button;
+}
+
+QIcon makeRecorderStopIcon(const int size = 14)
+{
+    QPixmap pixmap(size, size);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(30, 30, 30));
+    painter.drawRect(2, 2, size - 4, size - 4);
+    return QIcon(pixmap);
+}
+
+QIcon makeRecorderPreviewIcon(const int size = 14)
+{
+    QPixmap pixmap(size, size);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(70, 170, 85));
+    const QPolygon triangle{{3, 2}, {3, size - 2}, {size - 2, size / 2}};
+    painter.drawPolygon(triangle);
+    return QIcon(pixmap);
+}
+
+QIcon makeRecorderRecordIcon(const int size = 14)
+{
+    QPixmap pixmap(size, size);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(220, 45, 45));
+    painter.drawEllipse(2, 2, size - 4, size - 4);
+    return QIcon(pixmap);
+}
+
+QPushButton *makeCaptureWhiteButton(QWidget *parent, const QString &label, const QIcon &icon = {})
+{
+    auto *button = new QPushButton(label, parent);
+    if (!icon.isNull())
+    {
+        button->setIcon(icon);
+        button->setIconSize(QSize(14, 14));
+    }
+    button->setMinimumHeight(36);
+    button->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    button->setStyleSheet(QStringLiteral(
+        "QPushButton {"
+        "  background-color: #ffffff;"
+        "  color: #222222;"
+        "  border: 1px solid #b0b0b0;"
+        "  border-radius: 2px;"
+        "  padding: 4px 12px;"
+        "  min-width: 48px;"
+        "}"
+        "QPushButton:hover { background-color: #f0f0f0; }"
+        "QPushButton:pressed { background-color: #e0e0e0; }"
+        "QPushButton:disabled { color: #999999; background-color: #f5f5f5; }"));
+    return button;
+}
+
+QPushButton *makeCaptureCompactWhiteButton(QWidget *parent, const QString &label)
+{
+    auto *button = makeCaptureWhiteButton(parent, label);
+    button->setMinimumHeight(22);
+    button->setMaximumHeight(22);
+    button->setFixedWidth(40);
+    button->setStyleSheet(QStringLiteral(
+        "QPushButton {"
+        "  background-color: #ffffff;"
+        "  color: #222222;"
+        "  border: 1px solid #b0b0b0;"
+        "  border-radius: 2px;"
+        "  padding: 1px 6px;"
+        "  min-height: 22px;"
+        "  max-height: 22px;"
+        "  min-width: 40px;"
+        "  font-size: 11px;"
+        "}"
+        "QPushButton:hover { background-color: #f0f0f0; }"
+        "QPushButton:pressed { background-color: #e0e0e0; }"
+        "QPushButton:disabled { color: #999999; background-color: #f5f5f5; }"));
+    return button;
+}
+
+QPushButton *makeRecorderButton(QWidget *parent, const QIcon &icon, const QString &label)
+{
+    auto *button = makeCaptureWhiteButton(parent, label, icon);
+    button->setIconSize(QSize(12, 12));
+    button->setMinimumHeight(26);
+    button->setMaximumHeight(26);
+    button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    button->setStyleSheet(QStringLiteral(
+        "QPushButton {"
+        "  background-color: #ffffff;"
+        "  color: #222222;"
+        "  border: 1px solid #b0b0b0;"
+        "  border-radius: 2px;"
+        "  padding: 2px 8px;"
+        "  min-height: 26px;"
+        "  max-height: 26px;"
+        "}"
+        "QPushButton:hover { background-color: #f0f0f0; }"
+        "QPushButton:pressed { background-color: #e0e0e0; }"
+        "QPushButton:disabled { color: #999999; background-color: #f5f5f5; }"));
+    return button;
 }
 } // namespace
 
@@ -271,6 +441,13 @@ void MainWindow::onSettingsTabChanged(const int index)
 {
     if (index == kSettingsTabStage)
         refreshStageComPortList();
+    else if (index == kSettingsTabCapture)
+    {
+        updateCaptureCamerasList();
+        updateCaptureCameraPositionRows();
+        if (stageWorker_ != nullptr)
+            updateCapturePositionControls(stageWorker_->currentState());
+    }
 }
 
 void MainWindow::selectBandComboIndex(QComboBox *combo, const int bandIndex)
@@ -1145,7 +1322,8 @@ void MainWindow::setupStageWorker()
 void MainWindow::updateStageConnectionControls(const StageState state)
 {
     const bool connected = state == StageState::Connected;
-    const bool busy = state == StageState::Connecting;
+    const bool busy = state == StageState::Connecting || state == StageState::Homing;
+    const bool motionActive = connected || busy;
 
     if (stagePortCombo_ != nullptr)
         stagePortCombo_->setEnabled(!connected && !busy);
@@ -1154,7 +1332,74 @@ void MainWindow::updateStageConnectionControls(const StageState state)
     if (stageConnectBtn_ != nullptr)
         stageConnectBtn_->setEnabled(!connected && !busy);
     if (stageDisconnectBtn_ != nullptr)
-        stageDisconnectBtn_->setEnabled(connected);
+        stageDisconnectBtn_->setEnabled(motionActive);
+    if (stageControlBox_ != nullptr)
+        stageControlBox_->setEnabled(connected);
+
+    updateStageMotionControls(state);
+
+    if (stagePositionTimer_ != nullptr)
+    {
+        if (connected || state == StageState::Homing)
+            stagePositionTimer_->start();
+        else
+            stagePositionTimer_->stop();
+    }
+
+    if (!connected)
+        updateStagePositionDisplay(0.0);
+
+    updateCapturePositionControls(state);
+}
+
+void MainWindow::updateStageMotionControls(const StageState state)
+{
+    const bool connected = state == StageState::Connected;
+
+    if (stageHomeBtn_ != nullptr)
+        stageHomeBtn_->setEnabled(connected);
+    if (stageToStartBtn_ != nullptr)
+        stageToStartBtn_->setEnabled(connected);
+    if (stageBackBtn_ != nullptr)
+        stageBackBtn_->setEnabled(connected);
+    if (stageForwardBtn_ != nullptr)
+        stageForwardBtn_->setEnabled(connected);
+    if (stageToEndBtn_ != nullptr)
+        stageToEndBtn_->setEnabled(connected);
+    if (stageAbsolutePositionSpin_ != nullptr)
+        stageAbsolutePositionSpin_->setEnabled(connected);
+    if (stageAbsoluteMoveBtn_ != nullptr)
+        stageAbsoluteMoveBtn_->setEnabled(connected);
+    if (stageStopBtn_ != nullptr)
+        stageStopBtn_->setEnabled(connected);
+}
+
+void MainWindow::updateStagePositionDisplay(const double positionMm)
+{
+    if (stageAxisWidget_ != nullptr)
+        stageAxisWidget_->setPositionMm(positionMm);
+}
+
+void MainWindow::pollStagePosition()
+{
+    if (stageWorker_ == nullptr || stagePositionPollInFlight_)
+        return;
+
+    const StageState state = stageWorker_->currentState();
+    if (state != StageState::Connected && state != StageState::Homing)
+        return;
+
+    stagePositionPollInFlight_ = true;
+    stageWorker_->requestPrimaryPosition([this](const double positionMm, const bool ok) {
+        stagePositionPollInFlight_ = false;
+        if (!ok)
+            return;
+
+        QMetaObject::invokeMethod(
+            this,
+            [this, positionMm]() { updateStagePositionDisplay(positionMm); },
+            Qt::QueuedConnection);
+    });
 }
 
 void MainWindow::updateStageDeviceDisplay(const StageTopology &topology)
@@ -1173,6 +1418,19 @@ void MainWindow::clearStageDeviceDisplay()
 void MainWindow::onStageStateChanged(const StageState state)
 {
     updateStageConnectionControls(state);
+
+    if (state == StageState::Homing)
+    {
+        if (stageHomingKind_ == StageHomingKind::Localization)
+        {
+            appendLog(QString("Stage: initial homing (+%1 mm forward, then home sensor)…")
+                          .arg(zaber_stage::kHomingLocalizationPremoveMm, 0, 'f', 0));
+        }
+        else if (stageHomingKind_ == StageHomingKind::Simple)
+            appendLog("Stage: homing lockstep group (home sensor)…");
+    }
+    else if (state == StageState::Connected)
+        appendLog("Stage: homed and ready");
 
     if (state == StageState::Disconnected || state == StageState::Fault)
         clearStageDeviceDisplay();
@@ -1205,6 +1463,16 @@ void MainWindow::onStageTopologyChanged(const StageTopology &topology)
                       .arg(topology.lockstepPrimaryAxis)
                       .arg(topology.lockstepSecondaryAxis)
                       .arg(topology.travelLengthMm, 0, 'f', 0));
+    }
+
+    if (topology.axesHomed && stageHomingKind_ != StageHomingKind::None)
+    {
+        if (stageHomingKind_ == StageHomingKind::Localization)
+            appendLog("Stage: initial localization homing complete");
+        else
+            appendLog("Stage: homing complete");
+
+        stageHomingKind_ = StageHomingKind::None;
     }
 }
 
@@ -1266,6 +1534,7 @@ QWidget *MainWindow::createStageSettingsTab()
 
         appendLog(QString("Stage: connecting to %1 @ %2...")
                       .arg(portName, stageBaudCombo_->currentText()));
+        stageHomingKind_ = StageHomingKind::Localization;
         stageWorker_->requestConnect(settings);
     });
     connect(stageDisconnectBtn_, &QPushButton::clicked, this, [this]() {
@@ -1277,19 +1546,135 @@ QWidget *MainWindow::createStageSettingsTab()
     });
 
     auto *deviceBox = new QGroupBox("Device", page);
-    deviceBox->setCheckable(true);
-    deviceBox->setChecked(false);
     auto *deviceLayout = new QVBoxLayout(deviceBox);
+    auto *deviceHint = new QLabel(
+        QStringLiteral("Use Zaber Launcher to initialize or reconfigure the motors."),
+        deviceBox);
+    deviceHint->setWordWrap(true);
     stageDeviceDisplay_ = new QPlainTextEdit(deviceBox);
     stageDeviceDisplay_->setReadOnly(true);
     stageDeviceDisplay_->setPlaceholderText("Connect to discover the controller and axes.");
-    stageDeviceDisplay_->setMinimumHeight(180);
-    stageDeviceDisplay_->setMaximumHeight(320);
+    stageDeviceDisplay_->setMinimumHeight(55);
+    stageDeviceDisplay_->setMaximumHeight(75);
+    deviceLayout->addWidget(deviceHint);
     deviceLayout->addWidget(stageDeviceDisplay_);
+
+    stageControlBox_ = new QGroupBox("Control", page);
+    stageControlBox_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Maximum);
+    auto *controlLayout = new QVBoxLayout(stageControlBox_);
+    controlLayout->setContentsMargins(6, 2, 6, 6);
+    controlLayout->setSpacing(2);
+
+    stageAxisWidget_ = new ui::StageAxisWidget(stageControlBox_);
+    stageAxisWidget_->setTravelRangeMm(zaber_stage::kTravelMinimumMm, zaber_stage::kTravelLengthMm);
+
+    auto *toolbarRow = new QHBoxLayout();
+    toolbarRow->setSpacing(10);
+    toolbarRow->setContentsMargins(0, 0, 0, 0);
+    stageHomeBtn_ = new QToolButton(stageControlBox_);
+    stageHomeBtn_->setIcon(makeHomeIcon());
+    stageHomeBtn_->setIconSize(QSize(28, 28));
+    stageHomeBtn_->setMinimumSize(44, 44);
+    stageHomeBtn_->setToolTip(tr("Perform homing"));
+    stageHomeBtn_->setAutoRaise(true);
+    stageToStartBtn_ =
+        makeStageToolButton(stageControlBox_, QStyle::SP_MediaSkipBackward, tr("Move to beginning (0 mm)"));
+    stageBackBtn_ = makeStageToolButton(stageControlBox_, QStyle::SP_MediaSeekBackward, tr("Move back (hold)"));
+    stageStopBtn_ = makeStageToolButton(stageControlBox_, QStyle::SP_MediaStop, tr("Stop"));
+    stageForwardBtn_ =
+        makeStageToolButton(stageControlBox_, QStyle::SP_MediaSeekForward, tr("Move forward (hold)"));
+    stageToEndBtn_ = makeStageToolButton(stageControlBox_,
+                                         QStyle::SP_MediaSkipForward,
+                                         tr("Move to end (%1 mm)").arg(zaber_stage::kTravelLengthMm, 0, 'f', 0));
+
+    toolbarRow->addWidget(stageHomeBtn_);
+    toolbarRow->addWidget(stageToStartBtn_);
+    toolbarRow->addSpacing(8);
+    toolbarRow->addWidget(stageBackBtn_);
+    toolbarRow->addWidget(stageStopBtn_);
+    toolbarRow->addWidget(stageForwardBtn_);
+    toolbarRow->addSpacing(8);
+    toolbarRow->addWidget(stageToEndBtn_);
+    toolbarRow->addStretch(1);
+
+    auto *absoluteRow = new QHBoxLayout();
+    auto *absoluteLabel = new QLabel(QStringLiteral("Move to absolute position"), stageControlBox_);
+    stageAbsolutePositionSpin_ = new QDoubleSpinBox(stageControlBox_);
+    stageAbsolutePositionSpin_->setRange(zaber_stage::kTravelMinimumMm, zaber_stage::kTravelLengthMm);
+    stageAbsolutePositionSpin_->setDecimals(1);
+    stageAbsolutePositionSpin_->setSingleStep(1.0);
+    stageAbsolutePositionSpin_->setValue(0.0);
+    stageAbsolutePositionSpin_->setEnabled(false);
+    stageAbsoluteMoveBtn_ =
+        makeStageToolButton(stageControlBox_, QStyle::SP_MediaPlay, tr("Move to absolute position"));
+    absoluteRow->addWidget(absoluteLabel);
+    absoluteRow->addWidget(stageAbsolutePositionSpin_);
+    absoluteRow->addWidget(stageAbsoluteMoveBtn_);
+
+    controlLayout->addLayout(toolbarRow);
+    controlLayout->addWidget(stageAxisWidget_);
+    updateStagePositionDisplay(0.0);
+    controlLayout->addLayout(absoluteRow);
+
+    stagePositionTimer_ = new QTimer(this);
+    stagePositionTimer_->setInterval(50);
+    connect(stagePositionTimer_, &QTimer::timeout, this, &MainWindow::pollStagePosition);
+
+    connect(stageHomeBtn_, &QToolButton::clicked, this, [this]() {
+        if (stageWorker_ == nullptr)
+            return;
+        stageHomingKind_ = StageHomingKind::Simple;
+        stageWorker_->requestHome();
+    });
+    connect(stageToStartBtn_, &QToolButton::clicked, this, [this]() {
+        if (stageWorker_ == nullptr)
+            return;
+        stageWorker_->requestMoveAbsoluteMm(zaber_stage::kTravelMinimumMm);
+    });
+    connect(stageBackBtn_, &QToolButton::pressed, this, [this]() {
+        if (stageWorker_ == nullptr)
+            return;
+        stageWorker_->requestMoveVelocityMm(-zaber_stage::kMaxSpeedMmPerSec);
+    });
+    connect(stageBackBtn_, &QToolButton::released, this, [this]() {
+        if (stageWorker_ == nullptr)
+            return;
+        stageWorker_->requestStopMotion();
+    });
+    connect(stageStopBtn_, &QToolButton::clicked, this, [this]() {
+        if (stageWorker_ == nullptr)
+            return;
+        appendLog("Stage: stop requested");
+        stageWorker_->requestStopMotion();
+    });
+    connect(stageForwardBtn_, &QToolButton::pressed, this, [this]() {
+        if (stageWorker_ == nullptr)
+            return;
+        stageWorker_->requestMoveVelocityMm(zaber_stage::kMaxSpeedMmPerSec);
+    });
+    connect(stageForwardBtn_, &QToolButton::released, this, [this]() {
+        if (stageWorker_ == nullptr)
+            return;
+        stageWorker_->requestStopMotion();
+    });
+    connect(stageToEndBtn_, &QToolButton::clicked, this, [this]() {
+        if (stageWorker_ == nullptr)
+            return;
+        stageWorker_->requestMoveAbsoluteMm(zaber_stage::kTravelLengthMm);
+    });
+    connect(stageAbsoluteMoveBtn_, &QToolButton::clicked, this, [this]() {
+        if (stageWorker_ == nullptr || stageAbsolutePositionSpin_ == nullptr)
+            return;
+
+        const double targetMm = stageAbsolutePositionSpin_->value();
+        appendLog(QString("Stage: move to absolute position %1 mm").arg(targetMm, 0, 'f', 1));
+        stageWorker_->requestMoveAbsoluteMm(targetMm);
+    });
 
     layout->addWidget(connBox);
     layout->addWidget(deviceBox);
-    layout->addStretch();
+    layout->addWidget(stageControlBox_);
+    layout->addStretch(1);
     return page;
 }
 
@@ -1314,42 +1699,7 @@ QWidget *MainWindow::createLightSettingsTab()
                       .arg(interfaceCombo->currentText(), addressEdit->text()));
     });
 
-    auto *ctrlBox = new QGroupBox("Output", page);
-    auto *ctrlForm = new QFormLayout(ctrlBox);
-    auto *enableCheck = new QCheckBox("Enable output", ctrlBox);
-    auto *brightness = new QSlider(Qt::Horizontal, ctrlBox);
-    brightness->setRange(0, 100);
-    brightness->setValue(50);
-    auto *brightnessLabel = new QLabel("50%", ctrlBox);
-    auto *warmth = new QSlider(Qt::Horizontal, ctrlBox);
-    warmth->setRange(0, 100);
-    warmth->setValue(50);
-    auto *warmthLabel = new QLabel("50%", ctrlBox);
-    auto *applyBtn = new QPushButton("Apply", ctrlBox);
-
-    QObject::connect(brightness, &QSlider::valueChanged, this, [brightnessLabel](int v) {
-        brightnessLabel->setText(QString("%1%").arg(v));
-    });
-    QObject::connect(warmth, &QSlider::valueChanged, this, [warmthLabel](int v) {
-        warmthLabel->setText(QString("%1%").arg(v));
-    });
-
-    ctrlForm->addRow(enableCheck);
-    ctrlForm->addRow("Brightness", brightness);
-    ctrlForm->addRow("", brightnessLabel);
-    ctrlForm->addRow("Warmth", warmth);
-    ctrlForm->addRow("", warmthLabel);
-    ctrlForm->addRow("", applyBtn);
-
-    connect(applyBtn, &QPushButton::clicked, this, [this, enableCheck, brightness, warmth]() {
-        appendLog(QString("Light: apply (enabled=%1, brightness=%2%, warmth=%3%)")
-                      .arg(enableCheck->isChecked() ? "yes" : "no")
-                      .arg(brightness->value())
-                      .arg(warmth->value()));
-    });
-
     layout->addWidget(connBox);
-    layout->addWidget(ctrlBox);
     layout->addStretch();
     return page;
 }
@@ -1473,55 +1823,252 @@ QWidget *MainWindow::createCaptureSettingsTab()
     auto *page = new QWidget(this);
     auto *layout = new QVBoxLayout(page);
 
-    auto *scanBox = new QGroupBox("Scan / capture", page);
-    auto *scanForm = new QFormLayout(scanBox);
-    auto *datasetName = new QLineEdit(scanBox);
-    datasetName->setPlaceholderText("Dataset name");
-    auto *saveFolder = new QLineEdit(scanBox);
-    saveFolder->setPlaceholderText("Output folder");
-    auto *scanSpeed = new QDoubleSpinBox(scanBox);
-    scanSpeed->setRange(0.1, 5000.0);
-    scanSpeed->setDecimals(1);
-    scanSpeed->setValue(25.0);
-    scanSpeed->setSuffix(" mm/min");
-    auto *linesSpin = new QSpinBox(scanBox);
-    linesSpin->setRange(1, 1000000);
-    linesSpin->setValue(1000);
-    auto *armScanBtn = new QPushButton("Arm scan", scanBox);
-    auto *startScanBtn = new QPushButton("Start scan", scanBox);
-    auto *stopScanBtn = new QPushButton("Stop scan", scanBox);
-    startScanBtn->setEnabled(false);
-    stopScanBtn->setEnabled(false);
-    scanForm->addRow("Dataset", datasetName);
-    scanForm->addRow("Save folder", saveFolder);
-    scanForm->addRow("Scan speed", scanSpeed);
-    scanForm->addRow("Lines / frames", linesSpin);
-    scanForm->addRow("", armScanBtn);
-    scanForm->addRow("", startScanBtn);
-    scanForm->addRow("", stopScanBtn);
+    auto *recorderBox = new QGroupBox("Recorder", page);
+    auto *recorderLayout = new QVBoxLayout(recorderBox);
+    recorderLayout->setContentsMargins(6, 4, 6, 6);
 
-    connect(armScanBtn, &QPushButton::clicked, this,
-            [this, datasetName, saveFolder, scanSpeed, linesSpin, startScanBtn, stopScanBtn]() {
-                appendLog(QString("Capture: arm scan (dataset=%1, folder=%2, speed=%3 mm/min, lines=%4)")
-                              .arg(datasetName->text(), saveFolder->text())
-                              .arg(scanSpeed->value(), 0, 'f', 1)
-                              .arg(linesSpin->value()));
-                // UI-only: allow starting after arm for now.
-                startScanBtn->setEnabled(true);
-                stopScanBtn->setEnabled(true);
-            });
-    connect(startScanBtn, &QPushButton::clicked, this, [this]() {
-        appendLog("Capture: start scan requested (not implemented)");
+    auto *recorderButtonLayout = new QHBoxLayout();
+    recorderButtonLayout->setContentsMargins(0, 0, 0, 0);
+    recorderButtonLayout->setSpacing(8);
+
+    captureRecorderStopBtn_ =
+        makeRecorderButton(recorderBox, makeRecorderStopIcon(), QStringLiteral("Stop"));
+    captureRecorderPreviewBtn_ =
+        makeRecorderButton(recorderBox, makeRecorderPreviewIcon(), QStringLiteral("Preview"));
+    captureRecorderRecordBtn_ =
+        makeRecorderButton(recorderBox, makeRecorderRecordIcon(), QStringLiteral("Record"));
+    captureRecorderStopBtn_->setToolTip(tr("Stop preview or recording"));
+    captureRecorderPreviewBtn_->setToolTip(tr("Preview scan without saving"));
+    captureRecorderRecordBtn_->setToolTip(tr("Record scan to SSD"));
+
+    recorderButtonLayout->addWidget(captureRecorderStopBtn_, 1);
+    recorderButtonLayout->addWidget(captureRecorderPreviewBtn_, 1);
+    recorderButtonLayout->addWidget(captureRecorderRecordBtn_, 1);
+    recorderLayout->addLayout(recorderButtonLayout);
+
+    connect(captureRecorderStopBtn_, &QPushButton::clicked, this, [this]() {
+        appendLog("Capture: recorder stop requested (not implemented)");
     });
-    connect(stopScanBtn, &QPushButton::clicked, this, [this, startScanBtn, stopScanBtn]() {
-        appendLog("Capture: stop scan requested (not implemented)");
-        startScanBtn->setEnabled(false);
-        stopScanBtn->setEnabled(false);
+    connect(captureRecorderPreviewBtn_, &QPushButton::clicked, this, [this]() {
+        appendLog("Capture: recorder preview requested (not implemented)");
+    });
+    connect(captureRecorderRecordBtn_, &QPushButton::clicked, this, [this]() {
+        appendLog("Capture: recorder record requested (not implemented)");
     });
 
-    layout->addWidget(scanBox);
+    captureCamerasBox_ = new QGroupBox("Cameras", page);
+    auto *camerasLayout = new QVBoxLayout(captureCamerasBox_);
+    camerasLayout->setContentsMargins(6, 4, 6, 6);
+    camerasLayout->setSpacing(4);
+    captureCamerasEmptyLabel_ =
+        new QLabel(QStringLiteral("No cameras connected."), captureCamerasBox_);
+    captureCamerasEmptyLabel_->setWordWrap(true);
+    captureCamera1Check_ = new QCheckBox(captureCamerasBox_);
+    captureCamera2Check_ = new QCheckBox(captureCamerasBox_);
+    captureCamera1Check_->hide();
+    captureCamera2Check_->hide();
+    camerasLayout->addWidget(captureCamerasEmptyLabel_);
+    camerasLayout->addWidget(captureCamera1Check_);
+    camerasLayout->addWidget(captureCamera2Check_);
+
+    auto *positionBox = new QGroupBox("Position", page);
+    auto *positionLayout = new QVBoxLayout(positionBox);
+    positionLayout->setContentsMargins(6, 4, 6, 6);
+    positionLayout->setSpacing(6);
+
+    captureStageConnectedCheck_ =
+        new QCheckBox(QStringLiteral("HyperFusion linear stage connected"), positionBox);
+    captureStageConnectedCheck_->setEnabled(false);
+    positionLayout->addWidget(captureStageConnectedCheck_);
+
+    capturePositionContent_ = new QWidget(positionBox);
+    auto *positionContentLayout = new QVBoxLayout(capturePositionContent_);
+    positionContentLayout->setContentsMargins(0, 0, 0, 0);
+    positionContentLayout->setSpacing(6);
+
+    for (std::size_t cameraIndex = 0; cameraIndex < 2; ++cameraIndex)
+    {
+        auto *rowWidget = new QWidget(capturePositionContent_);
+        auto *rowLayout = new QHBoxLayout(rowWidget);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->setSpacing(6);
+
+        auto *rowLabel = new QLabel(rowWidget);
+        rowLabel->setMinimumWidth(120);
+        captureCameraPositionSpins_[cameraIndex] = new QDoubleSpinBox(rowWidget);
+        captureCameraPositionSpins_[cameraIndex]->setRange(zaber_stage::kTravelMinimumMm,
+                                                            zaber_stage::kTravelLengthMm);
+        captureCameraPositionSpins_[cameraIndex]->setDecimals(2);
+        captureCameraPositionSpins_[cameraIndex]->setSingleStep(1.0);
+        captureCameraPositionSpins_[cameraIndex]->setSuffix(QStringLiteral(" mm"));
+        captureCameraPositionSpins_[cameraIndex]->setValue(0.0);
+
+        auto *goBtn = makeCaptureCompactWhiteButton(rowWidget, QStringLiteral("Go"));
+        rowLayout->addWidget(rowLabel);
+        rowLayout->addWidget(captureCameraPositionSpins_[cameraIndex], 1);
+        rowLayout->addWidget(goBtn);
+        positionContentLayout->addWidget(rowWidget);
+        captureCameraPositionRows_[cameraIndex] = rowWidget;
+        rowWidget->hide();
+
+        connect(goBtn, &QPushButton::clicked, this, [this, cameraIndex]() {
+            LumoCameraUi &cameraUi = cameraIndex == 0 ? camera1Ui_ : camera2Ui_;
+            if (stageWorker_ == nullptr || captureCameraPositionSpins_[cameraIndex] == nullptr)
+                return;
+            if (stageWorker_->currentState() != StageState::Connected)
+            {
+                appendLog(QString("Capture: stage not connected — cannot go to %1 position")
+                              .arg(profileTabNameForUi(cameraUi)));
+                return;
+            }
+
+            const QString label = QStringLiteral("%1 position").arg(profileTabNameForUi(cameraUi));
+            const double targetMm = captureCameraPositionSpins_[cameraIndex]->value();
+            appendLog(QString("Capture: go to %1 (%2 mm)").arg(label).arg(targetMm, 0, 'f', 2));
+            stageWorker_->requestMoveAbsoluteMm(targetMm);
+        });
+    }
+
+    auto *targetLengthRowLayout = new QHBoxLayout();
+    targetLengthRowLayout->setSpacing(6);
+    auto *targetLengthLabel = new QLabel(QStringLiteral("Target length"), capturePositionContent_);
+    targetLengthLabel->setMinimumWidth(120);
+    captureTargetLengthSpin_ = new QDoubleSpinBox(capturePositionContent_);
+    captureTargetLengthSpin_->setRange(0.0, 500.0);
+    captureTargetLengthSpin_->setDecimals(2);
+    captureTargetLengthSpin_->setSingleStep(1.0);
+    captureTargetLengthSpin_->setSuffix(QStringLiteral(" mm"));
+    captureTargetLengthSpin_->setValue(125.0);
+    targetLengthRowLayout->addWidget(targetLengthLabel);
+    targetLengthRowLayout->addWidget(captureTargetLengthSpin_, 1);
+    targetLengthRowLayout->addSpacing(40);
+    positionContentLayout->addLayout(targetLengthRowLayout);
+
+    positionLayout->addWidget(capturePositionContent_);
+    updateCapturePositionControls(stageWorker_ != nullptr ? stageWorker_->currentState()
+                                                          : StageState::Disconnected);
+
+    auto *metadataBox = new QGroupBox("Metadata", page);
+    auto *metadataForm = new QFormLayout(metadataBox);
+    captureDatasetEdit_ = new QLineEdit(metadataBox);
+    captureDatasetEdit_->setPlaceholderText("Dataset name");
+
+    auto *saveFolderRow = new QWidget(metadataBox);
+    auto *saveFolderLayout = new QHBoxLayout(saveFolderRow);
+    saveFolderLayout->setContentsMargins(0, 0, 0, 0);
+    saveFolderLayout->setSpacing(6);
+    captureSaveFolderEdit_ = new QLineEdit(saveFolderRow);
+    captureSaveFolderEdit_->setPlaceholderText("Output location");
+    captureSaveFolderBrowseBtn_ = new QPushButton(QStringLiteral("Browse…"), saveFolderRow);
+    captureSaveFolderBrowseBtn_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    captureSaveFolderBrowseBtn_->setFixedWidth(72);
+    saveFolderLayout->addWidget(captureSaveFolderEdit_, 1);
+    saveFolderLayout->addWidget(captureSaveFolderBrowseBtn_);
+
+    captureOperatorEdit_ = new QLineEdit(metadataBox);
+    captureOperatorEdit_->setPlaceholderText("Operator name");
+    captureDescriptionEdit_ = new QPlainTextEdit(metadataBox);
+    captureDescriptionEdit_->setPlaceholderText("Sample description, notes, or experiment details");
+    captureDescriptionEdit_->setTabChangesFocus(true);
+    captureDescriptionEdit_->setMinimumHeight(72);
+    captureDescriptionEdit_->setMaximumHeight(120);
+    metadataForm->addRow("Dataset", captureDatasetEdit_);
+    metadataForm->addRow("Save folder", saveFolderRow);
+    metadataForm->addRow("Operator", captureOperatorEdit_);
+    metadataForm->addRow("Description", captureDescriptionEdit_);
+
+    connect(captureSaveFolderBrowseBtn_, &QPushButton::clicked, this, [this]() {
+        const QString startDir = captureSaveFolderEdit_->text().trimmed().isEmpty()
+                                     ? QDir::homePath()
+                                     : captureSaveFolderEdit_->text().trimmed();
+        const QString path = QFileDialog::getExistingDirectory(
+            this, tr("Select output location"), startDir);
+        if (!path.isEmpty())
+            captureSaveFolderEdit_->setText(QDir::toNativeSeparators(path));
+    });
+
+    layout->addWidget(recorderBox);
+    layout->addWidget(metadataBox);
+    layout->addWidget(captureCamerasBox_);
+    layout->addWidget(positionBox);
     layout->addStretch();
+    updateCaptureCamerasList();
+    updateCaptureCameraPositionRows();
     return page;
+}
+
+void MainWindow::updateCapturePositionControls(const StageState state)
+{
+    const bool connected = state == StageState::Connected;
+
+    if (captureStageConnectedCheck_ != nullptr)
+        captureStageConnectedCheck_->setChecked(connected);
+
+    if (capturePositionContent_ != nullptr)
+        capturePositionContent_->setEnabled(connected);
+}
+
+void MainWindow::updateCaptureCamerasList()
+{
+    const auto isConnected = [](const LumoCameraUi &ui) {
+        return ui.state != CameraState::Disconnected && ui.state != CameraState::Fault;
+    };
+
+    const auto updateCheckbox = [this, &isConnected](LumoCameraUi &ui, QCheckBox *checkbox) {
+        if (checkbox == nullptr)
+            return;
+
+        if (!isConnected(ui))
+        {
+            checkbox->hide();
+            return;
+        }
+
+        const bool firstShow = checkbox->isHidden();
+        checkbox->setText(profileTabNameForUi(ui));
+        if (firstShow)
+            checkbox->setChecked(true);
+        checkbox->show();
+    };
+
+    updateCheckbox(camera1Ui_, captureCamera1Check_);
+    updateCheckbox(camera2Ui_, captureCamera2Check_);
+
+    if (captureCamerasEmptyLabel_ != nullptr)
+    {
+        const bool anyConnected = isConnected(camera1Ui_) || isConnected(camera2Ui_);
+        captureCamerasEmptyLabel_->setHidden(anyConnected);
+    }
+
+    updateCaptureCameraPositionRows();
+}
+
+void MainWindow::updateCaptureCameraPositionRows()
+{
+    const auto isConnected = [](const LumoCameraUi &ui) {
+        return ui.state != CameraState::Disconnected && ui.state != CameraState::Fault;
+    };
+
+    LumoCameraUi *cameras[] = {&camera1Ui_, &camera2Ui_};
+
+    for (std::size_t cameraIndex = 0; cameraIndex < 2; ++cameraIndex)
+    {
+        QWidget *row = captureCameraPositionRows_[cameraIndex];
+        if (row == nullptr)
+            continue;
+
+        if (!isConnected(*cameras[cameraIndex]))
+        {
+            row->hide();
+            continue;
+        }
+
+        const QString rowLabel = QStringLiteral("%1 position").arg(profileTabNameForUi(*cameras[cameraIndex]));
+        if (QLabel *label = row->findChild<QLabel *>())
+            label->setText(rowLabel);
+
+        row->show();
+    }
 }
 
 void MainWindow::appendLog(const QString &message)
@@ -1698,6 +2245,7 @@ void MainWindow::onShutterStateChanged(LumoCameraUi &ui, const bool isOpen)
 void MainWindow::onCameraStateChanged(LumoCameraUi &ui, const CameraState state)
 {
     updateCameraControls(ui, state);
+    updateCaptureCamerasList();
 
     if (coordinator_ != nullptr
         && (state == CameraState::Initialized || state == CameraState::Configured

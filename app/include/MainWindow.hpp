@@ -17,6 +17,7 @@
 class LumoCamera;
 class Swir3NiCamera;
 class StageWorker;
+class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QGroupBox;
@@ -25,12 +26,15 @@ class QLineEdit;
 class QPlainTextEdit;
 class QPushButton;
 class QTabWidget;
+class QTimer;
+class QToolButton;
 class QWidget;
 
 namespace ui
 {
 class DetectorCrosshairWidget;
 class ProfilePlotWidget;
+class StageAxisWidget;
 } // namespace ui
 
 struct LumoCameraUi
@@ -116,6 +120,12 @@ private:
     void onStageStateChanged(StageState state);
     void onStageTopologyChanged(const StageTopology &topology);
     void onStageError(const StageError &error);
+    void updateStageMotionControls(StageState state);
+    void updateStagePositionDisplay(double positionMm);
+    void pollStagePosition();
+    void updateCaptureCamerasList();
+    void updateCaptureCameraPositionRows();
+    void updateCapturePositionControls(StageState state);
     void updateCameraControls(LumoCameraUi &ui, CameraState state);
     void updateShutterDisplay(LumoCameraUi &ui, bool isOpen);
     void onCameraStateChanged(LumoCameraUi &ui, CameraState state);
@@ -145,13 +155,52 @@ private:
     static constexpr int kSettingsTabCamera = 0;
     static constexpr int kSettingsTabStage = 1;
     static constexpr int kSettingsTabUr3e = 3;
+    static constexpr int kSettingsTabCapture = 4;
 
     QComboBox *stagePortCombo_ = nullptr;
     QComboBox *stageBaudCombo_ = nullptr;
     QPushButton *stageConnectBtn_ = nullptr;
     QPushButton *stageDisconnectBtn_ = nullptr;
     QPlainTextEdit *stageDeviceDisplay_ = nullptr;
+    QGroupBox *stageControlBox_ = nullptr;
+    QToolButton *stageHomeBtn_ = nullptr;
+    QToolButton *stageToStartBtn_ = nullptr;
+    QToolButton *stageBackBtn_ = nullptr;
+    QToolButton *stageStopBtn_ = nullptr;
+    QToolButton *stageForwardBtn_ = nullptr;
+    QToolButton *stageToEndBtn_ = nullptr;
+    QDoubleSpinBox *stageAbsolutePositionSpin_ = nullptr;
+    QToolButton *stageAbsoluteMoveBtn_ = nullptr;
+    ui::StageAxisWidget *stageAxisWidget_ = nullptr;
+    QTimer *stagePositionTimer_ = nullptr;
+    bool stagePositionPollInFlight_ = false;
+
+    enum class StageHomingKind
+    {
+        None,
+        Localization,
+        Simple,
+    };
+    StageHomingKind stageHomingKind_ = StageHomingKind::None;
     std::unique_ptr<StageWorker> stageWorker_;
+
+    QLineEdit *captureDatasetEdit_ = nullptr;
+    QLineEdit *captureSaveFolderEdit_ = nullptr;
+    QPushButton *captureSaveFolderBrowseBtn_ = nullptr;
+    QLineEdit *captureOperatorEdit_ = nullptr;
+    QPlainTextEdit *captureDescriptionEdit_ = nullptr;
+    QPushButton *captureRecorderStopBtn_ = nullptr;
+    QPushButton *captureRecorderPreviewBtn_ = nullptr;
+    QPushButton *captureRecorderRecordBtn_ = nullptr;
+    QGroupBox *captureCamerasBox_ = nullptr;
+    QLabel *captureCamerasEmptyLabel_ = nullptr;
+    QCheckBox *captureCamera1Check_ = nullptr;
+    QCheckBox *captureCamera2Check_ = nullptr;
+    QWidget *captureCameraPositionRows_[2] = {nullptr, nullptr};
+    QDoubleSpinBox *captureCameraPositionSpins_[2] = {nullptr, nullptr};
+    QDoubleSpinBox *captureTargetLengthSpin_ = nullptr;
+    QCheckBox *captureStageConnectedCheck_ = nullptr;
+    QWidget *capturePositionContent_ = nullptr;
     std::unique_ptr<CameraCoordinator> coordinator_;
     std::unique_ptr<ui::WaterfallProcessor> waterfallProcessor1_;
     std::unique_ptr<ui::WaterfallProcessor> waterfallProcessor2_;

@@ -54,6 +54,8 @@ qt_add_executable(app
     src/core/ICameraController.cpp
     src/adapters/zaber/ZaberStageController.cpp
     src/adapters/zaber/ZaberStageConfigurator.cpp
+    src/adapters/zaber/ZaberStageHoming.cpp
+    src/adapters/zaber/ZaberStageMotion.cpp
     src/adapters/lumo/CalpackBandCatalog.cpp
     src/adapters/lumo/LumoCamera.cpp
     src/adapters/lumo/Swir3NiCamera.cpp
@@ -64,6 +66,7 @@ qt_add_executable(app
     src/ui/ProfileProcessor.cpp
     src/ui/RgbBandExtractor.cpp
     src/ui/SerialPortEnumerator.cpp
+    src/ui/StageAxisWidget.cpp
     src/ui/WaterfallProcessor.cpp
     include/MainWindow.hpp
     include/core/CameraTypes.hpp
@@ -74,6 +77,8 @@ qt_add_executable(app
     include/core/StageWorker.hpp
     include/adapters/zaber/ZaberStageController.hpp
     include/adapters/zaber/ZaberStageConfigurator.hpp
+    include/adapters/zaber/ZaberStageHoming.hpp
+    include/adapters/zaber/ZaberStageMotion.hpp
     include/adapters/zaber/ZaberStageProfile.hpp
     include/adapters/lumo/CalpackBandCatalog.hpp
     include/adapters/lumo/LumoCamera.hpp
@@ -82,6 +87,7 @@ qt_add_executable(app
     include/orchestrator/CameraCoordinator.hpp
     include/ui/DetectorCrosshairWidget.hpp
     include/ui/ProfilePlotWidget.hpp
+    include/ui/StageAxisWidget.hpp
 )
 
 target_include_directories(app PRIVATE include)

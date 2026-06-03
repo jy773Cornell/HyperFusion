@@ -42,7 +42,20 @@ void StageWorker::requestConnect(const StageConnectSettings &settings)
         if (controller_->connect(settings, error))
         {
             notifyTopology(controller_->topology());
-            notifyState(controller_->state());
+            notifyState(StageState::Homing);
+
+            if (controller_->homeWithLocalization(error))
+            {
+                notifyTopology(controller_->topology());
+                notifyState(controller_->state());
+            }
+            else
+            {
+                controller_->disconnect();
+                notifyTopology({});
+                notifyState(StageState::Fault);
+                notifyError(error);
+            }
         }
         else
         {
@@ -57,7 +70,80 @@ void StageWorker::requestDisconnect()
     enqueueCommand([this]() {
         controller_->disconnect();
         notifyTopology({});
-        notifyState(controller_->state());
+        notifyState(StageState::Disconnected);
+    });
+}
+
+void StageWorker::requestStopMotion()
+{
+    enqueueCommand([this]() {
+        if (controller_)
+            controller_->stopMotion();
+    });
+}
+
+void StageWorker::requestHome()
+{
+    enqueueCommand([this]() {
+        StageError error;
+        notifyState(StageState::Homing);
+
+        if (controller_->home(error))
+        {
+            notifyTopology(controller_->topology());
+            notifyState(StageState::Connected);
+        }
+        else
+        {
+            notifyState(StageState::Connected);
+            notifyError(error);
+        }
+    });
+}
+
+void StageWorker::requestPrimaryPosition(PositionCallback callback)
+{
+    enqueuePriorityCommand([this, callback = std::move(callback)]() {
+        if (!controller_ || !callback)
+            return;
+
+        StageError error;
+        double positionMm = 0.0;
+        const bool ok = controller_->getPrimaryPositionMm(positionMm, error);
+        callback(positionMm, ok);
+    });
+}
+
+void StageWorker::requestMoveRelativeMm(const double distanceMm)
+{
+    enqueueCommand([this, distanceMm]() {
+        StageError error;
+        if (controller_->moveRelativeMm(distanceMm, error))
+            return;
+
+        notifyError(error);
+    });
+}
+
+void StageWorker::requestMoveAbsoluteMm(const double positionMm)
+{
+    enqueueCommand([this, positionMm]() {
+        StageError error;
+        if (controller_->moveAbsoluteMm(positionMm, error))
+            return;
+
+        notifyError(error);
+    });
+}
+
+void StageWorker::requestMoveVelocityMm(const double velocityMmPerSec)
+{
+    enqueueCommand([this, velocityMmPerSec]() {
+        StageError error;
+        if (controller_->moveVelocityMm(velocityMmPerSec, error))
+            return;
+
+        notifyError(error);
     });
 }
 
@@ -94,6 +180,15 @@ void StageWorker::enqueueCommand(ControlCommand command)
     {
         std::lock_guard lock(commandMutex_);
         commandQueue_.push_back(std::move(command));
+    }
+    commandCv_.notify_one();
+}
+
+void StageWorker::enqueuePriorityCommand(ControlCommand command)
+{
+    {
+        std::lock_guard lock(commandMutex_);
+        commandQueue_.push_front(std::move(command));
     }
     commandCv_.notify_one();
 }
