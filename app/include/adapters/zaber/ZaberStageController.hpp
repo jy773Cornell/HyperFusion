@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/IStageController.hpp"
+#include "backend/IStageController.hpp"
 
 #include <optional>
 
@@ -24,8 +24,11 @@ public:
     void stopMotion() override;
     void disconnect() override;
 
-    bool moveRelativeMm(double distanceMm, StageError &error) override;
-    bool moveAbsoluteMm(double positionMm, StageError &error) override;
+    bool moveRelativeMm(double distanceMm, double speedMmPerSec, StageError &error) override;
+    bool moveAbsoluteMm(double positionMm,
+                        double speedMmPerSec,
+                        bool waitUntilIdle,
+                        StageError &error) override;
     bool moveVelocityMm(double velocityMmPerSec, StageError &error) override;
     bool getPrimaryPositionMm(double &positionMm, StageError &error) override;
 

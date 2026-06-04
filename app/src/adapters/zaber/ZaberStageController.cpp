@@ -247,7 +247,9 @@ bool ZaberStageController::ensureCanReadPosition(StageError &error) const
     return true;
 }
 
-bool ZaberStageController::moveRelativeMm(const double distanceMm, StageError &error)
+bool ZaberStageController::moveRelativeMm(const double distanceMm,
+                                          const double speedMmPerSec,
+                                          StageError &error)
 {
 #ifndef HF_HAVE_ZML
     error.code = StageErrorCode::NotImplemented;
@@ -262,7 +264,7 @@ bool ZaberStageController::moveRelativeMm(const double distanceMm, StageError &e
         zaber::motion::ascii::Device device =
             connection_->getDevice(zaber_stage::kDeviceAddress);
         zaber::motion::ascii::Lockstep lockstep = ZaberStageMotion::requireEnabledLockstep(device, error);
-        return ZaberStageMotion::moveRelativeMm(lockstep, distanceMm, error, false);
+        return ZaberStageMotion::moveRelativeMm(lockstep, distanceMm, error, false, speedMmPerSec);
     }
     catch (const std::exception &)
     {
@@ -271,7 +273,10 @@ bool ZaberStageController::moveRelativeMm(const double distanceMm, StageError &e
 #endif
 }
 
-bool ZaberStageController::moveAbsoluteMm(const double positionMm, StageError &error)
+bool ZaberStageController::moveAbsoluteMm(const double positionMm,
+                                          const double speedMmPerSec,
+                                          const bool waitUntilIdle,
+                                          StageError &error)
 {
 #ifndef HF_HAVE_ZML
     error.code = StageErrorCode::NotImplemented;
@@ -286,7 +291,7 @@ bool ZaberStageController::moveAbsoluteMm(const double positionMm, StageError &e
         zaber::motion::ascii::Device device =
             connection_->getDevice(zaber_stage::kDeviceAddress);
         zaber::motion::ascii::Lockstep lockstep = ZaberStageMotion::requireEnabledLockstep(device, error);
-        return ZaberStageMotion::moveAbsoluteMm(lockstep, positionMm, error, false);
+        return ZaberStageMotion::moveAbsoluteMm(lockstep, positionMm, error, waitUntilIdle, speedMmPerSec);
     }
     catch (const std::exception &)
     {

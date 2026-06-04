@@ -2,7 +2,7 @@
 #pragma once
 
 #include "adapters/lumo/LumoDeviceTypes.hpp"
-#include "core/ICameraController.hpp"
+#include "backend/ICameraController.hpp"
 
 #include <condition_variable>
 #include <cstdint>
@@ -24,6 +24,9 @@ public:
     static bool enumerateDevices(const CameraSettings &prep,
                                  std::vector<LumoDeviceEntry> &devices,
                                  CameraError &error);
+
+    /// Full path to NI IMAQ .icd under Lumo SDK or external/NI beside app.exe.
+    static std::string resolveNiImaqCameraFilePath(const std::string &fileName);
 
     std::string name() const override;
     CameraBackendId backendId() const override;

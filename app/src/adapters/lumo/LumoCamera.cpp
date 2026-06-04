@@ -5,6 +5,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <string>
 
 #if defined(_WIN32)
@@ -54,9 +55,16 @@ std::string wideToUtf8(const wchar_t *wide)
 #endif
 
 #if defined(HF_HAVE_LUMO_SDK)
-std::mutex g_sdkMutex;
+/// Serializes SpecSensor SI_* calls across all LumoCamera instances (FX10e + SWIR3 dual connect).
+std::recursive_mutex g_lumoGlobalMutex;
 int g_sdkLoadCount = 0;
 std::atomic<int> g_openSensorHandles{0};
+
+struct LumoGlobalLock
+{
+    LumoGlobalLock() { g_lumoGlobalMutex.lock(); }
+    ~LumoGlobalLock() { g_lumoGlobalMutex.unlock(); }
+};
 
 bool checkSiCode(const int code, const char *operation, CameraError &error)
 {
@@ -65,14 +73,151 @@ bool checkSiCode(const int code, const char *operation, CameraError &error)
 
     error.code = CameraErrorCode::SdkError;
     error.message = std::string(operation) + ": " + wideToUtf8(SI_GetErrorString(code));
+    if (code != siNoError)
+        error.message += " (" + std::to_string(code) + ")";
     error.fatal = (code < 0);
     return false;
+}
+
+bool setAcquisitionTimeoutMs(const SI_H handle,
+                             const std::uint32_t timeoutMs,
+                             CameraError &error)
+{
+    SI_BOOL implemented = SI_FALSE;
+    SI_BOOL writable = SI_FALSE;
+    if (!SI_SUCCEEDED(SI_IsImplemented(handle, L"Acquisition.Timeout", &implemented)) || !implemented
+        || !SI_SUCCEEDED(SI_IsWritable(handle, L"Acquisition.Timeout", &writable)) || !writable)
+        return true;
+
+    return checkSiCode(SI_SetFloat(handle, L"Acquisition.Timeout", static_cast<double>(timeoutMs)),
+                       "SI_SetFloat(Acquisition.Timeout)",
+                       error);
+}
+
+std::string lumoSdkRootPath()
+{
+#ifdef HF_LUMO_SDK_ROOT
+    return HF_LUMO_SDK_ROOT;
+#else
+    return "C:/Program Files (x86)/Specim/SDKs/SpecSensor/2020_519";
+#endif
+}
+
+bool setHandleStringFeature(const SI_H handle,
+                            const wchar_t *feature,
+                            const std::wstring &value,
+                            CameraError &error,
+                            const bool required)
+{
+    if (value.empty())
+        return true;
+
+    SI_BOOL implemented = SI_FALSE;
+    SI_BOOL writable = SI_FALSE;
+    if (!SI_SUCCEEDED(SI_IsImplemented(handle, feature, &implemented)) || !implemented
+        || !SI_SUCCEEDED(SI_IsWritable(handle, feature, &writable)) || !writable)
+    {
+        if (required)
+        {
+            error.code = CameraErrorCode::SdkError;
+            error.message = std::string("Feature not writable: ") + wideToUtf8(feature);
+            error.fatal = false;
+            return false;
+        }
+        return true;
+    }
+
+    std::vector<SI_WC> buffer(value.begin(), value.end());
+    buffer.push_back(L'\0');
+    const std::string operation = std::string("SI_SetString(") + wideToUtf8(feature) + ")";
+    return checkSiCode(SI_SetString(handle, feature, buffer.data()), operation.c_str(), error);
+}
+
+std::string getHandleStringFeature(const SI_H handle, const wchar_t *feature)
+{
+    int maxLength = 0;
+    if (!SI_SUCCEEDED(SI_GetStringMaxLength(handle, feature, &maxLength)) || maxLength <= 0)
+        return {};
+
+    std::vector<wchar_t> buffer(static_cast<std::size_t>(maxLength) + 1, L'\0');
+    if (!SI_SUCCEEDED(SI_GetString(handle,
+                                   feature,
+                                   buffer.data(),
+                                   static_cast<int>(buffer.size() * sizeof(wchar_t)))))
+        return {};
+
+    return wideToUtf8(buffer.data());
+}
+
+std::string enumerateHandleFeatureStrings(const SI_H handle, const wchar_t *feature)
+{
+    int count = 0;
+    if (!SI_SUCCEEDED(SI_GetEnumCount(handle, feature, &count)) || count <= 0)
+        return {};
+
+    std::string joined;
+    for (int index = 0; index < count; ++index)
+    {
+        wchar_t buffer[512] = {};
+        if (!SI_SUCCEEDED(SI_GetEnumStringByIndex(handle,
+                                                feature,
+                                                index,
+                                                buffer,
+                                                static_cast<int>(sizeof(buffer) / sizeof(buffer[0])))))
+            continue;
+
+        if (!joined.empty())
+            joined += ", ";
+        joined += wideToUtf8(buffer);
+    }
+    return joined;
+}
+
+bool applySwirNiSetupBeforeInitialize(const SI_H handle,
+                                      const CameraSettings &settings,
+                                      CameraError &error)
+{
+    const std::string icdPath = LumoCamera::resolveNiImaqCameraFilePath(settings.niImaqCameraFile);
+    if (!settings.niImaqCameraFile.empty() && !std::filesystem::exists(icdPath))
+    {
+        error.code = CameraErrorCode::SdkError;
+        error.message = "NiImaq.CameraFile not found: " + icdPath
+                        + " (install SpecSensor SDK or copy external/NI beside app.exe).";
+        error.fatal = false;
+        return false;
+    }
+
+    if (!setHandleStringFeature(handle,
+                                L"NiImaq.CameraFile",
+                                toWide(icdPath),
+                                error,
+                                true))
+        return false;
+
+    if (!setHandleStringFeature(handle,
+                                L"Grabber.Channel",
+                                toWide(settings.niGrabberChannel),
+                                error,
+                                true))
+        return false;
+
+    if (!setHandleStringFeature(handle,
+                                L"Camera.Channel",
+                                toWide(settings.niGrabberChannel),
+                                error,
+                                false))
+        return false;
+
+    if (!setHandleStringFeature(handle, L"Scb.Channel", toWide(settings.niScbSerialPort), error, false))
+        return false;
+
+    return true;
 }
 
 bool ensureGlobalSdkLoaded(const CameraSettings &prep, CameraError &error, bool &loadedHere)
 {
     loadedHere = false;
-    std::lock_guard<std::mutex> sdkLock(g_sdkMutex);
+    LumoGlobalLock lumoApi;
     if (g_sdkLoadCount > 0)
     {
         loadedHere = false;
@@ -94,7 +239,7 @@ void releaseGlobalSdkLoad(const bool loadedHere)
     if (!loadedHere)
         return;
 
-    std::lock_guard<std::mutex> sdkLock(g_sdkMutex);
+    LumoGlobalLock lumoApi;
     if (g_sdkLoadCount <= 0)
         return;
 
@@ -112,6 +257,34 @@ std::uint64_t steadyNowNs()
 }
 #endif
 } // namespace
+
+std::string LumoCamera::resolveNiImaqCameraFilePath(const std::string &fileName)
+{
+    if (fileName.empty())
+        return {};
+
+#ifdef HF_LUMO_SDK_ROOT
+    const std::string sdkRoot = HF_LUMO_SDK_ROOT;
+#else
+    const std::string sdkRoot = "C:/Program Files (x86)/Specim/SDKs/SpecSensor/2020_519";
+#endif
+
+    const std::filesystem::path direct(fileName);
+    if (direct.is_absolute() && std::filesystem::exists(direct))
+        return direct.string();
+
+    const std::filesystem::path sdkPath =
+        std::filesystem::path(sdkRoot) / "external" / "NI" / fileName;
+    if (std::filesystem::exists(sdkPath))
+        return sdkPath.string();
+
+    const std::filesystem::path localPath =
+        std::filesystem::path("external") / "NI" / fileName;
+    if (std::filesystem::exists(localPath))
+        return std::filesystem::absolute(localPath).string();
+
+    return sdkPath.string();
+}
 
 LumoCamera::LumoCamera(const CameraBackendId backendId,
                        std::string instanceLabel,
@@ -139,6 +312,10 @@ void LumoCamera::prepareConnection(const CameraSettings &settings)
     settings_.lumoLicensePath = settings.lumoLicensePath;
     settings_.lumoCalibrationPackPath = settings.lumoCalibrationPackPath;
     settings_.profileName = settings.profileName;
+    settings_.acquisitionTimeoutMs = settings.acquisitionTimeoutMs;
+    settings_.niGrabberChannel = settings.niGrabberChannel;
+    settings_.niImaqCameraFile = settings.niImaqCameraFile;
+    settings_.niScbSerialPort = settings.niScbSerialPort;
 }
 
 std::string LumoCamera::name() const
@@ -218,6 +395,7 @@ bool LumoCamera::enumerateDevices(const CameraSettings &prep,
                                   std::vector<LumoDeviceEntry> &devices,
                                   CameraError &error)
 {
+    LumoGlobalLock lumoApi;
     devices.clear();
 
     if (g_openSensorHandles.load() > 0)
@@ -301,7 +479,7 @@ void LumoCamera::rollbackOpenConnection()
 
 bool LumoCamera::ensureSdkLoaded(CameraError &error)
 {
-    std::lock_guard<std::mutex> sdkLock(g_sdkMutex);
+    LumoGlobalLock lumoApi;
     if (g_sdkLoadCount > 0)
     {
         ++g_sdkLoadCount;
@@ -319,7 +497,7 @@ bool LumoCamera::ensureSdkLoaded(CameraError &error)
 
 void LumoCamera::releaseSdkLoad()
 {
-    std::lock_guard<std::mutex> sdkLock(g_sdkMutex);
+    LumoGlobalLock lumoApi;
     if (g_sdkLoadCount <= 0)
         return;
 
@@ -421,6 +599,7 @@ void LumoCamera::unregisterDataCallback()
 
 bool LumoCamera::connect(CameraError &error)
 {
+    LumoGlobalLock lumoApi;
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (state_ == CameraState::Fault)
@@ -456,7 +635,15 @@ bool LumoCamera::connect(CameraError &error)
         releaseSdkLoad();
         if (error.message.find("Loading the module failed") != std::string::npos)
         {
-            error.message += " Ensure SpecSensor and Pleora/eBUS DLL folders are on PATH (SDK bin\\x64).";
+            if (sensorKind_ == LumoSensorKind::Swir3Ni)
+            {
+                error.message +=
+                    " Ensure SpecSensor and NI IMAQ/IMAQdx runtime folders are on PATH (SDK bin\\x64, NI Vision).";
+            }
+            else
+            {
+                error.message += " Ensure SpecSensor and Pleora/eBUS DLL folders are on PATH (SDK bin\\x64).";
+            }
         }
         return false;
     }
@@ -469,6 +656,7 @@ bool LumoCamera::connect(CameraError &error)
 
 bool LumoCamera::initialize(CameraError &error)
 {
+    LumoGlobalLock lumoApi;
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (state_ == CameraState::Streaming)
@@ -496,11 +684,16 @@ bool LumoCamera::initialize(CameraError &error)
                                              deviceName,
                                              static_cast<int>(sizeof(deviceName) / sizeof(deviceName[0]))));
     const std::string deviceNameUtf8 = hasDeviceName ? wideToUtf8(deviceName) : std::string();
-    const bool isFx10eProfile =
-        deviceNameUtf8.find("FX10e") != std::string::npos
-        || settings_.profileName.find("FX10e") != std::string::npos;
+    if (sensorKind_ == LumoSensorKind::Swir3Ni)
+    {
+        if (!applySwirNiSetupBeforeInitialize(handle, settings_, error))
+        {
+            rollbackOpenConnection();
+            return false;
+        }
+    }
 
-    if (isFx10eProfile && !settings_.lumoCalibrationPackPath.empty())
+    if (!settings_.lumoCalibrationPackPath.empty())
     {
         const std::wstring calibWide = toWide(settings_.lumoCalibrationPackPath);
         std::vector<SI_WC> calibValue(calibWide.begin(), calibWide.end());
@@ -514,6 +707,15 @@ bool LumoCamera::initialize(CameraError &error)
         }
     }
 
+    const std::uint32_t initTimeoutMs =
+        settings_.acquisitionTimeoutMs > 0 ? settings_.acquisitionTimeoutMs
+                                           : (sensorKind_ == LumoSensorKind::Swir3Ni ? 30000U : 5000U);
+    if (!setAcquisitionTimeoutMs(handle, initTimeoutMs, error))
+    {
+        rollbackOpenConnection();
+        return false;
+    }
+
     if (!checkSi(SI_Command(handle, L"Initialize"), "SI_Command(Initialize)", error))
     {
         if (error.message.find("Invalid camera channel") != std::string::npos)
@@ -521,6 +723,45 @@ bool LumoCamera::initialize(CameraError &error)
             error.message =
                 tag()
                 + ": Initialize failed (invalid grabber channel). Pick another SSP profile from the list.";
+        }
+        else if (error.message.find("BFF6902C") != std::string::npos
+                 || error.message.find("Unable to connect to the camera") != std::string::npos
+                 || error.message.find("IMAQdx") != std::string::npos)
+        {
+            error.message +=
+                " NI IMAQdx could not open the camera — fix in NI MAX first (Snap/Grab on the IMAQdx device): "
+                "GigE: camera and NIC on same subnet, use NI GigE Vision driver; "
+                "Camera Link: power (PoCL), Base/Medium cable orientation, frame grabber in MAX. "
+                "Close other apps using the camera, then retry.";
+        }
+        else if (sensorKind_ == LumoSensorKind::Swir3Ni
+                 && (error.message.find("Communication timeout") != std::string::npos
+                     || error.message.find("-1101") != std::string::npos))
+        {
+            const std::string grabberOptions =
+                enumerateHandleFeatureStrings(handle, L"Grabber.Channel");
+            const std::string icdPath = LumoCamera::resolveNiImaqCameraFilePath(settings_.niImaqCameraFile);
+            const std::string grabberReadback = getHandleStringFeature(handle, L"Grabber.Channel");
+            const std::string icdReadback = getHandleStringFeature(handle, L"NiImaq.CameraFile");
+            error.message +=
+                " Specim error -1101: camera serial/SCB or wrong NI channel/ICD. Close NI MAX Grab first. ";
+            error.message += "Grabber.Channel=" + (settings_.niGrabberChannel.empty()
+                                                       ? std::string("(not set)")
+                                                       : settings_.niGrabberChannel);
+            if (!grabberReadback.empty())
+                error.message += " (readback: " + grabberReadback + ")";
+            error.message += ", NiImaq.CameraFile=" + icdPath;
+            if (!icdReadback.empty() && icdReadback != icdPath)
+                error.message += " (readback: " + icdReadback + ")";
+            if (!settings_.niScbSerialPort.empty())
+                error.message += ", Scb=" + settings_.niScbSerialPort;
+            else
+                error.message += ", Scb=(not set)";
+            error.message += ". Match NI MAX: img0 + Fenix SWIR.icd.";
+            if (!grabberOptions.empty())
+                error.message += " SDK Grabber.Channel options: " + grabberOptions + ".";
+            if (!deviceNameUtf8.empty())
+                error.message += " SSP profile: " + deviceNameUtf8 + ".";
         }
         rollbackOpenConnection();
         return false;
@@ -639,6 +880,7 @@ bool LumoCamera::applySettings(const CameraSettings &settings,
                                CameraError &error,
                                CameraTimingApplyResult *timingOut)
 {
+    LumoGlobalLock lumoApi;
     std::lock_guard<std::mutex> lock(mutex_);
     if (state_ != CameraState::Initialized && state_ != CameraState::Configured
         && state_ != CameraState::SafeStopped && state_ != CameraState::Armed)
@@ -726,6 +968,7 @@ bool LumoCamera::applySettings(const CameraSettings &settings,
 
 bool LumoCamera::openShutter(CameraError &error)
 {
+    LumoGlobalLock lumoApi;
     std::lock_guard<std::mutex> lock(mutex_);
     if (state_ != CameraState::Initialized && state_ != CameraState::Configured
         && state_ != CameraState::Armed && state_ != CameraState::Streaming
@@ -747,6 +990,7 @@ bool LumoCamera::openShutter(CameraError &error)
 
 bool LumoCamera::closeShutter(CameraError &error)
 {
+    LumoGlobalLock lumoApi;
     std::lock_guard<std::mutex> lock(mutex_);
     if (state_ != CameraState::Initialized && state_ != CameraState::Configured
         && state_ != CameraState::Armed && state_ != CameraState::Streaming
@@ -768,6 +1012,7 @@ bool LumoCamera::closeShutter(CameraError &error)
 
 bool LumoCamera::shutterIsOpen(bool &isOpen, CameraError &error)
 {
+    LumoGlobalLock lumoApi;
     std::lock_guard<std::mutex> lock(mutex_);
     isOpen = false;
 
@@ -800,6 +1045,7 @@ bool LumoCamera::shutterIsOpen(bool &isOpen, CameraError &error)
 
 bool LumoCamera::arm(CameraError &error)
 {
+    LumoGlobalLock lumoApi;
     std::lock_guard<std::mutex> lock(mutex_);
     if (state_ != CameraState::Configured && state_ != CameraState::SafeStopped)
         return expectState(CameraState::Configured, error);
@@ -821,6 +1067,7 @@ bool LumoCamera::arm(CameraError &error)
 
 bool LumoCamera::start(CameraError &error)
 {
+    LumoGlobalLock lumoApi;
     std::lock_guard<std::mutex> lock(mutex_);
     if (state_ != CameraState::Armed)
         return expectState(CameraState::Armed, error);
@@ -838,6 +1085,7 @@ bool LumoCamera::start(CameraError &error)
 
 void LumoCamera::haltAcquisition()
 {
+    LumoGlobalLock lumoApi;
     SI_H handle = nullptr;
     bool shouldStopCommand = false;
 
@@ -870,6 +1118,7 @@ void LumoCamera::stop()
 
 void LumoCamera::disconnect()
 {
+    LumoGlobalLock lumoApi;
     haltAcquisition();
 
     void *handleToClose = nullptr;

@@ -48,10 +48,42 @@ endif()
 
 qt_add_executable(app
     src/main.cpp
-    src/MainWindow.cpp
-    src/core/CameraWorker.cpp
-    src/core/StageWorker.cpp
-    src/core/ICameraController.cpp
+    # frontend/widgets — QWidget subclasses only
+    src/frontend/widgets/MainWindow.cpp
+    src/frontend/widgets/DetectorCrosshairWidget.cpp
+    src/frontend/widgets/ProfilePlotWidget.cpp
+    src/frontend/widgets/StageAxisWidget.cpp
+    include/frontend/widgets/MainWindow.hpp
+    include/frontend/widgets/DetectorCrosshairWidget.hpp
+    include/frontend/widgets/ProfilePlotWidget.hpp
+    include/frontend/widgets/StageAxisWidget.hpp
+    include/frontend/widgets/LumoCameraUi.hpp
+    # frontend/processing — frame pipelines (worker threads, extractors)
+    src/frontend/processing/BilProfileExtractor.cpp
+    src/frontend/processing/DetectorFrameConverter.cpp
+    src/frontend/processing/ProfileProcessor.cpp
+    src/frontend/processing/RgbBandExtractor.cpp
+    src/frontend/processing/WaterfallProcessor.cpp
+    # frontend/utils — small UI helpers
+    src/frontend/utils/SerialPortEnumerator.cpp
+    # frontend/settings — persistence
+    src/frontend/settings/AppSettingsStore.cpp
+    include/frontend/settings/AppSettingsStore.hpp
+    # backend — device-agnostic workers, orchestration, I/O
+    src/backend/CameraWorker.cpp
+    src/backend/StageWorker.cpp
+    src/backend/HyperspectralRawDumper.cpp
+    src/backend/ICameraController.cpp
+    src/backend/CameraCoordinator.cpp
+    include/backend/CameraTypes.hpp
+    include/backend/ICameraController.hpp
+    include/backend/CameraWorker.hpp
+    include/backend/StageTypes.hpp
+    include/backend/IStageController.hpp
+    include/backend/StageWorker.hpp
+    include/backend/HyperspectralRawDumper.hpp
+    include/backend/CameraCoordinator.hpp
+    # adapters — vendor SDK / hardware
     src/adapters/zaber/ZaberStageController.cpp
     src/adapters/zaber/ZaberStageConfigurator.cpp
     src/adapters/zaber/ZaberStageHoming.cpp
@@ -59,22 +91,6 @@ qt_add_executable(app
     src/adapters/lumo/CalpackBandCatalog.cpp
     src/adapters/lumo/LumoCamera.cpp
     src/adapters/lumo/Swir3NiCamera.cpp
-    src/orchestrator/CameraCoordinator.cpp
-    src/ui/BilProfileExtractor.cpp
-    src/ui/DetectorCrosshairWidget.cpp
-    src/ui/ProfilePlotWidget.cpp
-    src/ui/ProfileProcessor.cpp
-    src/ui/RgbBandExtractor.cpp
-    src/ui/SerialPortEnumerator.cpp
-    src/ui/StageAxisWidget.cpp
-    src/ui/WaterfallProcessor.cpp
-    include/MainWindow.hpp
-    include/core/CameraTypes.hpp
-    include/core/ICameraController.hpp
-    include/core/CameraWorker.hpp
-    include/core/StageTypes.hpp
-    include/core/IStageController.hpp
-    include/core/StageWorker.hpp
     include/adapters/zaber/ZaberStageController.hpp
     include/adapters/zaber/ZaberStageConfigurator.hpp
     include/adapters/zaber/ZaberStageHoming.hpp
@@ -84,10 +100,6 @@ qt_add_executable(app
     include/adapters/lumo/LumoCamera.hpp
     include/adapters/lumo/Swir3NiCamera.hpp
     include/adapters/lumo/LumoDeviceTypes.hpp
-    include/orchestrator/CameraCoordinator.hpp
-    include/ui/DetectorCrosshairWidget.hpp
-    include/ui/ProfilePlotWidget.hpp
-    include/ui/StageAxisWidget.hpp
 )
 
 target_include_directories(app PRIVATE include)
@@ -107,6 +119,32 @@ if(HF_HAVE_LUMO_SDK)
         message(STATUS "Linked Lumo library: ${LUMO_SPEC_SENSOR_LIB}")
     else()
         message(FATAL_ERROR "SpecSensor.lib not found under ${LUMO_SDK_ROOT} (checked bin/x64, bin/Win32, lib)")
+    endif()
+
+    file(TO_CMAKE_PATH "${LUMO_SDK_ROOT}" HF_LUMO_SDK_ROOT_PATH)
+    target_compile_definitions(app PRIVATE "HF_LUMO_SDK_ROOT=\"${HF_LUMO_SDK_ROOT_PATH}\"")
+
+    set(_lumo_ni_icd_dir "${LUMO_SDK_ROOT}/external/NI")
+    if(EXISTS "${_lumo_ni_icd_dir}")
+        add_custom_command(
+            TARGET app POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_directory
+                    "${_lumo_ni_icd_dir}"
+                    "$<TARGET_FILE_DIR:app>/external/NI"
+            COMMENT "Copying Lumo NI ICD files to output directory")
+    endif()
+
+    set(_lumo_runtime_bin "${LUMO_SDK_ROOT}/bin/x64")
+    if(EXISTS "${_lumo_runtime_bin}")
+        file(GLOB _lumo_runtime_dlls "${_lumo_runtime_bin}/*.dll")
+        foreach(_lumo_dll IN LISTS _lumo_runtime_dlls)
+            add_custom_command(
+                TARGET app POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_lumo_dll}"
+                        "$<TARGET_FILE_DIR:app>"
+                COMMENT "Copying Lumo runtime DLL to output directory")
+        endforeach()
     endif()
 endif()
 

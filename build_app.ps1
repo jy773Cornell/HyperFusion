@@ -77,7 +77,19 @@ $BuildDir = Join-Path $AppDir "build"
 $qtBin = Join-Path $QtPrefixPath "bin"
 $lumoBin = Join-Path $LumoSdkRoot "bin\x64"
 $zmlBin = Join-Path $ZmlRoot "bin\Release"
-$env:PATH = "$qtBin;$lumoBin;$zmlBin;$env:PATH"
+$niVisionBins = @(
+    "C:\Program Files\National Instruments\Vision\Bin"
+    "C:\Program Files (x86)\National Instruments\Vision\Bin"
+    "C:\Program Files\National Instruments\Shared\LabVIEW Runtime\2024"
+)
+$niPathExtra = ""
+foreach ($niBin in $niVisionBins) {
+    if (Test-Path -LiteralPath $niBin) {
+        $niPathExtra = "$niBin;"
+        break
+    }
+}
+$env:PATH = "$qtBin;$lumoBin;$zmlBin;$niPathExtra$env:PATH"
 $env:LUMO_SDK_ROOT = $LumoSdkRoot
 $env:ZML_ROOT = $ZmlRoot
 
@@ -133,10 +145,26 @@ if (Test-Path -LiteralPath $windeployqt) {
     }
 }
 
-# Lumo runtime DLL next to app.exe when SDK is present.
-$lumoDll = Join-Path $LumoSdkRoot "bin\x64\SpecSensor.dll"
-if (Test-Path -LiteralPath $lumoDll) {
-    Copy-Item -LiteralPath $lumoDll -Destination $exeDir -Force
+# Lumo / Pleora runtime DLLs next to app.exe (SI_Open loads grab*.dll / Pv*.dll from here).
+$lumoBinDir = Join-Path $LumoSdkRoot "bin\x64"
+if (Test-Path -LiteralPath $lumoBinDir) {
+    $lumoDlls = Get-ChildItem -LiteralPath $lumoBinDir -Filter "*.dll" -File
+    foreach ($dll in $lumoDlls) {
+        Copy-Item -LiteralPath $dll.FullName -Destination $exeDir -Force
+    }
+    Write-Host "==> Copied $($lumoDlls.Count) Lumo SDK DLL(s) from $lumoBinDir to $exeDir"
+}
+
+$lumoNiIcd = Join-Path $LumoSdkRoot "external\NI"
+$destNiIcd = Join-Path $exeDir "external\NI"
+if (Test-Path -LiteralPath $lumoNiIcd) {
+    New-Item -ItemType Directory -Force -Path $destNiIcd | Out-Null
+    Copy-Item -LiteralPath (Join-Path $lumoNiIcd "*") -Destination $destNiIcd -Force
+    Write-Host "==> Copied Lumo NI ICD files to $destNiIcd"
+}
+
+if (-not (Test-Path -LiteralPath (Join-Path $exeDir "SpecSensor.dll")) -and (Test-Path -LiteralPath (Join-Path $LumoSdkRoot "bin\x64\SpecSensor.dll"))) {
+    Copy-Item -LiteralPath (Join-Path $LumoSdkRoot "bin\x64\SpecSensor.dll") -Destination $exeDir -Force
     Write-Host "==> Copied SpecSensor.dll to $exeDir"
 }
 
