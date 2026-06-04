@@ -1228,17 +1228,21 @@ QWidget *MainWindow::createLumoCameraGroup(QWidget *parent,
                 appendLog(QStringLiteral(
                     "SWIR3: FX10e is still connected — disconnect it before SWIR3 NI bring-up."));
             }
-            appendLog(QStringLiteral("SWIR3 NI: Grabber.Channel=%1, Scb=%2, ICD=%3 (exists=%4)")
+            appendLog(QStringLiteral("SWIR3 NI: Grabber=%1, Camera.Channel=%2, Scb=%3, ICD=%4 (exists=%5)")
                           .arg(QString::fromStdString(connectionSettings.niGrabberChannel),
+                               connectionSettings.niCameraSerialPort.empty()
+                                   ? QStringLiteral("(none)")
+                                   : QString::fromStdString(connectionSettings.niCameraSerialPort),
                                connectionSettings.niScbSerialPort.empty()
                                    ? QStringLiteral("(none)")
                                    : QString::fromStdString(connectionSettings.niScbSerialPort),
                                QString::fromStdString(icdPath),
                                icdExists ? QStringLiteral("yes") : QStringLiteral("NO — rebuild app")));
-            if (connectionSettings.niScbSerialPort.empty())
+            if (connectionSettings.niCameraSerialPort.empty())
             {
                 appendLog(QStringLiteral(
-                    "SWIR3: Scb serial not set — you are on an old build; rebuild so Scb=COM4 is applied."));
+                    "SWIR3: Camera.Channel unset. Working 1427 uses COM3 after autoconnect — "
+                    "if 1433 has no camera COM in Device Manager, fix USB/FTDI; do not use Zaber COM4."));
             }
         }
         const QString grabberNote = ui.sensorKind == LumoSensorKind::Swir3Ni
@@ -1322,10 +1326,13 @@ CameraSettings MainWindow::buildCameraSettings(const LumoCameraUi &ui) const
     if (ui.sensorKind == LumoSensorKind::Swir3Ni)
     {
         settings.niGrabberChannel = "img0";
-        // Must match NI MAX camera file (Fenix SWIR in MAX → Fenix SWIR.icd, not Specim_SWIR3.icd).
-        settings.niImaqCameraFile = "Fenix SWIR.icd";
-        // SCB serial to camera head (MAX: ASRL4 / COM4). Wrong port causes -1101; clear to skip.
-        settings.niScbSerialPort = "COM4";
+        // SSP "SWIR3 with NI" default (same as working 1427 bench). NI MAX may label the device "Fenix SWIR"
+        // but Lumo NiImaq.CameraFile should use the profile ICD, not the MAX display name.
+        settings.niImaqCameraFile = "Specim_SWIR3.icd";
+        // Working 1427 Lumo log: "Camera autoconnect found a camera in port: COM3". Set when that COM exists on this PC:
+        // settings.niCameraSerialPort = "COM3";
+        settings.niCameraSerialPort.clear();
+        settings.niScbSerialPort.clear();
     }
     settings.deviceIndex = ui.deviceCombo->currentData().toInt();
     if (ui.deviceCombo != nullptr)

@@ -57,19 +57,22 @@ Capture tab (Record / Preview)
 
 SWIR3 / NI — step-by-step debug (NI MAX works, HyperFusion -1101)
   1. Quit NI MAX completely (not only Stop Grab).
-  2. Rebuild and run: .\build_app.ps1 — on Connect, log must show Grabber.Channel=img0, NiImaq.CameraFile=Fenix SWIR.icd.
-  3. Disconnect FX10e in HyperFusion; connect only SWIR3, profile "SWIR3 with NI".
-  4. If -1101: in MainWindow.cpp set niScbSerialPort = "COM4" (match MAX ASRL/COM), rebuild, retry.
-  5. In Lumo Recorder (if installed): same SSP profile + img0 + Fenix ICD — if Recorder fails too, fix NI/SCB outside HyperFusion.
-  6. Paste full log from Connect through error (including "SDK Grabber.Channel options" if present).
+  2. Rebuild and run: .\build_app.ps1 — on Connect, log must show Grabber.Channel=img0, Scb=(none), Specim_SWIR3.icd exists=yes.
+  3. Disconnect FX10e and Zaber stage in HyperFusion; connect only SWIR3, profile "SWIR3 with NI".
+  4. Do not point Scb at COM4 if that port is the Zaber USB serial (wrong device → fast -1101).
+  5. In Lumo Recorder: SWIR3 with NI + img0 + Specim_SWIR3.icd (SSP default; same as working 1427 PC).
+  6. Paste full log from Connect through error (including readback / Grabber.Channel options if present).
+
+SWIR3 / NI — 1427 (works) vs 1433 (fails) Lumo log
+  Both: grab001+cam007+scb load; Grabber autoconnect "img0"; two "AIM SWIR: 0 bytes returned" warnings.
+  1427 then: "Camera autoconnect found a camera in port: COM3" → success (Camera.Channel = COM3 for cam007).
+  1433 then: OpenSerialPort -1101, no COM autoconnect → no Windows COM for the camera head on that desk (or wrong COM).
+  Fix on 1433: camera head USB + Specim/FTDI driver so a COM appears (often COM3); disconnect Zaber during connect test;
+  in Lumo set Camera.Channel to that COM (not img0, not Zaber COM4). HyperFusion: niCameraSerialPort in buildCameraSettings.
 
 SWIR3 / NI IMAQdx (Communication timeout / Specim -1101 on Initialize)
-  The PDF "Communication timeout -1101" is mainly about USB-serial (SCB) to the camera head, not the frame grabber.
-  NI MAX Grab working does not prove Lumo can open the same IMAQdx session — stop Grab and close MAX first.
-  HyperFusion sets before Initialize: Grabber.Channel=img0, NiImaq.CameraFile=Fenix SWIR.icd (match NI MAX model).
-  Scb serial is off by default; if -1101 persists, set niScbSerialPort to your COM port in buildCameraSettings. Match NI MAX exactly:
-  IMAQdx camera name (e.g. img0 under PCIe-1433), ICD file, and serial port (ASRL/COM in MAX tree).
-  Disconnect FX10e when testing SWIR alone. If -1101 persists, try empty Scb (disable COM4 default) or correct COM in MainWindow buildCameraSettings.
+  Lumo "OpenSerialPort() in CCamera007::Initialize -1101" = cam007 / Camera.Channel serial, not PCIe-1433.
+  HyperFusion: Grabber.Channel=img0, Specim_SWIR3.icd; set niCameraSerialPort only when Device Manager shows the camera COM (e.g. COM3 on 1427).
 
 FX10e / Lumo connect errors
   If the log shows SI_Open: Loading the module failed, Pleora grabber DLLs are missing

@@ -59,9 +59,11 @@ struct CameraSettings
     std::string lumoCalibrationPackPath;
     /// NI IMAQdx (SWIR3): Grabber.Channel resource name, e.g. img0 (see NI MAX under frame grabber).
     std::string niGrabberChannel;
-    /// NI IMAQdx (SWIR3): NiImaq.CameraFile ICD in SDK external/NI, e.g. Fenix SWIR.icd.
+    /// NI IMAQdx (SWIR3): NiImaq.CameraFile ICD in SDK external/NI, default Specim_SWIR3.icd per SSP.
     std::string niImaqCameraFile;
-    /// NI SWIR SCB serial port for camera head, e.g. COM4 (Specim -1101 if wrong/missing).
+    /// cam007 AIM SWIR serial (Camera.Channel). Lumo OpenSerialPort; empty = SDK default. Not img0 / not Zaber.
+    std::string niCameraSerialPort;
+    /// SCB module serial (Scb.Channel). Empty = SDK default. Not the Zaber COM port.
     std::string niScbSerialPort;
     /// False-color RGB band indices (from calibration pack wavelength table).
     int redBandIndex = 193;

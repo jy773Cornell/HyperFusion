@@ -201,9 +201,10 @@ bool applySwirNiSetupBeforeInitialize(const SI_H handle,
                                 true))
         return false;
 
+    // Camera.Channel is the cam007 serial port (OpenSerialPort / AIM SWIR), not the IMAQdx name — do not set to img0.
     if (!setHandleStringFeature(handle,
                                 L"Camera.Channel",
-                                toWide(settings.niGrabberChannel),
+                                toWide(settings.niCameraSerialPort),
                                 error,
                                 false))
         return false;
@@ -315,6 +316,7 @@ void LumoCamera::prepareConnection(const CameraSettings &settings)
     settings_.acquisitionTimeoutMs = settings.acquisitionTimeoutMs;
     settings_.niGrabberChannel = settings.niGrabberChannel;
     settings_.niImaqCameraFile = settings.niImaqCameraFile;
+    settings_.niCameraSerialPort = settings.niCameraSerialPort;
     settings_.niScbSerialPort = settings.niScbSerialPort;
 }
 
@@ -744,7 +746,7 @@ bool LumoCamera::initialize(CameraError &error)
             const std::string grabberReadback = getHandleStringFeature(handle, L"Grabber.Channel");
             const std::string icdReadback = getHandleStringFeature(handle, L"NiImaq.CameraFile");
             error.message +=
-                " Specim error -1101: camera serial/SCB or wrong NI channel/ICD. Close NI MAX Grab first. ";
+                " Specim -1101: cam007 OpenSerialPort (Camera.Channel / AIM SWIR), not PCIe-1433. Close NI MAX Grab first. ";
             error.message += "Grabber.Channel=" + (settings_.niGrabberChannel.empty()
                                                        ? std::string("(not set)")
                                                        : settings_.niGrabberChannel);
@@ -753,11 +755,15 @@ bool LumoCamera::initialize(CameraError &error)
             error.message += ", NiImaq.CameraFile=" + icdPath;
             if (!icdReadback.empty() && icdReadback != icdPath)
                 error.message += " (readback: " + icdReadback + ")";
+            if (!settings_.niCameraSerialPort.empty())
+                error.message += ", Camera.Channel=" + settings_.niCameraSerialPort;
+            else
+                error.message += ", Camera.Channel=(not set)";
             if (!settings_.niScbSerialPort.empty())
                 error.message += ", Scb=" + settings_.niScbSerialPort;
             else
                 error.message += ", Scb=(not set)";
-            error.message += ". Match NI MAX: img0 + Fenix SWIR.icd.";
+            error.message += ". Match working bench: img0 + Specim_SWIR3.icd (SWIR3 with NI SSP default).";
             if (!grabberOptions.empty())
                 error.message += " SDK Grabber.Channel options: " + grabberOptions + ".";
             if (!deviceNameUtf8.empty())
