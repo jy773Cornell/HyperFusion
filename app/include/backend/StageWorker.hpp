@@ -26,6 +26,10 @@ public:
 
     void requestConnect(const StageConnectSettings &settings);
     void requestDisconnect();
+    /// Home lockstep (if connected), then disconnect. Optional callback runs on the worker thread.
+    void requestDisconnectWithHoming(std::function<void()> onComplete = nullptr);
+    /// Home (if connected), disconnect, and stop the worker thread.
+    void shutdownSync();
     void requestStopMotion();
     void requestHome();
     void requestMoveRelativeMm(double distanceMm,

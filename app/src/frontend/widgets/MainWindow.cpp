@@ -13,13 +13,17 @@
 #include "frontend/widgets/ProfilePlotWidget.hpp"
 #include "frontend/processing/ProfileProcessor.hpp"
 #include "frontend/widgets/StageAxisWidget.hpp"
+#include "frontend/widgets/OperationWaitDialog.hpp"
 
 #include "frontend/settings/AppSettingsStore.hpp"
 #include "backend/HyperspectralRawDumper.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <functional>
+#include <thread>
 
 #include <QComboBox>
 #include <QMetaObject>
@@ -228,8 +232,7 @@ QString formatStageTopology(const StageTopology &topology)
                         .arg(topology.lockstepPrimaryAxis);
         }
         if (topology.axesHomed)
-            text += QStringLiteral("  Homing: lockstep localized (+%1 mm, home sensor)\n")
-                        .arg(zaber_stage::kHomingLocalizationPremoveMm, 0, 'f', 0);
+            text += QStringLiteral("  Homing: lockstep home sensor\n");
     }
 
     return text.trimmed();
@@ -834,24 +837,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 
 MainWindow::~MainWindow()
 {
-    stopCaptureRecorder();
-    savePersistedUiSettings();
-    if (waterfallProcessor1_)
-        waterfallProcessor1_->stop();
-    if (waterfallProcessor2_)
-        waterfallProcessor2_->stop();
-    if (profileProcessor1_)
-        profileProcessor1_->stop();
-    if (profileProcessor2_)
-        profileProcessor2_->stop();
-
-    if (stageWorker_)
-        stageWorker_->stop();
-
-    if (!coordinator_)
-        return;
-
-    coordinator_->shutdownSync();
+    if (!gracefulShutdownDone_)
+        performGracefulShutdown();
 }
 
 QWidget *MainWindow::createStreamTabsPanel()
@@ -1540,12 +1527,13 @@ void MainWindow::onStageStateChanged(const StageState state)
     if (state == StageState::Homing)
     {
         if (stageHomingKind_ == StageHomingKind::Localization)
-        {
-            appendLog(QString("Stage: initial homing (+%1 mm forward, then home sensor)…")
-                          .arg(zaber_stage::kHomingLocalizationPremoveMm, 0, 'f', 0));
-        }
+            appendLog(QStringLiteral("Stage: initial homing (home sensor)…"));
+        else if (stageHomingKind_ == StageHomingKind::BeforeDisconnect)
+            appendLog("Stage: homing before disconnect…");
         else if (stageHomingKind_ == StageHomingKind::Simple)
             appendLog("Stage: homing lockstep group (home sensor)…");
+        else if (stageHomingKind_ == StageHomingKind::AfterPreview)
+            appendLog(QStringLiteral("Capture preview: homing stage (home sensor)…"));
     }
     else if (state == StageState::Connected)
         appendLog("Stage: homed and ready");
@@ -1586,7 +1574,9 @@ void MainWindow::onStageTopologyChanged(const StageTopology &topology)
     if (topology.axesHomed && stageHomingKind_ != StageHomingKind::None)
     {
         if (stageHomingKind_ == StageHomingKind::Localization)
-            appendLog("Stage: initial localization homing complete");
+            appendLog(QStringLiteral("Stage: initial homing complete"));
+        else if (stageHomingKind_ == StageHomingKind::AfterPreview)
+            appendLog(QStringLiteral("Capture preview: homing complete"));
         else
             appendLog("Stage: homing complete");
 
@@ -1658,9 +1648,25 @@ QWidget *MainWindow::createStageSettingsTab()
     connect(stageDisconnectBtn_, &QPushButton::clicked, this, [this]() {
         if (stageWorker_ == nullptr)
             return;
+        if (!isStageSessionActive())
+            return;
 
-        appendLog("Stage: disconnect requested");
-        stageWorker_->requestDisconnect();
+        appendLog("Stage: homing before disconnect…");
+        OperationWaitDialog waitDialog(this);
+        waitDialog.setStatusText(tr("Homing stage before disconnect…"));
+        waitDialog.show();
+        QApplication::processEvents();
+
+        stageHomingKind_ = StageHomingKind::BeforeDisconnect;
+        std::atomic<bool> done{false};
+        stageWorker_->requestDisconnectWithHoming([&done]() { done.store(true, std::memory_order_release); });
+        while (!done.load(std::memory_order_acquire))
+        {
+            waitDialog.raise();
+            QApplication::processEvents(QEventLoop::AllEvents, 40);
+        }
+        stageHomingKind_ = StageHomingKind::None;
+        appendLog("Stage: disconnected");
     });
 
     auto *deviceBox = new QGroupBox("Device", page);
@@ -1747,7 +1753,7 @@ QWidget *MainWindow::createStageSettingsTab()
     connect(stageToStartBtn_, &QToolButton::clicked, this, [this]() {
         if (stageWorker_ == nullptr)
             return;
-        stageWorker_->requestMoveAbsoluteMm(zaber_stage::kTravelMinimumMm);
+        stageWorker_->requestMoveAbsoluteMm(zaber_stage::kTravelMinimumMm, zaber_stage::kMaxSpeedMmPerSec);
     });
     connect(stageBackBtn_, &QToolButton::pressed, this, [this]() {
         if (stageWorker_ == nullptr)
@@ -1778,15 +1784,17 @@ QWidget *MainWindow::createStageSettingsTab()
     connect(stageToEndBtn_, &QToolButton::clicked, this, [this]() {
         if (stageWorker_ == nullptr)
             return;
-        stageWorker_->requestMoveAbsoluteMm(zaber_stage::kTravelLengthMm);
+        stageWorker_->requestMoveAbsoluteMm(zaber_stage::kTravelLengthMm, zaber_stage::kMaxSpeedMmPerSec);
     });
     connect(stageAbsoluteMoveBtn_, &QToolButton::clicked, this, [this]() {
         if (stageWorker_ == nullptr || stageAbsolutePositionSpin_ == nullptr)
             return;
 
         const double targetMm = stageAbsolutePositionSpin_->value();
-        appendLog(QString("Stage: move to absolute position %1 mm").arg(targetMm, 0, 'f', 1));
-        stageWorker_->requestMoveAbsoluteMm(targetMm);
+        appendLog(QString("Stage: move to absolute position %1 mm @ %2 mm/s")
+                      .arg(targetMm, 0, 'f', 1)
+                      .arg(zaber_stage::kMaxSpeedMmPerSec, 0, 'f', 0));
+        stageWorker_->requestMoveAbsoluteMm(targetMm, zaber_stage::kMaxSpeedMmPerSec);
     });
 
     layout->addWidget(connBox);
@@ -2043,8 +2051,11 @@ QWidget *MainWindow::createCaptureSettingsTab()
 
             const QString label = QStringLiteral("%1 position").arg(profileTabNameForUi(cameraUi));
             const double targetMm = captureCameraPositionSpins_[cameraIndex]->value();
-            appendLog(QString("Capture: go to %1 (%2 mm)").arg(label).arg(targetMm, 0, 'f', 2));
-            stageWorker_->requestMoveAbsoluteMm(targetMm);
+            appendLog(QString("Capture: go to %1 (%2 mm @ %3 mm/s)")
+                              .arg(label)
+                              .arg(targetMm, 0, 'f', 2)
+                              .arg(zaber_stage::kMaxSpeedMmPerSec, 0, 'f', 0));
+            stageWorker_->requestMoveAbsoluteMm(targetMm, zaber_stage::kMaxSpeedMmPerSec);
         });
     }
 
@@ -2167,51 +2178,36 @@ void MainWindow::updateCaptureRecorderControls()
 {
     const bool stageConnected =
         stageWorker_ != nullptr && stageWorker_->currentState() == StageState::Connected;
+    const bool anyCameraConnected = anyCameraSessionActive();
     const bool scanActive = captureRecorderMode_ != CaptureRecorderMode::Idle;
-
-    const QString saveFolder =
-        captureSaveFolderEdit_ != nullptr ? captureSaveFolderEdit_->text().trimmed() : QString();
-    const QString dataset =
-        captureDatasetEdit_ != nullptr ? captureDatasetEdit_->text().trimmed() : QString();
-
-    QString recordBlockReason;
-    if (dataset.isEmpty() || saveFolder.isEmpty())
-    {
-        QStringList missing;
-        if (dataset.isEmpty())
-            missing << tr("Dataset");
-        if (saveFolder.isEmpty())
-            missing << tr("Save folder");
-        recordBlockReason = tr("Enter %1 in Metadata.").arg(missing.join(tr(" and ")));
-    }
-    else
-    {
-        QString streamingError;
-        if (!selectedCaptureCameraStreaming(streamingError))
-            recordBlockReason = streamingError;
-    }
-
-    const bool recordReady = recordBlockReason.isEmpty();
 
     if (captureRecorderPreviewBtn_ != nullptr)
     {
         captureRecorderPreviewBtn_->setEnabled(stageConnected && !scanActive);
         captureRecorderPreviewBtn_->setToolTip(
-            stageConnected ? tr("Run a scan at the configured speed (no files saved)")
-                           : tr("Connect the stage on the Stage tab to enable preview"));
+            stageConnected
+                ? tr("Move to closest camera position at max speed, then scan (no files saved)")
+                : tr("Connect the stage on the Stage tab to enable preview"));
     }
 
     if (captureRecorderRecordBtn_ != nullptr)
     {
-        captureRecorderRecordBtn_->setEnabled(recordReady && !scanActive);
-        if (!recordReady)
-            captureRecorderRecordBtn_->setToolTip(recordBlockReason);
+        captureRecorderRecordBtn_->setEnabled(anyCameraConnected && !scanActive);
+        if (!anyCameraConnected)
+        {
+            captureRecorderRecordBtn_->setToolTip(
+                tr("Connect at least one camera on the Camera tab to enable recording"));
+        }
         else if (stageConnected)
+        {
             captureRecorderRecordBtn_->setToolTip(
                 tr("Move to closest camera position, scan, and save .raw frames locally"));
+        }
         else
+        {
             captureRecorderRecordBtn_->setToolTip(
                 tr("Save streaming .raw frames locally (stage not connected — press Stop when done)"));
+        }
     }
 
     if (captureRecorderStopBtn_ != nullptr)
@@ -2270,68 +2266,33 @@ void MainWindow::startCapturePreview()
         return;
 
     double distanceMm = 0.0;
-    double speedMmPerSec = 0.0;
+    double scanSpeedMmPerSec = 0.0;
     QString errorMessage;
-    if (!buildCaptureScanPlan(distanceMm, speedMmPerSec, errorMessage))
+    if (!buildCaptureScanPlan(distanceMm, scanSpeedMmPerSec, errorMessage))
     {
         appendLog(QStringLiteral("Capture preview: %1").arg(errorMessage));
         return;
     }
 
-    const auto cameraSelected = [this]() {
-        return (captureCamera1Check_ != nullptr && captureCamera1Check_->isVisible()
-                && captureCamera1Check_->isChecked())
-               || (captureCamera2Check_ != nullptr && captureCamera2Check_->isVisible()
-                   && captureCamera2Check_->isChecked());
-    };
-    if (!cameraSelected())
-        appendLog(QStringLiteral("Capture preview: no camera selected — stage scan will still run."));
+    bool hasClosest = false;
+    const double closestMm = closestCaptureCameraPositionMm(&hasClosest);
+    if (!hasClosest)
+    {
+        appendLog(QStringLiteral("Capture preview: no camera position available for stage move."));
+        return;
+    }
 
     captureRecorderMode_ = CaptureRecorderMode::Preview;
     updateCaptureRecorderControls();
 
-    appendLog(QStringLiteral("Capture preview: starting scan (%1 mm @ %2 mm/s, no save)…")
+    appendLog(QStringLiteral("Capture preview: moving to closest camera position "
+                              "%1 mm @ %2 mm/s, then scanning %3 mm @ %4 mm/s (no save)…")
+                  .arg(closestMm, 0, 'f', 2)
+                  .arg(zaber_stage::kMaxSpeedMmPerSec, 0, 'f', 0)
                   .arg(distanceMm, 0, 'f', 2)
-                  .arg(speedMmPerSec, 0, 'f', 1));
+                  .arg(scanSpeedMmPerSec, 0, 'f', 1));
 
-    stageWorker_->requestPrimaryPosition([this, distanceMm, speedMmPerSec](const double positionMm,
-                                                                           const bool ok) {
-        QMetaObject::invokeMethod(
-            this,
-            [this, positionMm, ok, distanceMm, speedMmPerSec]() {
-                if (captureRecorderMode_ != CaptureRecorderMode::Preview)
-                    return;
-
-                if (!ok)
-                {
-                    appendLog(QStringLiteral("Capture preview: could not read stage position."));
-                    captureRecorderMode_ = CaptureRecorderMode::Idle;
-                    updateCaptureRecorderControls();
-                    return;
-                }
-
-                const double endMm = positionMm + distanceMm;
-                if (endMm > zaber_stage::kTravelLengthMm)
-                {
-                    appendLog(QStringLiteral(
-                        "Capture preview: scan would pass %1 mm (current %2 mm + %3 mm).")
-                                  .arg(zaber_stage::kTravelLengthMm, 0, 'f', 0)
-                                  .arg(positionMm, 0, 'f', 2)
-                                  .arg(distanceMm, 0, 'f', 2));
-                    captureRecorderMode_ = CaptureRecorderMode::Idle;
-                    updateCaptureRecorderControls();
-                    return;
-                }
-
-                stageWorker_->requestMoveRelativeMm(distanceMm, speedMmPerSec);
-
-                const int durationMs =
-                    static_cast<int>(std::ceil((distanceMm / speedMmPerSec) * 1000.0)) + 750;
-                if (captureScanTimer_ != nullptr)
-                    captureScanTimer_->start(std::max(durationMs, 500));
-            },
-            Qt::QueuedConnection);
-    });
+    startCaptureStagePreposition(closestMm, distanceMm, scanSpeedMmPerSec);
 }
 
 bool MainWindow::validateCaptureRecordMetadata(QString &errorMessage) const
@@ -2415,6 +2376,39 @@ double MainWindow::closestSelectedCaptureCameraPositionMm(bool *hasSelection) co
     return closestMm;
 }
 
+double MainWindow::closestCaptureCameraPositionMm(bool *hasPosition) const
+{
+    bool hasSelected = false;
+    const double selectedClosest = closestSelectedCaptureCameraPositionMm(&hasSelected);
+    if (hasSelected)
+    {
+        if (hasPosition != nullptr)
+            *hasPosition = true;
+        return selectedClosest;
+    }
+
+    const auto isConnected = [](const LumoCameraUi &ui) {
+        return ui.state != CameraState::Disconnected && ui.state != CameraState::Fault;
+    };
+
+    double closestMm = zaber_stage::kTravelLengthMm;
+    bool found = false;
+    const LumoCameraUi *cameras[] = {&camera1Ui_, &camera2Ui_};
+    for (std::size_t index = 0; index < 2; ++index)
+    {
+        if (!isConnected(*cameras[index]) || captureCameraPositionSpins_[index] == nullptr)
+            continue;
+
+        found = true;
+        closestMm = std::min(closestMm, captureCameraPositionSpins_[index]->value());
+    }
+
+    if (hasPosition != nullptr)
+        *hasPosition = found;
+
+    return closestMm;
+}
+
 bool MainWindow::beginCaptureRawDumpSession(QString &errorMessage)
 {
     QString metadataError;
@@ -2488,19 +2482,46 @@ void MainWindow::appendCaptureRecordFrame(const FramePacket &frame)
     }
 }
 
+void MainWindow::startCaptureStagePreposition(const double closestMm,
+                                              const double distanceMm,
+                                              const double scanSpeedMmPerSec)
+{
+    stageWorker_->requestMoveAbsoluteMm(
+        closestMm,
+        zaber_stage::kMaxSpeedMmPerSec,
+        true,
+        [this, distanceMm, scanSpeedMmPerSec](const bool success) {
+            QMetaObject::invokeMethod(
+                this,
+                [this, success, distanceMm, scanSpeedMmPerSec]() {
+                    onCaptureStagePrepositionComplete(success, distanceMm, scanSpeedMmPerSec);
+                },
+                Qt::QueuedConnection);
+        });
+}
+
 void MainWindow::startCaptureStageScan(const double distanceMm, const double speedMmPerSec)
 {
-    stageWorker_->requestPrimaryPosition([this, distanceMm, speedMmPerSec](const double positionMm,
-                                                                           const bool ok) {
+    const CaptureRecorderMode mode = captureRecorderMode_;
+    if (mode != CaptureRecorderMode::Record && mode != CaptureRecorderMode::Preview)
+        return;
+
+    const QString prefix =
+        mode == CaptureRecorderMode::Record ? QStringLiteral("Capture record")
+                                            : QStringLiteral("Capture preview");
+
+    stageWorker_->requestPrimaryPosition([this, distanceMm, speedMmPerSec, prefix](
+                                             const double positionMm, const bool ok) {
         QMetaObject::invokeMethod(
             this,
-            [this, positionMm, ok, distanceMm, speedMmPerSec]() {
-                if (captureRecorderMode_ != CaptureRecorderMode::Record)
+            [this, positionMm, ok, distanceMm, speedMmPerSec, prefix]() {
+                if (captureRecorderMode_ != CaptureRecorderMode::Record
+                    && captureRecorderMode_ != CaptureRecorderMode::Preview)
                     return;
 
                 if (!ok)
                 {
-                    appendLog(QStringLiteral("Capture record: could not read stage position."));
+                    appendLog(QStringLiteral("%1: could not read stage position.").arg(prefix));
                     stopCaptureRecorder();
                     return;
                 }
@@ -2508,8 +2529,8 @@ void MainWindow::startCaptureStageScan(const double distanceMm, const double spe
                 const double endMm = positionMm + distanceMm;
                 if (endMm > zaber_stage::kTravelLengthMm)
                 {
-                    appendLog(QStringLiteral(
-                        "Capture record: scan would pass %1 mm (current %2 mm + %3 mm).")
+                    appendLog(QStringLiteral("%1: scan would pass %2 mm (current %3 mm + %4 mm).")
+                                  .arg(prefix)
                                   .arg(zaber_stage::kTravelLengthMm, 0, 'f', 0)
                                   .arg(positionMm, 0, 'f', 2)
                                   .arg(distanceMm, 0, 'f', 2));
@@ -2517,7 +2538,8 @@ void MainWindow::startCaptureStageScan(const double distanceMm, const double spe
                     return;
                 }
 
-                appendLog(QStringLiteral("Capture record: scanning %1 mm @ %2 mm/s…")
+                appendLog(QStringLiteral("%1: scanning %2 mm @ %3 mm/s…")
+                              .arg(prefix)
                               .arg(distanceMm, 0, 'f', 2)
                               .arg(speedMmPerSec, 0, 'f', 1));
 
@@ -2532,16 +2554,21 @@ void MainWindow::startCaptureStageScan(const double distanceMm, const double spe
     });
 }
 
-void MainWindow::onRecordStagePrepositionComplete(const bool success,
-                                                const double distanceMm,
-                                                const double speedMmPerSec)
+void MainWindow::onCaptureStagePrepositionComplete(const bool success,
+                                                   const double distanceMm,
+                                                   const double speedMmPerSec)
 {
-    if (captureRecorderMode_ != CaptureRecorderMode::Record)
+    if (captureRecorderMode_ != CaptureRecorderMode::Record
+        && captureRecorderMode_ != CaptureRecorderMode::Preview)
         return;
+
+    const QString prefix = captureRecorderMode_ == CaptureRecorderMode::Record
+                               ? QStringLiteral("Capture record")
+                               : QStringLiteral("Capture preview");
 
     if (!success)
     {
-        appendLog(QStringLiteral("Capture record: failed to move to closest camera position."));
+        appendLog(QStringLiteral("%1: failed to move to closest camera position.").arg(prefix));
         stopCaptureRecorder();
         return;
     }
@@ -2576,8 +2603,8 @@ void MainWindow::startCaptureRecord()
     }
 
     double distanceMm = 0.0;
-    double speedMmPerSec = 0.0;
-    if (!buildCaptureScanPlan(distanceMm, speedMmPerSec, errorMessage))
+    double scanSpeedMmPerSec = 0.0;
+    if (!buildCaptureScanPlan(distanceMm, scanSpeedMmPerSec, errorMessage))
     {
         appendLog(QStringLiteral("Capture record: %1").arg(errorMessage));
         stopCaptureRecorder();
@@ -2585,7 +2612,7 @@ void MainWindow::startCaptureRecord()
     }
 
     bool hasClosest = false;
-    const double closestMm = closestSelectedCaptureCameraPositionMm(&hasClosest);
+    const double closestMm = closestCaptureCameraPositionMm(&hasClosest);
     if (!hasClosest)
     {
         appendLog(QStringLiteral("Capture record: no camera position available for stage move."));
@@ -2599,20 +2626,9 @@ void MainWindow::startCaptureRecord()
                   .arg(closestMm, 0, 'f', 2)
                   .arg(zaber_stage::kMaxSpeedMmPerSec, 0, 'f', 0)
                   .arg(distanceMm, 0, 'f', 2)
-                  .arg(speedMmPerSec, 0, 'f', 1));
+                  .arg(scanSpeedMmPerSec, 0, 'f', 1));
 
-    stageWorker_->requestMoveAbsoluteMm(
-        closestMm,
-        zaber_stage::kMaxSpeedMmPerSec,
-        true,
-        [this, distanceMm, speedMmPerSec](const bool success) {
-            QMetaObject::invokeMethod(
-                this,
-                [this, success, distanceMm, speedMmPerSec]() {
-                    onRecordStagePrepositionComplete(success, distanceMm, speedMmPerSec);
-                },
-                Qt::QueuedConnection);
-        });
+    startCaptureStagePreposition(closestMm, distanceMm, scanSpeedMmPerSec);
 }
 
 void MainWindow::stopCaptureRecorder()
@@ -2636,7 +2652,19 @@ void MainWindow::stopCaptureRecorder()
         appendLog(QStringLiteral("Capture record: stopped."));
     }
     else
+    {
         appendLog(QStringLiteral("Capture preview: stopped."));
+        homeStageAfterCapturePreview();
+    }
+}
+
+void MainWindow::homeStageAfterCapturePreview()
+{
+    if (stageWorker_ == nullptr || stageWorker_->currentState() != StageState::Connected)
+        return;
+
+    stageHomingKind_ = StageHomingKind::AfterPreview;
+    stageWorker_->requestHome();
 }
 
 void MainWindow::finishCaptureScan()
@@ -2657,7 +2685,10 @@ void MainWindow::finishCaptureScan()
         appendLog(QStringLiteral("Capture record: scan motion finished."));
     }
     else
+    {
         appendLog(QStringLiteral("Capture preview: scan finished."));
+        homeStageAfterCapturePreview();
+    }
 }
 
 void MainWindow::updateCaptureCamerasList()
@@ -2723,9 +2754,92 @@ void MainWindow::updateCaptureCameraPositionRows()
     }
 }
 
+bool MainWindow::isCameraSessionActive(const CameraState state)
+{
+    return state != CameraState::Disconnected && state != CameraState::Fault;
+}
+
+bool MainWindow::anyCameraSessionActive() const
+{
+    return isCameraSessionActive(camera1Ui_.state) || isCameraSessionActive(camera2Ui_.state);
+}
+
+bool MainWindow::isStageSessionActive() const
+{
+    if (stageWorker_ == nullptr)
+        return false;
+
+    const StageState state = stageWorker_->currentState();
+    return state != StageState::Disconnected && state != StageState::Fault;
+}
+
+void MainWindow::waitWithBusyDialog(OperationWaitDialog &dialog, const std::function<void()> &work)
+{
+    std::atomic<bool> done{false};
+    std::thread worker([&done, &work]() {
+        work();
+        done.store(true, std::memory_order_release);
+    });
+
+    while (!done.load(std::memory_order_acquire))
+    {
+        dialog.raise();
+        QApplication::processEvents(QEventLoop::AllEvents, 40);
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    if (worker.joinable())
+        worker.join();
+}
+
+void MainWindow::performGracefulShutdown()
+{
+    if (gracefulShutdownDone_)
+        return;
+
+    OperationWaitDialog waitDialog(this);
+    waitDialog.show();
+    QApplication::processEvents();
+
+    stopCaptureRecorder();
+
+    if (coordinator_ != nullptr && anyCameraSessionActive())
+    {
+        waitDialog.setStatusText(tr("Disconnecting cameras…"));
+        QApplication::processEvents();
+        waitWithBusyDialog(waitDialog, [this]() { coordinator_->shutdownSync(); });
+    }
+
+    if (stageWorker_ != nullptr)
+    {
+        if (isStageSessionActive())
+        {
+            waitDialog.setStatusText(tr("Homing stage and disconnecting…"));
+            QApplication::processEvents();
+            stageHomingKind_ = StageHomingKind::BeforeDisconnect;
+        }
+        stageWorker_->shutdownSync();
+        stageHomingKind_ = StageHomingKind::None;
+    }
+
+    if (waterfallProcessor1_)
+        waterfallProcessor1_->stop();
+    if (waterfallProcessor2_)
+        waterfallProcessor2_->stop();
+    if (profileProcessor1_)
+        profileProcessor1_->stop();
+    if (profileProcessor2_)
+        profileProcessor2_->stop();
+
+    savePersistedUiSettings();
+    gracefulShutdownDone_ = true;
+}
+
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    savePersistedUiSettings();
+    event->ignore();
+    performGracefulShutdown();
+    event->accept();
     QMainWindow::closeEvent(event);
 }
 

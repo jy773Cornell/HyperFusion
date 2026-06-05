@@ -5,6 +5,7 @@
 #include <QMainWindow>
 
 #include <cstddef>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -20,6 +21,7 @@ class LumoCamera;
 class Swir3NiCamera;
 
 class HyperspectralRawDumper;
+class OperationWaitDialog;
 class StageWorker;
 class QCheckBox;
 class QComboBox;
@@ -91,6 +93,11 @@ public:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
+    void performGracefulShutdown();
+    static void waitWithBusyDialog(OperationWaitDialog &dialog, const std::function<void()> &work);
+    static bool isCameraSessionActive(CameraState state);
+    bool anyCameraSessionActive() const;
+    bool isStageSessionActive() const;
 
 private:
     QWidget *createStreamTabsPanel();
@@ -144,15 +151,18 @@ private:
     bool selectedCaptureCameraIndices(std::vector<std::size_t> &cameraIndices) const;
     bool selectedCaptureCameraStreaming(QString &errorMessage) const;
     double closestSelectedCaptureCameraPositionMm(bool *hasSelection) const;
+    double closestCaptureCameraPositionMm(bool *hasPosition) const;
     bool beginCaptureRawDumpSession(QString &errorMessage);
     void endCaptureRawDumpSession();
     void appendCaptureRecordFrame(const FramePacket &frame);
+    void startCaptureStagePreposition(double closestMm, double distanceMm, double scanSpeedMmPerSec);
     void startCaptureStageScan(double distanceMm, double speedMmPerSec);
-    void onRecordStagePrepositionComplete(bool success, double distanceMm, double speedMmPerSec);
+    void onCaptureStagePrepositionComplete(bool success, double distanceMm, double speedMmPerSec);
     void startCapturePreview();
     void startCaptureRecord();
     void stopCaptureRecorder();
     void finishCaptureScan();
+    void homeStageAfterCapturePreview();
     void loadPersistedUiSettings();
     void savePersistedUiSettings();
     void schedulePersistedUiSettingsSave();
@@ -214,8 +224,10 @@ private:
     enum class StageHomingKind
     {
         None,
+        BeforeDisconnect,
         Localization,
         Simple,
+        AfterPreview,
     };
     StageHomingKind stageHomingKind_ = StageHomingKind::None;
     std::unique_ptr<StageWorker> stageWorker_;
@@ -257,6 +269,7 @@ private:
 
     LumoCameraUi camera1Ui_;
     LumoCameraUi camera2Ui_;
+    bool gracefulShutdownDone_ = false;
 
 private slots:
     void onCameraSettingsTabChanged(int index);

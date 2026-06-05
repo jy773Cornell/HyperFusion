@@ -1,6 +1,8 @@
 // Detector crosshair widget implementation.
 #include "frontend/widgets/DetectorCrosshairWidget.hpp"
 
+#include <QElapsedTimer>
+#include <QFont>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPaintEvent>
@@ -13,6 +15,8 @@ namespace ui
 namespace
 {
 constexpr int kHitTolerancePx = 6;
+constexpr int kFpsWindowMs = 500;
+constexpr int kFpsOverlayMarginPx = 6;
 } // namespace
 
 DetectorCrosshairWidget::DetectorCrosshairWidget(QWidget *parent) : QWidget(parent)
@@ -49,6 +53,8 @@ void DetectorCrosshairWidget::setDetectorImage(const QPixmap &pixmap)
     pixmap_ = pixmap;
     hasImage_ = !pixmap_.isNull();
     disconnectedMessage_.clear();
+    if (hasImage_)
+        recordIncomingFrame();
     update();
 }
 
@@ -59,7 +65,43 @@ void DetectorCrosshairWidget::clearDisplay(const QString &message)
     disconnectedMessage_ = message;
     frameWidth_ = 0;
     frameHeight_ = 0;
+    fpsFrameCount_ = 0;
+    displayedFps_ = 0.0;
+    fpsWindowTimer_.invalidate();
     update();
+}
+
+void DetectorCrosshairWidget::recordIncomingFrame()
+{
+    if (!fpsWindowTimer_.isValid())
+        fpsWindowTimer_.start();
+
+    ++fpsFrameCount_;
+
+    const qint64 elapsedMs = fpsWindowTimer_.elapsed();
+    if (elapsedMs >= kFpsWindowMs)
+    {
+        displayedFps_ = static_cast<double>(fpsFrameCount_) * 1000.0 / static_cast<double>(elapsedMs);
+        fpsFrameCount_ = 0;
+        fpsWindowTimer_.restart();
+    }
+}
+
+void DetectorCrosshairWidget::drawFpsOverlay(QPainter &painter) const
+{
+    if (displayedFps_ <= 0.0)
+        return;
+
+    const QString fpsText = QStringLiteral("%1 fps").arg(displayedFps_, 0, 'f', 1);
+
+    QFont font = painter.font();
+    font.setBold(true);
+    font.setPointSize(10);
+    painter.setFont(font);
+
+    const QRect widgetRect = rect().adjusted(kFpsOverlayMarginPx, kFpsOverlayMarginPx, 0, 0);
+    painter.setPen(QColor(0xcc, 0xcc, 0xcc));
+    painter.drawText(widgetRect, Qt::AlignTop | Qt::AlignLeft, fpsText);
 }
 
 QRect DetectorCrosshairWidget::imageDrawRect() const
@@ -122,6 +164,7 @@ void DetectorCrosshairWidget::paintEvent(QPaintEvent *event)
 
     const QRect drawRect = imageDrawRect();
     painter.drawPixmap(drawRect, pixmap_);
+    drawFpsOverlay(painter);
 
     if (frameWidth_ <= 0 || frameHeight_ <= 0)
         return;

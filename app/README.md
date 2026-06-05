@@ -50,10 +50,14 @@ BUILD
   Debug, no launch:
     .\build_app.ps1 -Config Debug -NoRun
 
-Capture tab (Record / Preview)
-  Record: fill Dataset + Save folder (Metadata), select a checked camera that is streaming
-  (preview on Camera tab). Stage optional for record — without stage, press Stop when done.
-  Preview: requires stage Connected on the Stage tab.
+Capture tab (Record / Preview / Stop)
+  Record: enabled when at least one camera is connected (metadata validated when you press Record).
+  Preview: enabled when the linear stage is Connected on the Stage tab.
+  Stop: enabled while a preview or record scan is running.
+  Stage motion speeds: all positioning moves use 100 mm/s (max). Capture scanning uses the
+  user-set Scanning speed. Homing uses ZML lockstep.home() (SDK/firmware, not app-set).
+  Preview/Record preposition and per-camera Go buttons use 100 mm/s.
+  Preview: after scan finishes or Stop, stage homes to the home sensor (SDK homing).
 
 SWIR3 / NI — step-by-step debug (NI MAX works, HyperFusion -1101)
   1. Quit NI MAX completely (not only Stop Grab).

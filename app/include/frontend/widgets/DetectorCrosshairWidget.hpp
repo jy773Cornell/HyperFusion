@@ -1,9 +1,12 @@
 // Detector preview with draggable vertical (spatial) and horizontal (band) profile cursors.
 #pragma once
 
+#include <QElapsedTimer>
 #include <QPixmap>
 #include <QString>
 #include <QWidget>
+
+class QPainter;
 
 namespace ui
 {
@@ -43,6 +46,8 @@ private:
     bool mapWidgetToImage(const QPoint &widgetPoint, int &outX, int &outY) const;
     void clampIndices();
     void emitLinesIfChanged();
+    void recordIncomingFrame();
+    void drawFpsOverlay(QPainter &painter) const;
 
     QPixmap pixmap_;
     QString disconnectedMessage_;
@@ -53,5 +58,9 @@ private:
     int bandIndex_ = 0;
 
     DragMode dragMode_ = DragMode::None;
+
+    int fpsFrameCount_ = 0;
+    double displayedFps_ = 0.0;
+    QElapsedTimer fpsWindowTimer_;
 };
 } // namespace ui

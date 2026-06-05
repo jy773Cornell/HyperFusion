@@ -13,9 +13,9 @@ constexpr int kAxisCount = 2;
 
 constexpr double kTravelLengthMm = 2000.0;
 constexpr double kTravelMinimumMm = 0.0;
-constexpr double kHomingLocalizationPremoveMm = 20.0;
+// All HyperFusion commanded motion uses this speed except Capture scanning (user-set)
+// and homing (ZML lockstep.home() — SDK/firmware approach settings).
 constexpr double kMaxSpeedMmPerSec = 100.0;
-constexpr double kHomingSpeedMmPerSec = 50.0;
 constexpr double kHomeOffsetMm = 0.0;
 constexpr double kLockstepSecondaryOffsetMm = 0.0;
 

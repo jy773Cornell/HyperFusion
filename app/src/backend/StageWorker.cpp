@@ -1,5 +1,7 @@
 #include "backend/StageWorker.hpp"
 
+#include <future>
+
 StageWorker::StageWorker(std::shared_ptr<IStageController> controller)
     : controller_(std::move(controller))
 {
@@ -20,17 +22,7 @@ void StageWorker::start()
 
 void StageWorker::stop()
 {
-    if (!running_.exchange(false))
-        return;
-
-    enqueueCommand([this]() {
-        if (controller_)
-            controller_->disconnect();
-    });
-    commandCv_.notify_all();
-
-    if (controlThread_.joinable())
-        controlThread_.join();
+    shutdownSync();
 }
 
 void StageWorker::requestConnect(const StageConnectSettings &settings)
@@ -67,11 +59,60 @@ void StageWorker::requestConnect(const StageConnectSettings &settings)
 
 void StageWorker::requestDisconnect()
 {
-    enqueueCommand([this]() {
-        controller_->disconnect();
+    requestDisconnectWithHoming(nullptr);
+}
+
+void StageWorker::requestDisconnectWithHoming(std::function<void()> onComplete)
+{
+    enqueueCommand([this, onComplete = std::move(onComplete)]() {
+        if (controller_ && controller_->state() == StageState::Connected)
+        {
+            notifyState(StageState::Homing);
+            StageError error;
+            if (!controller_->home(error))
+                notifyError(error);
+        }
+
+        if (controller_)
+            controller_->disconnect();
         notifyTopology({});
         notifyState(StageState::Disconnected);
+
+        if (onComplete)
+            onComplete();
     });
+}
+
+void StageWorker::shutdownSync()
+{
+    if (!running_.load())
+        return;
+
+    std::promise<void> done;
+    auto future = done.get_future();
+    enqueuePriorityCommand([this, &done]() {
+        if (controller_ && controller_->state() == StageState::Connected)
+        {
+            notifyState(StageState::Homing);
+            StageError error;
+            (void)controller_->home(error);
+        }
+
+        if (controller_)
+            controller_->disconnect();
+        notifyTopology({});
+        notifyState(StageState::Disconnected);
+        done.set_value();
+    });
+    commandCv_.notify_all();
+    future.wait();
+
+    if (!running_.exchange(false))
+        return;
+
+    commandCv_.notify_all();
+    if (controlThread_.joinable())
+        controlThread_.join();
 }
 
 void StageWorker::requestStopMotion()

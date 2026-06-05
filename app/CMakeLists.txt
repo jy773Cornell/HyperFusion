@@ -53,7 +53,9 @@ qt_add_executable(app
     src/frontend/widgets/DetectorCrosshairWidget.cpp
     src/frontend/widgets/ProfilePlotWidget.cpp
     src/frontend/widgets/StageAxisWidget.cpp
+    src/frontend/widgets/OperationWaitDialog.cpp
     include/frontend/widgets/MainWindow.hpp
+    include/frontend/widgets/OperationWaitDialog.hpp
     include/frontend/widgets/DetectorCrosshairWidget.hpp
     include/frontend/widgets/ProfilePlotWidget.hpp
     include/frontend/widgets/StageAxisWidget.hpp
