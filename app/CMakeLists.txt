@@ -53,12 +53,14 @@ qt_add_executable(app
     src/frontend/widgets/DetectorCrosshairWidget.cpp
     src/frontend/widgets/ProfilePlotWidget.cpp
     src/frontend/widgets/StageAxisWidget.cpp
+    src/frontend/widgets/IntensityBarWidget.cpp
     src/frontend/widgets/OperationWaitDialog.cpp
     include/frontend/widgets/MainWindow.hpp
     include/frontend/widgets/OperationWaitDialog.hpp
     include/frontend/widgets/DetectorCrosshairWidget.hpp
     include/frontend/widgets/ProfilePlotWidget.hpp
     include/frontend/widgets/StageAxisWidget.hpp
+    include/frontend/widgets/IntensityBarWidget.hpp
     include/frontend/widgets/LumoCameraUi.hpp
     # frontend/processing — frame pipelines (worker threads, extractors)
     src/frontend/processing/BilProfileExtractor.cpp
@@ -74,7 +76,9 @@ qt_add_executable(app
     # backend — device-agnostic workers, orchestration, I/O
     src/backend/CameraWorker.cpp
     src/backend/StageWorker.cpp
-    src/backend/HyperspectralRawDumper.cpp
+    src/backend/LighthouseWorker.cpp
+    src/backend/LumoDatasetWriter.cpp
+    src/backend/CaptureWriterWorker.cpp
     src/backend/ICameraController.cpp
     src/backend/CameraCoordinator.cpp
     include/backend/CameraTypes.hpp
@@ -83,7 +87,12 @@ qt_add_executable(app
     include/backend/StageTypes.hpp
     include/backend/IStageController.hpp
     include/backend/StageWorker.hpp
-    include/backend/HyperspectralRawDumper.hpp
+    include/backend/LighthouseTypes.hpp
+    include/backend/ILighthouseController.hpp
+    include/backend/LighthouseWorker.hpp
+    include/backend/CaptureWriterTypes.hpp
+    include/backend/LumoDatasetWriter.hpp
+    include/backend/CaptureWriterWorker.hpp
     include/backend/CameraCoordinator.hpp
     # adapters — vendor SDK / hardware
     src/adapters/zaber/ZaberStageController.cpp
@@ -93,6 +102,8 @@ qt_add_executable(app
     src/adapters/lumo/CalpackBandCatalog.cpp
     src/adapters/lumo/LumoCamera.cpp
     src/adapters/lumo/Swir3NiCamera.cpp
+    src/adapters/mcc/Mcc1208LighthouseController.cpp
+    src/adapters/mcc/MccUniversalLibrary.cpp
     include/adapters/zaber/ZaberStageController.hpp
     include/adapters/zaber/ZaberStageConfigurator.hpp
     include/adapters/zaber/ZaberStageHoming.hpp
@@ -102,6 +113,9 @@ qt_add_executable(app
     include/adapters/lumo/LumoCamera.hpp
     include/adapters/lumo/Swir3NiCamera.hpp
     include/adapters/lumo/LumoDeviceTypes.hpp
+    include/adapters/mcc/Mcc1208LighthouseController.hpp
+    include/adapters/mcc/Mcc1208Profile.hpp
+    include/adapters/mcc/MccUniversalLibrary.hpp
 )
 
 target_include_directories(app PRIVATE include)
@@ -172,6 +186,29 @@ if(HF_HAVE_ZML)
                 COMMENT "Copying ${_zml_dll} to output directory")
         endif()
     endforeach()
+endif()
+
+set(HF_DEFAULT_MCC_UL_ROOT "C:/Program Files (x86)/Measurement Computing/DAQ")
+if(DEFINED ENV{MCC_UL_ROOT} AND NOT "$ENV{MCC_UL_ROOT}" STREQUAL "")
+    set(MCC_UL_ROOT "$ENV{MCC_UL_ROOT}")
+elseif(NOT MCC_UL_ROOT)
+    set(MCC_UL_ROOT "${HF_DEFAULT_MCC_UL_ROOT}")
+endif()
+set(MCC_UL_ROOT "${MCC_UL_ROOT}" CACHE PATH "MCC Universal Library runtime (cbw64.dll)")
+
+if(EXISTS "${MCC_UL_ROOT}/cbw64.dll")
+    message(STATUS "MCC Universal Library runtime found at ${MCC_UL_ROOT}")
+    file(GLOB _mcc_runtime_dlls "${MCC_UL_ROOT}/*.dll")
+    foreach(_mcc_dll IN LISTS _mcc_runtime_dlls)
+        add_custom_command(
+            TARGET app POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_mcc_dll}"
+                    "$<TARGET_FILE_DIR:app>"
+            COMMENT "Copying MCC UL runtime DLL to output directory")
+    endforeach()
+else()
+    message(STATUS "MCC UL runtime not found at ${MCC_UL_ROOT} (Light tab needs InstaCal/cbw64.dll at runtime)")
 endif()
 
 target_link_libraries(app PRIVATE Qt6::Widgets Qt6::Core)

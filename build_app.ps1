@@ -168,6 +168,18 @@ if (-not (Test-Path -LiteralPath (Join-Path $exeDir "SpecSensor.dll")) -and (Tes
     Write-Host "==> Copied SpecSensor.dll to $exeDir"
 }
 
+$mccDaqDir = ${env:ProgramFiles(x86)} + "\Measurement Computing\DAQ"
+if (-not (Test-Path -LiteralPath $mccDaqDir)) {
+    $mccDaqDir = Join-Path $env:ProgramFiles "Measurement Computing\DAQ"
+}
+if (Test-Path -LiteralPath $mccDaqDir) {
+    $mccDlls = Get-ChildItem -LiteralPath $mccDaqDir -Filter "*.dll" -File
+    foreach ($dll in $mccDlls) {
+        Copy-Item -LiteralPath $dll.FullName -Destination $exeDir -Force
+    }
+    Write-Host "==> Copied $($mccDlls.Count) MCC UL DLL(s) from $mccDaqDir to $exeDir"
+}
+
 if ($NoRun) {
     Write-Host "==> Built: $exe"
     exit 0

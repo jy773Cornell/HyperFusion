@@ -12,15 +12,18 @@
 #include "adapters/lumo/LumoDeviceTypes.hpp"
 #include "adapters/lumo/CalpackBandCatalog.hpp"
 #include "backend/CameraTypes.hpp"
+#include "backend/LighthouseTypes.hpp"
 #include "backend/StageTypes.hpp"
 #include "backend/CameraCoordinator.hpp"
+#include "backend/CaptureWriterTypes.hpp"
 #include "frontend/processing/ProfileProcessor.hpp"
 #include "frontend/processing/WaterfallProcessor.hpp"
 
 class LumoCamera;
 class Swir3NiCamera;
 
-class HyperspectralRawDumper;
+class CaptureWriterWorker;
+class LighthouseWorker;
 class OperationWaitDialog;
 class StageWorker;
 class QCheckBox;
@@ -39,6 +42,7 @@ class QWidget;
 namespace ui
 {
 class DetectorCrosshairWidget;
+class IntensityBarWidget;
 class ProfilePlotWidget;
 class StageAxisWidget;
 } // namespace ui
@@ -83,6 +87,13 @@ struct LumoCameraUi
     std::vector<SpectralBand> spectralBands;
 };
 
+struct LighthouseRowUi
+{
+    QLabel *nameLabel = nullptr;
+    ui::IntensityBarWidget *bar = nullptr;
+    QCheckBox *onOffSwitch = nullptr;
+};
+
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
@@ -98,6 +109,7 @@ protected:
     static bool isCameraSessionActive(CameraState state);
     bool anyCameraSessionActive() const;
     bool isStageSessionActive() const;
+    bool isLighthouseSessionActive() const;
 
 private:
     QWidget *createStreamTabsPanel();
@@ -133,12 +145,17 @@ private:
     void refreshStageComPortList();
     QString selectedStagePortName() const;
     void setupStageWorker();
+    void setupLighthouseWorker();
     void updateStageConnectionControls(StageState state);
     void updateStageDeviceDisplay(const StageTopology &topology);
     void clearStageDeviceDisplay();
     void onStageStateChanged(StageState state);
     void onStageTopologyChanged(const StageTopology &topology);
     void onStageError(const StageError &error);
+    void onLighthouseStateChanged(LighthouseState state);
+    void onLighthouseDeviceInfoChanged(const LighthouseDeviceInfo &info);
+    void onLighthouseSettingsChanged(const LighthouseSettings &settings);
+    void onLighthouseError(const LighthouseError &error);
     void updateStageMotionControls(StageState state);
     void updateStagePositionDisplay(double positionMm);
     void pollStagePosition();
@@ -152,6 +169,7 @@ private:
     bool selectedCaptureCameraStreaming(QString &errorMessage) const;
     double closestSelectedCaptureCameraPositionMm(bool *hasSelection) const;
     double closestCaptureCameraPositionMm(bool *hasPosition) const;
+    bool buildCaptureWriterSessionConfig(CaptureWriterSessionConfig &config, QString &errorMessage) const;
     bool beginCaptureRawDumpSession(QString &errorMessage);
     void endCaptureRawDumpSession();
     void appendCaptureRecordFrame(const FramePacket &frame);
@@ -200,8 +218,25 @@ private:
 
     static constexpr int kSettingsTabCamera = 0;
     static constexpr int kSettingsTabStage = 1;
+    static constexpr int kSettingsTabLight = 2;
     static constexpr int kSettingsTabUr3e = 3;
     static constexpr int kSettingsTabCapture = 4;
+
+    QLabel *lightDaqStatusIndicator_ = nullptr;
+    QLabel *lightDaqStatusLabel_ = nullptr;
+    QPlainTextEdit *lightDaqInfoDisplay_ = nullptr;
+    QPushButton *lightConnectBtn_ = nullptr;
+    QPushButton *lightDisconnectBtn_ = nullptr;
+    QPushButton *lightRefreshBtn_ = nullptr;
+    QGroupBox *lightLightingBox_ = nullptr;
+    LighthouseRowUi lighthouseRows_[4];
+
+    void updateLightConnectionDisplay();
+    void updateLightControlsEnabled();
+    void syncLightUiFromBackend();
+    void applyLighthouseSettingsToUi(const LighthouseSettings &settings);
+    static int lighthousePartnerIndex(int rowIndex);
+    void setLighthouseRowIntensity(int rowIndex, int percent);
 
     QComboBox *stagePortCombo_ = nullptr;
     QComboBox *stageBaudCombo_ = nullptr;
@@ -231,6 +266,7 @@ private:
     };
     StageHomingKind stageHomingKind_ = StageHomingKind::None;
     std::unique_ptr<StageWorker> stageWorker_;
+    std::unique_ptr<LighthouseWorker> lighthouseWorker_;
 
     QLineEdit *captureDatasetEdit_ = nullptr;
     QLineEdit *captureSaveFolderEdit_ = nullptr;
@@ -245,7 +281,7 @@ private:
     };
     CaptureRecorderMode captureRecorderMode_ = CaptureRecorderMode::Idle;
     QTimer *captureScanTimer_ = nullptr;
-    std::unique_ptr<HyperspectralRawDumper> captureRawDumper_;
+    std::unique_ptr<CaptureWriterWorker> captureWriterWorker_;
     QPushButton *captureRecorderStopBtn_ = nullptr;
     QPushButton *captureRecorderPreviewBtn_ = nullptr;
     QPushButton *captureRecorderRecordBtn_ = nullptr;

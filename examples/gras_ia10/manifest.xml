@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest>
+ <file extension="raw" type="darkref">capture/DARKREF_gras_ia10.raw</file>
+ <file extension="hdr" type="darkref">capture/DARKREF_gras_ia10.hdr</file>
+ <file extension="raw" type="whiteref">capture/WHITEREF_gras_ia10.raw</file>
+ <file extension="hdr" type="whiteref">capture/WHITEREF_gras_ia10.hdr</file>
+ <file extension="raw" type="capture">capture/gras_ia10.raw</file>
+ <file extension="hdr" type="capture">capture/gras_ia10.hdr</file>
+ <file extension="xml" type="properties">metadata/gras_ia10.xml</file>
+ <file extension="xsl" type="properties">metadata/gras_ia10.xsl</file>
+ <file extension="png" type="preview">gras_ia10.png</file>
+</manifest>

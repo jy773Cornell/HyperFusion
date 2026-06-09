@@ -23,7 +23,7 @@ Dependency direction: **frontend → backend → adapters**. Adapters must not i
 ### Backend (flat under `backend/`)
 
 - `CameraCoordinator` — multi-camera worker routing
-- `HyperspectralRawDumper` — hyperspectral `.raw` session writer
+- `CaptureWriterWorker` — threaded Lumo-style dataset writer (`save folder/dataset/`)
 - `CameraWorker`, `StageWorker`, interface types
 
 ---
@@ -58,6 +58,7 @@ Capture tab (Record / Preview / Stop)
   user-set Scanning speed. Homing uses ZML lockstep.home() (SDK/firmware, not app-set).
   Preview/Record preposition and per-camera Go buttons use 100 mm/s.
   Preview: after scan finishes or Stop, stage homes to the home sensor (SDK homing).
+  Record output: save folder/dataset/ (Lumo-style capture/, metadata/, manifest.xml, ENVI .raw/.hdr).
 
 SWIR3 / NI — step-by-step debug (NI MAX works, HyperFusion -1101)
   1. Quit NI MAX completely (not only Stop Grab).

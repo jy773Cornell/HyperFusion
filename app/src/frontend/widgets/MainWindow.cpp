@@ -8,15 +8,18 @@
 #include "adapters/zaber/ZaberStageProfile.hpp"
 #include "adapters/lumo/CalpackBandCatalog.hpp"
 #include "backend/StageWorker.hpp"
+#include "backend/LighthouseWorker.hpp"
 #include "backend/CameraCoordinator.hpp"
+#include "adapters/mcc/Mcc1208LighthouseController.hpp"
 #include "frontend/widgets/DetectorCrosshairWidget.hpp"
 #include "frontend/widgets/ProfilePlotWidget.hpp"
 #include "frontend/processing/ProfileProcessor.hpp"
+#include "frontend/widgets/IntensityBarWidget.hpp"
 #include "frontend/widgets/StageAxisWidget.hpp"
 #include "frontend/widgets/OperationWaitDialog.hpp"
 
 #include "frontend/settings/AppSettingsStore.hpp"
-#include "backend/HyperspectralRawDumper.hpp"
+#include "backend/CaptureWriterWorker.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -457,6 +460,8 @@ void MainWindow::onSettingsTabChanged(const int index)
         if (stageWorker_ != nullptr)
             updateCapturePositionControls(stageWorker_->currentState());
     }
+    else if (index == kSettingsTabLight)
+        syncLightUiFromBackend();
 }
 
 void MainWindow::selectBandComboIndex(QComboBox *combo, const int bandIndex)
@@ -833,6 +838,19 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     });
 
     setupStageWorker();
+    setupLighthouseWorker();
+
+    captureWriterWorker_ = std::make_unique<CaptureWriterWorker>();
+    captureWriterWorker_->setErrorCallback([this](const QString &message) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, message]() {
+                appendLog(QStringLiteral("Capture record: %1").arg(message));
+                stopCaptureRecorder();
+            },
+            Qt::QueuedConnection);
+    });
+    captureWriterWorker_->start();
 }
 
 MainWindow::~MainWindow()
@@ -1422,6 +1440,121 @@ void MainWindow::setupStageWorker()
     stageWorker_->start();
 }
 
+void MainWindow::setupLighthouseWorker()
+{
+    auto controller = std::make_shared<Mcc1208LighthouseController>();
+    controller->setLogCallback([this](const std::string &message) {
+        const QString line = QString::fromStdString(message);
+        QMetaObject::invokeMethod(
+            this,
+            [this, line]() { appendLog(line); },
+            Qt::QueuedConnection);
+    });
+
+    lighthouseWorker_ = std::make_unique<LighthouseWorker>(controller);
+    lighthouseWorker_->setStateCallback([this](const LighthouseState state) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, state]() { onLighthouseStateChanged(state); },
+            Qt::QueuedConnection);
+    });
+    lighthouseWorker_->setDeviceInfoCallback([this](const LighthouseDeviceInfo &info) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, info]() { onLighthouseDeviceInfoChanged(info); },
+            Qt::QueuedConnection);
+    });
+    lighthouseWorker_->setSettingsCallback([this](const LighthouseSettings &settings) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, settings]() { onLighthouseSettingsChanged(settings); },
+            Qt::QueuedConnection);
+    });
+    lighthouseWorker_->setErrorCallback([this](const LighthouseError &error) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, error]() { onLighthouseError(error); },
+            Qt::QueuedConnection);
+    });
+    lighthouseWorker_->start();
+    syncLightUiFromBackend();
+}
+
+void MainWindow::syncLightUiFromBackend()
+{
+    if (lighthouseWorker_ == nullptr)
+        return;
+
+    updateLightConnectionDisplay();
+    updateLightControlsEnabled();
+    onLighthouseDeviceInfoChanged(lighthouseWorker_->currentDeviceInfo());
+    applyLighthouseSettingsToUi(lighthouseWorker_->currentSettings());
+}
+
+bool MainWindow::isLighthouseSessionActive() const
+{
+    return lighthouseWorker_ != nullptr
+           && lighthouseWorker_->currentState() == LighthouseState::Connected;
+}
+
+void MainWindow::onLighthouseStateChanged(const LighthouseState state)
+{
+    updateLightConnectionDisplay();
+    updateLightControlsEnabled();
+
+    switch (state)
+    {
+    case LighthouseState::Connected:
+        appendLog(QStringLiteral("Light: USB-1208FS-Plus connected"));
+        break;
+    case LighthouseState::Disconnected:
+        appendLog(QStringLiteral("Light: disconnected"));
+        break;
+    case LighthouseState::Fault:
+        appendLog(QStringLiteral("Light: fault"));
+        break;
+    default:
+        break;
+    }
+}
+
+void MainWindow::onLighthouseDeviceInfoChanged(const LighthouseDeviceInfo &info)
+{
+    if (lightDaqInfoDisplay_ == nullptr)
+        return;
+
+    lightDaqInfoDisplay_->setPlainText(QString::fromStdString(info.details));
+}
+
+void MainWindow::onLighthouseSettingsChanged(const LighthouseSettings &settings)
+{
+    applyLighthouseSettingsToUi(settings);
+}
+
+void MainWindow::onLighthouseError(const LighthouseError &error)
+{
+    if (error.message.empty())
+        return;
+
+    appendLog(QStringLiteral("Light error: %1").arg(QString::fromStdString(error.message)));
+}
+
+void MainWindow::applyLighthouseSettingsToUi(const LighthouseSettings &settings)
+{
+    for (int rowIndex = 0; rowIndex < kLighthouseLampCount; ++rowIndex)
+    {
+        const int percent = rowIndex < 2 ? settings.reflectancePercent : settings.transmissionPercent;
+        setLighthouseRowIntensity(rowIndex, percent);
+
+        auto &rowUi = lighthouseRows_[static_cast<std::size_t>(rowIndex)];
+        if (rowUi.onOffSwitch != nullptr)
+        {
+            const QSignalBlocker blocker(rowUi.onOffSwitch);
+            rowUi.onOffSwitch->setChecked(settings.lampOn[static_cast<std::size_t>(rowIndex)]);
+        }
+    }
+}
+
 void MainWindow::updateStageConnectionControls(const StageState state)
 {
     const bool connected = state == StageState::Connected;
@@ -1809,25 +1942,215 @@ QWidget *MainWindow::createLightSettingsTab()
     auto *page = new QWidget(this);
     auto *layout = new QVBoxLayout(page);
 
-    auto *connBox = new QGroupBox("Lighthouse / lighting", page);
-    auto *connForm = new QFormLayout(connBox);
-    auto *interfaceCombo = new QComboBox(connBox);
-    interfaceCombo->addItems({"Serial", "USB", "Network (TODO)"});
-    auto *addressEdit = new QLineEdit(connBox);
-    addressEdit->setPlaceholderText("COM port, IP:port, or device id");
-    auto *connectBtn = new QPushButton("Connect", connBox);
-    connForm->addRow("Interface", interfaceCombo);
-    connForm->addRow("Address", addressEdit);
-    connForm->addRow("", connectBtn);
+    auto *connBox = new QGroupBox(QStringLiteral("Connection"), page);
+    auto *daqForm = new QFormLayout(connBox);
 
-    connect(connectBtn, &QPushButton::clicked, this, [this, interfaceCombo, addressEdit]() {
-        appendLog(QString("Light: connect requested (%1, %2)")
-                      .arg(interfaceCombo->currentText(), addressEdit->text()));
+    auto *deviceTreeLabel = new QLabel(
+        QStringLiteral("Computer\n  DAS Component\n    USB-1208FS-Plus"),
+        connBox);
+    deviceTreeLabel->setStyleSheet(QStringLiteral("font-family: Consolas, 'Courier New', monospace;"));
+    daqForm->addRow(QStringLiteral("Device"), deviceTreeLabel);
+
+    auto *statusRow = new QWidget(connBox);
+    auto *statusLayout = new QHBoxLayout(statusRow);
+    statusLayout->setContentsMargins(0, 0, 0, 0);
+    lightDaqStatusIndicator_ = new QLabel(statusRow);
+    lightDaqStatusIndicator_->setFixedSize(14, 14);
+    lightDaqStatusLabel_ = new QLabel(QStringLiteral("Disconnected"), statusRow);
+    statusLayout->addWidget(lightDaqStatusIndicator_);
+    statusLayout->addWidget(lightDaqStatusLabel_, 1);
+    daqForm->addRow(QStringLiteral("Status"), statusRow);
+
+    lightDaqInfoDisplay_ = new QPlainTextEdit(connBox);
+    lightDaqInfoDisplay_->setReadOnly(true);
+    lightDaqInfoDisplay_->setPlaceholderText(
+        QStringLiteral("Refresh to scan for the DAQ device, then Connect."));
+    lightDaqInfoDisplay_->setMinimumHeight(72);
+    lightDaqInfoDisplay_->setMaximumHeight(96);
+    daqForm->addRow(QStringLiteral("Details"), lightDaqInfoDisplay_);
+
+    lightRefreshBtn_ = new QPushButton(QStringLiteral("Refresh"), connBox);
+    lightRefreshBtn_->setToolTip(QStringLiteral("Scan for USB-1208FS-Plus"));
+    lightConnectBtn_ = new QPushButton(QStringLiteral("Connect"), connBox);
+    lightDisconnectBtn_ = new QPushButton(QStringLiteral("Disconnect"), connBox);
+    lightDisconnectBtn_->setEnabled(false);
+
+    auto *buttonRow = new QWidget(connBox);
+    auto *buttonLayout = new QHBoxLayout(buttonRow);
+    buttonLayout->setContentsMargins(0, 0, 0, 0);
+    buttonLayout->addWidget(lightRefreshBtn_);
+    buttonLayout->addWidget(lightConnectBtn_);
+    buttonLayout->addWidget(lightDisconnectBtn_);
+    buttonLayout->addStretch(1);
+    daqForm->addRow(QStringLiteral(""), buttonRow);
+
+    connect(lightRefreshBtn_, &QPushButton::clicked, this, [this]() {
+        if (lighthouseWorker_ == nullptr)
+            return;
+        appendLog(QStringLiteral("Light: scanning for USB-1208FS-Plus…"));
+        lighthouseWorker_->requestScan();
+    });
+    connect(lightConnectBtn_, &QPushButton::clicked, this, [this]() {
+        if (lighthouseWorker_ == nullptr)
+            return;
+
+        appendLog(QStringLiteral("Light: connecting to USB-1208FS-Plus…"));
+        lighthouseWorker_->requestConnect();
+    });
+    connect(lightDisconnectBtn_, &QPushButton::clicked, this, [this]() {
+        if (lighthouseWorker_ == nullptr)
+            return;
+        appendLog(QStringLiteral("Light: disconnect requested"));
+        lighthouseWorker_->requestDisconnect();
     });
 
+    lightLightingBox_ = new QGroupBox(QStringLiteral("Lighthouses"), page);
+    auto *lightingBoxLayout = new QVBoxLayout(lightLightingBox_);
+
+    const QStringList lighthouseNames = {
+        QStringLiteral("Reflectance 1"),
+        QStringLiteral("Reflectance 2"),
+        QStringLiteral("Transmission 1"),
+        QStringLiteral("Transmission 2"),
+    };
+
+    for (int rowIndex = 0; rowIndex < lighthouseNames.size(); ++rowIndex)
+    {
+        auto &rowUi = lighthouseRows_[static_cast<std::size_t>(rowIndex)];
+        auto *rowWidget = new QWidget(lightLightingBox_);
+        auto *rowLayout = new QHBoxLayout(rowWidget);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->setSpacing(10);
+
+        rowUi.nameLabel = new QLabel(lighthouseNames.at(rowIndex), rowWidget);
+        rowUi.nameLabel->setMinimumWidth(120);
+        rowUi.bar = new ui::IntensityBarWidget(rowWidget);
+        rowUi.onOffSwitch = new QCheckBox(QStringLiteral("On"), rowWidget);
+        rowUi.onOffSwitch->setToolTip(tr("Lamp on/off (relay control)"));
+
+        rowLayout->addWidget(rowUi.nameLabel);
+        rowLayout->addWidget(rowUi.bar, 1);
+        rowLayout->addWidget(rowUi.onOffSwitch);
+        lightingBoxLayout->addWidget(rowWidget);
+
+        connect(rowUi.bar, &ui::IntensityBarWidget::percentChanged, this, [this, rowIndex](const int percent) {
+            setLighthouseRowIntensity(rowIndex, percent);
+            if (lighthouseWorker_ != nullptr && isLighthouseSessionActive())
+                lighthouseWorker_->requestSetGroupIntensity(lighthouseGroupForRowIndex(rowIndex), percent);
+        });
+
+        connect(rowUi.onOffSwitch, &QCheckBox::toggled, this, [this, rowIndex](const bool enabled) {
+            if (lighthouseWorker_ != nullptr && isLighthouseSessionActive())
+                lighthouseWorker_->requestSetLampOn(static_cast<LighthouseLamp>(rowIndex), enabled);
+        });
+    }
+
+    auto *groupHint = new QLabel(
+        QStringLiteral("Reflectance 1 and 2 share AO0 intensity (on/off: DIO A0, A1). "
+                       "Transmission 1 and 2 share AO1 intensity (on/off: DIO A2, A3)."),
+        lightLightingBox_);
+    groupHint->setWordWrap(true);
+    lightingBoxLayout->addWidget(groupHint);
+
     layout->addWidget(connBox);
-    layout->addStretch();
+    layout->addWidget(lightLightingBox_);
+    layout->addStretch(1);
     return page;
+}
+
+void MainWindow::updateLightConnectionDisplay()
+{
+    const LighthouseState state = lighthouseWorker_ != nullptr ? lighthouseWorker_->currentState()
+                                                               : LighthouseState::Disconnected;
+
+    QString statusText;
+    QString indicatorStyle;
+
+    switch (state)
+    {
+    case LighthouseState::Connected:
+        statusText = QStringLiteral("Connected");
+        indicatorStyle = QStringLiteral("background-color: #27ae60; border-radius: 7px;");
+        break;
+    case LighthouseState::Detected:
+        statusText = QStringLiteral("Detected (not connected)");
+        indicatorStyle = QStringLiteral("background-color: #f39c12; border-radius: 7px;");
+        break;
+    case LighthouseState::Scanning:
+        statusText = QStringLiteral("Scanning…");
+        indicatorStyle = QStringLiteral("background-color: #f39c12; border-radius: 7px;");
+        break;
+    case LighthouseState::Connecting:
+        statusText = QStringLiteral("Connecting…");
+        indicatorStyle = QStringLiteral("background-color: #f39c12; border-radius: 7px;");
+        break;
+    case LighthouseState::Fault:
+        statusText = QStringLiteral("Fault");
+        indicatorStyle = QStringLiteral("background-color: #c0392b; border-radius: 7px;");
+        break;
+    case LighthouseState::Disconnected:
+    default:
+        statusText = QStringLiteral("Disconnected");
+        indicatorStyle = QStringLiteral("background-color: #95a5a6; border-radius: 7px;");
+        break;
+    }
+
+    if (lightDaqStatusLabel_ != nullptr)
+        lightDaqStatusLabel_->setText(statusText);
+    if (lightDaqStatusIndicator_ != nullptr)
+        lightDaqStatusIndicator_->setStyleSheet(indicatorStyle);
+
+    const bool connected = state == LighthouseState::Connected;
+    const bool detected = state == LighthouseState::Detected;
+    const bool busy = state == LighthouseState::Scanning || state == LighthouseState::Connecting;
+
+    if (lightRefreshBtn_ != nullptr)
+        lightRefreshBtn_->setEnabled(!connected && !busy);
+    if (lightConnectBtn_ != nullptr)
+        lightConnectBtn_->setEnabled(detected && !busy);
+    if (lightDisconnectBtn_ != nullptr)
+        lightDisconnectBtn_->setEnabled(connected || busy);
+}
+
+void MainWindow::updateLightControlsEnabled()
+{
+    const bool enabled = isLighthouseSessionActive();
+    if (lightLightingBox_ != nullptr)
+        lightLightingBox_->setEnabled(enabled);
+
+    for (auto &row : lighthouseRows_)
+    {
+        if (row.bar != nullptr)
+            row.bar->setEnabled(enabled);
+        if (row.onOffSwitch != nullptr)
+            row.onOffSwitch->setEnabled(enabled);
+    }
+}
+
+int MainWindow::lighthousePartnerIndex(const int rowIndex)
+{
+    if (rowIndex < 0 || rowIndex >= 4)
+        return -1;
+    return (rowIndex < 2) ? (1 - rowIndex) : (5 - rowIndex);
+}
+
+void MainWindow::setLighthouseRowIntensity(const int rowIndex, const int percent)
+{
+    if (rowIndex < 0 || rowIndex >= 4)
+        return;
+
+    const int clamped = std::clamp(percent, 0, kLighthouseIntensityPercentMax);
+    const int partnerIndex = lighthousePartnerIndex(rowIndex);
+
+    for (const int idx : {rowIndex, partnerIndex})
+    {
+        if (idx < 0)
+            continue;
+
+        auto &rowUi = lighthouseRows_[static_cast<std::size_t>(idx)];
+        if (rowUi.bar != nullptr)
+            rowUi.bar->setPercent(clamped);
+    }
 }
 
 QWidget *MainWindow::createUr3eSettingsTab()
@@ -2409,7 +2732,8 @@ double MainWindow::closestCaptureCameraPositionMm(bool *hasPosition) const
     return closestMm;
 }
 
-bool MainWindow::beginCaptureRawDumpSession(QString &errorMessage)
+bool MainWindow::buildCaptureWriterSessionConfig(CaptureWriterSessionConfig &config,
+                                                 QString &errorMessage) const
 {
     QString metadataError;
     if (!validateCaptureRecordMetadata(metadataError))
@@ -2425,26 +2749,62 @@ bool MainWindow::beginCaptureRawDumpSession(QString &errorMessage)
         return false;
     }
 
-    const QString saveFolder = captureSaveFolderEdit_->text().trimmed();
-    const QString dataset = captureDatasetEdit_->text().trimmed();
+    config.saveFolder = captureSaveFolderEdit_->text().trimmed();
+    config.datasetName = captureDatasetEdit_->text().trimmed();
+    config.operatorName =
+        captureOperatorEdit_ != nullptr ? captureOperatorEdit_->text().trimmed() : QString();
+    config.description = captureDescriptionEdit_ != nullptr ? captureDescriptionEdit_->toPlainText().trimmed()
+                                                            : QString();
+    config.streams.clear();
 
-    captureRawDumper_ = std::make_unique<HyperspectralRawDumper>();
-    if (!captureRawDumper_->beginSession(saveFolder, dataset, &errorMessage))
+    std::vector<std::size_t> cameraIndices;
+    if (!selectedCaptureCameraIndices(cameraIndices))
     {
-        captureRawDumper_.reset();
+        errorMessage = QStringLiteral("Select at least one connected camera in the Cameras list.");
         return false;
     }
+
+    const LumoCameraUi *uis[] = {&camera1Ui_, &camera2Ui_};
+    for (const std::size_t cameraIndex : cameraIndices)
+    {
+        const LumoCameraUi &ui = *uis[cameraIndex];
+        CaptureWriterStreamConfig stream;
+        stream.source =
+            cameraIndex == 0 ? CameraBackendId::Camera1 : CameraBackendId::Camera2;
+        stream.streamName = profileTabNameForUi(ui);
+        stream.settings = buildCameraSettings(ui);
+        stream.spectralBands = ui.spectralBands;
+        stream.calibrationPackPath = calibrationPackPath(ui);
+        config.streams.push_back(std::move(stream));
+    }
+
+    return true;
+}
+
+bool MainWindow::beginCaptureRawDumpSession(QString &errorMessage)
+{
+    if (captureWriterWorker_ == nullptr)
+    {
+        errorMessage = QStringLiteral("Capture writer is not available.");
+        return false;
+    }
+
+    CaptureWriterSessionConfig config;
+    if (!buildCaptureWriterSessionConfig(config, errorMessage))
+        return false;
+
+    if (!captureWriterWorker_->beginSessionSync(config, &errorMessage))
+        return false;
 
     return true;
 }
 
 void MainWindow::endCaptureRawDumpSession()
 {
-    if (captureRawDumper_ == nullptr)
+    if (captureWriterWorker_ == nullptr || !captureWriterWorker_->isActive())
         return;
 
-    const RawDumpSessionSummary summary = captureRawDumper_->endSession();
-    captureRawDumper_.reset();
+    const CaptureWriterSessionSummary summary = captureWriterWorker_->endSessionSync();
 
     if (summary.sessionDirectory.isEmpty())
         return;
@@ -2453,17 +2813,17 @@ void MainWindow::endCaptureRawDumpSession()
     for (auto it = summary.streams.cbegin(); it != summary.streams.cend(); ++it)
     {
         appendLog(QStringLiteral("  %1 — %2 frames (%3 bytes) → %4")
-                      .arg(HyperspectralRawDumper::streamLabel(it.key()))
+                      .arg(it->baseName)
                       .arg(it->frameCount)
                       .arg(it->bytesWritten)
-                      .arg(QFileInfo(it->filePath).fileName()));
+                      .arg(QFileInfo(it->rawPath).fileName()));
     }
 }
 
 void MainWindow::appendCaptureRecordFrame(const FramePacket &frame)
 {
-    if (captureRecorderMode_ != CaptureRecorderMode::Record || captureRawDumper_ == nullptr
-        || !captureRawDumper_->isActive())
+    if (captureRecorderMode_ != CaptureRecorderMode::Record || captureWriterWorker_ == nullptr
+        || !captureWriterWorker_->isActive())
         return;
 
     std::vector<std::size_t> selected;
@@ -2474,12 +2834,7 @@ void MainWindow::appendCaptureRecordFrame(const FramePacket &frame)
     if (std::find(selected.begin(), selected.end(), cameraIndex) == selected.end())
         return;
 
-    QString errorMessage;
-    if (!captureRawDumper_->appendFrame(frame, &errorMessage))
-    {
-        appendLog(QStringLiteral("Capture record: %1").arg(errorMessage));
-        stopCaptureRecorder();
-    }
+    captureWriterWorker_->submitFrame(frame);
 }
 
 void MainWindow::startCaptureStagePreposition(const double closestMm,
@@ -2598,7 +2953,7 @@ void MainWindow::startCaptureRecord()
     {
         appendLog(QStringLiteral("Capture record: writing .raw to %1 (stage not connected). "
                                   "Press Stop when finished.")
-                      .arg(captureRawDumper_->sessionDirectory()));
+                      .arg(captureWriterWorker_->sessionDirectory()));
         return;
     }
 
@@ -2622,7 +2977,7 @@ void MainWindow::startCaptureRecord()
 
     appendLog(QStringLiteral("Capture record: session %1 — moving to closest camera position "
                               "%2 mm @ %3 mm/s, then scanning %4 mm @ %5 mm/s.")
-                  .arg(captureRawDumper_->sessionDirectory())
+                  .arg(captureWriterWorker_->sessionDirectory())
                   .arg(closestMm, 0, 'f', 2)
                   .arg(zaber_stage::kMaxSpeedMmPerSec, 0, 'f', 0)
                   .arg(distanceMm, 0, 'f', 2)
@@ -2803,6 +3158,9 @@ void MainWindow::performGracefulShutdown()
 
     stopCaptureRecorder();
 
+    if (captureWriterWorker_ != nullptr)
+        captureWriterWorker_->stop();
+
     if (coordinator_ != nullptr && anyCameraSessionActive())
     {
         waitDialog.setStatusText(tr("Disconnecting cameras…"));
@@ -2820,6 +3178,16 @@ void MainWindow::performGracefulShutdown()
         }
         stageWorker_->shutdownSync();
         stageHomingKind_ = StageHomingKind::None;
+    }
+
+    if (lighthouseWorker_ != nullptr)
+    {
+        if (isLighthouseSessionActive())
+        {
+            waitDialog.setStatusText(tr("Shutting down lighthouse outputs…"));
+            QApplication::processEvents();
+        }
+        lighthouseWorker_->shutdownSync();
     }
 
     if (waterfallProcessor1_)

@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?xml-stylesheet type="text/xsl" href="gras_ia10.xsl"?>
+<properties><header><key field="sensor type">FX10e</key>
+        <key field="sensor id">3210441</key>
+        <key field="frame rate">50</key>
+        <key field="integration time">15</key>
+        <key field="samples">1024</key>
+        <key field="active bands">448</key>
+        <key field="spatial binning">1</key>
+        <key field="spectral binning">1</key>
+        <key field="frames recorded">921</key>
+        <key field="frames dropped">0</key>
+        <key field="data format">BIL</key>
+        <key field="date">2025-10-31</key>
+        <key field="date text">Friday, October 31, 2025</key>
+        <key field="time">19:03:35</key>
+        <key field="calibration pack">C:/SPECIM/fx10e_these_calpacks/3210441_20211027_FX_calpack.scp</key>
+    </header>
+    <userdefined><key field="sample name">gras_ia10</key>
+        <key field="operator">jy</key>
+        <key field="description"></key>
+        <key field="sensor temperature">48.395446777344</key>
+        <key field="sensor prefix"></key>
+    </userdefined>
+</properties>
