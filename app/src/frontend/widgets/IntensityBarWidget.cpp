@@ -13,7 +13,6 @@ namespace
 constexpr int kMarginH = 8;
 constexpr int kMarginTop = 2;
 constexpr int kMarginBottom = 4;
-constexpr int kSideGap = 6;
 constexpr int kTickExtent = 5;
 constexpr int kIndicatorWidth = 8;
 constexpr int kIndicatorHeight = 14;
@@ -37,16 +36,12 @@ void IntensityBarWidget::setPercent(const int percent)
 
 int IntensityBarWidget::trackLeft() const
 {
-    const QFontMetrics metrics(font());
-    const int minLabelWidth = metrics.horizontalAdvance(QStringLiteral("0"));
-    return kMarginH + minLabelWidth + kSideGap;
+    return kMarginH;
 }
 
 int IntensityBarWidget::trackRight() const
 {
-    const QFontMetrics metrics(font());
-    const int maxLabelWidth = metrics.horizontalAdvance(QStringLiteral("100"));
-    return qMax(trackLeft() + 1, width() - kMarginH - maxLabelWidth - kSideGap);
+    return qMax(trackLeft() + 1, width() - kMarginH);
 }
 
 int IntensityBarWidget::percentAtPosition(const int x) const
@@ -109,14 +104,6 @@ void IntensityBarWidget::paintEvent(QPaintEvent *event)
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
 
-    const QFont endFont = painter.font();
-    const QFontMetrics endMetrics(endFont);
-    const QString minLabel = QStringLiteral("0");
-    const QString maxLabel = QStringLiteral("100");
-    const int minLabelWidth = endMetrics.horizontalAdvance(minLabel);
-    const int maxLabelWidth = endMetrics.horizontalAdvance(maxLabel);
-    const int endLabelHeight = endMetrics.height();
-
     const int trackLeftPx = trackLeft();
     const int trackRightPx = trackRight();
     const int trackWidth = trackRightPx - trackLeftPx;
@@ -124,17 +111,6 @@ void IntensityBarWidget::paintEvent(QPaintEvent *event)
 
     const double fraction = static_cast<double>(percent_) / 100.0;
     const int indicatorX = trackLeftPx + static_cast<int>(fraction * trackWidth);
-
-    painter.setFont(endFont);
-    painter.setPen(QColor(80, 80, 80));
-
-    const QRect minLabelRect(kMarginH, trackY - endLabelHeight / 2, minLabelWidth, endLabelHeight);
-    const QRect maxLabelRect(width() - kMarginH - maxLabelWidth,
-                             trackY - endLabelHeight / 2,
-                             maxLabelWidth,
-                             endLabelHeight);
-    painter.drawText(minLabelRect, Qt::AlignLeft | Qt::AlignVCenter, minLabel);
-    painter.drawText(maxLabelRect, Qt::AlignRight | Qt::AlignVCenter, maxLabel);
 
     QPen axisPen(QColor(160, 160, 160));
     axisPen.setWidth(3);

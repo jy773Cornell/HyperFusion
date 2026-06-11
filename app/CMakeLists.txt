@@ -79,6 +79,7 @@ qt_add_executable(app
     src/backend/LighthouseWorker.cpp
     src/backend/LumoDatasetWriter.cpp
     src/backend/CaptureWriterWorker.cpp
+    src/backend/HyperFusionConfig.cpp
     src/backend/ICameraController.cpp
     src/backend/CameraCoordinator.cpp
     include/backend/CameraTypes.hpp
@@ -93,6 +94,7 @@ qt_add_executable(app
     include/backend/CaptureWriterTypes.hpp
     include/backend/LumoDatasetWriter.hpp
     include/backend/CaptureWriterWorker.hpp
+    include/backend/HyperFusionConfig.hpp
     include/backend/CameraCoordinator.hpp
     # adapters — vendor SDK / hardware
     src/adapters/zaber/ZaberStageController.cpp
@@ -212,6 +214,16 @@ else()
 endif()
 
 target_link_libraries(app PRIVATE Qt6::Widgets Qt6::Core)
+
+# Ship hyperfusion.cfg beside app.exe (hardware parameters).
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/hyperfusion.cfg")
+    add_custom_command(
+        TARGET app POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${CMAKE_CURRENT_SOURCE_DIR}/hyperfusion.cfg"
+                "$<TARGET_FILE_DIR:app>/hyperfusion.cfg"
+        COMMENT "Copying hyperfusion.cfg to output directory")
+endif()
 
 # Ship calibration packs beside app.exe (RGB band dropdowns).
 set(HF_CALIBRATION_DIR "${CMAKE_CURRENT_SOURCE_DIR}/calibration")

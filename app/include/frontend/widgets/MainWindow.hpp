@@ -4,6 +4,7 @@
 #include <QImage>
 #include <QMainWindow>
 
+#include <array>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -90,6 +91,8 @@ struct LumoCameraUi
 struct LighthouseRowUi
 {
     QLabel *nameLabel = nullptr;
+    QLabel *powerIndicator = nullptr;
+    QLabel *powerStatusLabel = nullptr;
     ui::IntensityBarWidget *bar = nullptr;
     QCheckBox *onOffSwitch = nullptr;
 };
@@ -155,6 +158,7 @@ private:
     void onLighthouseStateChanged(LighthouseState state);
     void onLighthouseDeviceInfoChanged(const LighthouseDeviceInfo &info);
     void onLighthouseSettingsChanged(const LighthouseSettings &settings);
+    void onLighthousePowerStatusChanged(const LighthouseControllerPowerStatus &status);
     void onLighthouseError(const LighthouseError &error);
     void updateStageMotionControls(StageState state);
     void updateStagePositionDisplay(double positionMm);
@@ -163,7 +167,40 @@ private:
     void updateCaptureCameraPositionRows();
     void updateCapturePositionControls(StageState state);
     void updateCaptureRecorderControls();
-    bool buildCaptureScanPlan(double &distanceMm, double &speedMmPerSec, QString &errorMessage) const;
+    struct CaptureScanPlan
+    {
+        double referencePositionMm = 0.0;
+        double whiteReferenceScanLengthMm = 0.0;
+        double sampleStartPositionMm = 0.0;
+        double sampleScanLengthMm = 0.0;
+        double scanSpeedMmPerSec = 0.0;
+        int blackReferenceFrameCount = 0;
+    };
+    enum class CaptureScanPhase
+    {
+        Idle,
+        MoveToReferencePosition,
+        BlackReference,
+        WhiteReferenceScan,
+        MoveToSampleStart,
+        SampleScan,
+    };
+    bool buildCaptureScanPlan(CaptureScanPlan &plan, QString &errorMessage) const;
+    QString captureSequenceLogPrefix() const;
+    void resetCaptureSequenceState();
+    void startCaptureSequence();
+    void requestCaptureAbsoluteMove(double positionMm, CaptureScanPhase expectedPhaseOnComplete);
+    void onCaptureAbsoluteMoveComplete(bool success);
+    void beginCaptureBlackReference();
+    void onCaptureBlackReferenceComplete();
+    void beginCaptureWhiteReferenceScan();
+    void beginCaptureSampleScan();
+    void startCaptureRelativeScan(double distanceMm, double speedMmPerSec);
+    void onCaptureRelativeScanComplete();
+    void completeCaptureSequence();
+    void failCaptureSequence(const QString &message);
+    void setSelectedCameraShutters(bool open);
+    bool selectedCamerasReachedBlackReferenceTarget() const;
     bool validateCaptureRecordMetadata(QString &errorMessage) const;
     bool selectedCaptureCameraIndices(std::vector<std::size_t> &cameraIndices) const;
     bool selectedCaptureCameraStreaming(QString &errorMessage) const;
@@ -173,14 +210,13 @@ private:
     bool beginCaptureRawDumpSession(QString &errorMessage);
     void endCaptureRawDumpSession();
     void appendCaptureRecordFrame(const FramePacket &frame);
-    void startCaptureStagePreposition(double closestMm, double distanceMm, double scanSpeedMmPerSec);
-    void startCaptureStageScan(double distanceMm, double speedMmPerSec);
-    void onCaptureStagePrepositionComplete(bool success, double distanceMm, double speedMmPerSec);
     void startCapturePreview();
     void startCaptureRecord();
     void stopCaptureRecorder();
     void finishCaptureScan();
     void homeStageAfterCapturePreview();
+    void loadHardwareConfig();
+    void applyHardwareConfigToUi();
     void loadPersistedUiSettings();
     void savePersistedUiSettings();
     void schedulePersistedUiSettingsSave();
@@ -230,11 +266,16 @@ private:
     QPushButton *lightRefreshBtn_ = nullptr;
     QGroupBox *lightLightingBox_ = nullptr;
     LighthouseRowUi lighthouseRows_[4];
+    QTimer *lightPowerPollTimer_ = nullptr;
 
     void updateLightConnectionDisplay();
     void updateLightControlsEnabled();
+    void updateLighthousePowerDisplay(const LighthouseControllerPowerStatus &status);
     void syncLightUiFromBackend();
     void applyLighthouseSettingsToUi(const LighthouseSettings &settings);
+    void applyPersistedLighthouseUiValues();
+    LighthouseSettings buildLighthouseConnectDefaults() const;
+    void savePersistedLighthouseSettings() const;
     static int lighthousePartnerIndex(int rowIndex);
     void setLighthouseRowIntensity(int rowIndex, int percent);
 
@@ -280,11 +321,17 @@ private:
         Record,
     };
     CaptureRecorderMode captureRecorderMode_ = CaptureRecorderMode::Idle;
+    CaptureScanPhase captureScanPhase_ = CaptureScanPhase::Idle;
+    CaptureScanPlan captureScanPlan_;
+    CaptureScanPhase captureMoveCompletePhase_ = CaptureScanPhase::Idle;
+    std::array<int, 2> captureBlackRefFramesCollected_ = {0, 0};
     QTimer *captureScanTimer_ = nullptr;
     std::unique_ptr<CaptureWriterWorker> captureWriterWorker_;
     QPushButton *captureRecorderStopBtn_ = nullptr;
     QPushButton *captureRecorderPreviewBtn_ = nullptr;
     QPushButton *captureRecorderRecordBtn_ = nullptr;
+    QCheckBox *captureReflectanceCheck_ = nullptr;
+    QCheckBox *captureTransmissionCheck_ = nullptr;
     QGroupBox *captureCamerasBox_ = nullptr;
     QLabel *captureCamerasEmptyLabel_ = nullptr;
     QCheckBox *captureCamera1Check_ = nullptr;

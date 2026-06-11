@@ -15,7 +15,9 @@ public:
 
     bool scanFor1208FsPlus(LighthouseDeviceInfo &deviceInfo, LighthouseError &error) const;
     bool configurePortAOutput(int boardNumber, LighthouseError &error) const;
+    bool configureAnalogInputSingleEnded(int boardNumber, LighthouseError &error) const;
     bool writeAnalogVolts(int boardNumber, int channel, float volts, LighthouseError &error) const;
+    bool readAnalogInputVolts(int boardNumber, int channel, float &volts, LighthouseError &error) const;
     bool writeDigitalBit(int boardNumber, int portBit, bool high, LighthouseError &error) const;
     bool shutdownLighthouseOutputs(int boardNumber, LighthouseError &error) const;
 
@@ -24,6 +26,9 @@ private:
     using GetConfigFn = int (*)(int, int, int, int, int *);
     using GetErrMsgFn = int (*)(int, char *);
     using VOutFn = int (*)(int, int, int, float, int);
+    using AInFn = int (*)(int, int, int, unsigned short *);
+    using ToEngUnitsFn = int (*)(int, int, unsigned short, float *);
+    using AInputModeFn = int (*)(int, int);
     using DBitOutFn = int (*)(int, int, int, unsigned short);
     using DConfigPortFn = int (*)(int, int, int);
 
@@ -34,6 +39,9 @@ private:
     GetConfigFn getConfig_ = nullptr;
     GetErrMsgFn getErrMsg_ = nullptr;
     VOutFn vOut_ = nullptr;
+    AInFn aIn_ = nullptr;
+    ToEngUnitsFn toEngUnits_ = nullptr;
+    AInputModeFn aInputMode_ = nullptr;
     DBitOutFn dBitOut_ = nullptr;
     DConfigPortFn dConfigPort_ = nullptr;
     bool loaded_ = false;

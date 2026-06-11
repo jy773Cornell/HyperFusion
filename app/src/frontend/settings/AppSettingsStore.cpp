@@ -26,10 +26,6 @@ PersistedCapturePosition AppSettingsStore::loadCapturePosition()
     position.targetLengthMm = settings.value(QStringLiteral("capture/position/targetLengthMm"), 125.0).toDouble();
     position.scanningSpeedMmPerSec =
         settings.value(QStringLiteral("capture/position/scanningSpeedMmPerSec"), 25.0).toDouble();
-    position.cameraPositionMm[0] =
-        settings.value(QStringLiteral("capture/position/camera0PositionMm"), 0.0).toDouble();
-    position.cameraPositionMm[1] =
-        settings.value(QStringLiteral("capture/position/camera1PositionMm"), 0.0).toDouble();
     return position;
 }
 
@@ -38,8 +34,6 @@ void AppSettingsStore::saveCapturePosition(const PersistedCapturePosition &posit
     QSettings &settings = storage();
     settings.setValue(QStringLiteral("capture/position/targetLengthMm"), position.targetLengthMm);
     settings.setValue(QStringLiteral("capture/position/scanningSpeedMmPerSec"), position.scanningSpeedMmPerSec);
-    settings.setValue(QStringLiteral("capture/position/camera0PositionMm"), position.cameraPositionMm[0]);
-    settings.setValue(QStringLiteral("capture/position/camera1PositionMm"), position.cameraPositionMm[1]);
 }
 
 PersistedStageConnection AppSettingsStore::loadStageConnection()
@@ -76,6 +70,23 @@ PersistedCameraSettings AppSettingsStore::loadCameraSettings(const std::size_t c
     camera.greenBandIndex = settings.value(cameraKey(cameraIndex, "greenBandIndex"), -1).toInt();
     camera.blueBandIndex = settings.value(cameraKey(cameraIndex, "blueBandIndex"), -1).toInt();
     return camera;
+}
+
+PersistedLighthouseSettings AppSettingsStore::loadLighthouseSettings()
+{
+    QSettings &settings = storage();
+    PersistedLighthouseSettings lighthouse;
+    lighthouse.reflectancePercent = settings.value(QStringLiteral("light/reflectancePercent"), 100).toInt();
+    lighthouse.transmissionPercent =
+        settings.value(QStringLiteral("light/transmissionPercent"), 40).toInt();
+    return lighthouse;
+}
+
+void AppSettingsStore::saveLighthouseSettings(const PersistedLighthouseSettings &lighthouse)
+{
+    QSettings &settings = storage();
+    settings.setValue(QStringLiteral("light/reflectancePercent"), lighthouse.reflectancePercent);
+    settings.setValue(QStringLiteral("light/transmissionPercent"), lighthouse.transmissionPercent);
 }
 
 void AppSettingsStore::saveCameraSettings(const std::size_t cameraIndex,

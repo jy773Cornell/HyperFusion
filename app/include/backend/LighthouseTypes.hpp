@@ -52,6 +52,10 @@ inline constexpr int kLighthouseRelayPortTransmission2 = 3; // Port A3
 inline constexpr int kLighthouseAnalogChannelReflectance = 0; // AO0
 inline constexpr int kLighthouseAnalogChannelTransmission = 1; // AO1
 
+// DC950 controller power monitor: Pin 1 (+5V) on AI CH0-CH3 (see docs/DC950).
+inline constexpr int kLighthousePowerMonitorChannelStart = 0;
+inline constexpr float kLighthouseControllerAliveVoltsThreshold = 3.0f;
+
 struct LighthouseError
 {
     LighthouseErrorCode code = LighthouseErrorCode::None;
@@ -64,6 +68,13 @@ struct LighthouseDeviceInfo
     std::string deviceName;
     int boardNumber = -1;
     std::string details;
+};
+
+struct LighthouseControllerPowerStatus
+{
+    std::array<float, kLighthouseLampCount> monitorVolts{};
+    std::array<bool, kLighthouseLampCount> controllerAlive{};
+    bool valid = false;
 };
 
 struct LighthouseSettings
@@ -131,4 +142,22 @@ inline int lighthouseAnalogChannelForGroup(const LighthouseIntensityGroup group)
 inline bool lighthouseRelayOutputHigh(const bool lampOn)
 {
     return !lampOn;
+}
+
+inline int lighthousePowerMonitorChannelForLamp(const LighthouseLamp lamp)
+{
+    return static_cast<int>(lamp);
+}
+
+inline bool lighthouseControllerIsAlive(const float monitorVolts)
+{
+    return monitorVolts > kLighthouseControllerAliveVoltsThreshold;
+}
+
+inline const char *lighthouseWiringDetailsText()
+{
+    return "Reflectance 1 and 2 share AO0 intensity (on/off: DIO A0, A1).\n"
+           "Transmission 1 and 2 share AO1 intensity (on/off: DIO A2, A3).\n"
+           "Relay active-low (LOW = on, HIGH = off).\n"
+           "DC950 power: AI CH0-CH3 (~5 V = controller alive).";
 }

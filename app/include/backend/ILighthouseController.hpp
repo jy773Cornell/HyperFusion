@@ -11,8 +11,10 @@ public:
     virtual LighthouseState state() const = 0;
     virtual LighthouseDeviceInfo deviceInfo() const = 0;
     virtual LighthouseSettings settings() const = 0;
+    virtual LighthouseControllerPowerStatus controllerPowerStatus() const = 0;
 
     virtual bool scan(LighthouseError &error) = 0;
+    virtual void setConnectDefaults(const LighthouseSettings &settings) = 0;
     virtual bool connect(LighthouseError &error) = 0;
     virtual void disconnect() = 0;
 
@@ -21,4 +23,6 @@ public:
                                           LighthouseError &error) = 0;
     virtual bool setLampOn(LighthouseLamp lamp, bool on, LighthouseError &error) = 0;
     virtual bool shutdownAll(LighthouseError &error) = 0;
+    virtual bool pollControllerPowerStatus(LighthouseControllerPowerStatus &status,
+                                         LighthouseError &error) = 0;
 };

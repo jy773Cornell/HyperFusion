@@ -43,17 +43,31 @@ void LighthouseWorker::requestScan()
     });
 }
 
-void LighthouseWorker::requestConnect()
+void LighthouseWorker::requestConnect(const LighthouseSettings &connectDefaults)
 {
-    enqueueCommand([this]() {
+    enqueueCommand([this, connectDefaults]() {
         LighthouseError error;
         notifyState(LighthouseState::Connecting);
+
+        if (controller_)
+            controller_->setConnectDefaults(connectDefaults);
 
         if (controller_->connect(error))
         {
             notifyDeviceInfo(controller_->deviceInfo());
             notifySettings(controller_->settings());
             notifyState(controller_->state());
+
+            LighthouseControllerPowerStatus status;
+            if (controller_->pollControllerPowerStatus(status, error))
+            {
+                powerStatus_ = status;
+                notifyPowerStatus(status);
+            }
+            else
+            {
+                notifyError(error);
+            }
             return;
         }
 
@@ -68,10 +82,13 @@ void LighthouseWorker::requestDisconnect()
         if (controller_)
         {
             LighthouseError error;
-            (void)controller_->shutdownAll(error);
+            if (controller_->state() == LighthouseState::Connected)
+                (void)controller_->shutdownAll(error);
             controller_->disconnect();
             notifyDeviceInfo(controller_->deviceInfo());
             notifySettings(controller_->settings());
+            powerStatus_ = {};
+            notifyPowerStatus(powerStatus_);
         }
 
         notifyState(LighthouseState::Disconnected);
@@ -89,10 +106,13 @@ void LighthouseWorker::shutdownSync()
         if (controller_)
         {
             LighthouseError error;
-            (void)controller_->shutdownAll(error);
+            if (controller_->state() == LighthouseState::Connected)
+                (void)controller_->shutdownAll(error);
             controller_->disconnect();
             notifyDeviceInfo(controller_->deviceInfo());
             notifySettings(controller_->settings());
+            powerStatus_ = {};
+            notifyPowerStatus(powerStatus_);
         }
 
         notifyState(LighthouseState::Disconnected);
@@ -137,6 +157,25 @@ void LighthouseWorker::requestSetLampOn(const LighthouseLamp lamp, const bool on
     });
 }
 
+void LighthouseWorker::requestPollControllerPowerStatus()
+{
+    enqueueCommand([this]() {
+        if (controller_ == nullptr || controller_->state() != LighthouseState::Connected)
+            return;
+
+        LighthouseError error;
+        LighthouseControllerPowerStatus status;
+        if (!controller_->pollControllerPowerStatus(status, error))
+        {
+            notifyError(error);
+            return;
+        }
+
+        powerStatus_ = status;
+        notifyPowerStatus(status);
+    });
+}
+
 LighthouseState LighthouseWorker::currentState() const
 {
     return controller_ ? controller_->state() : LighthouseState::Disconnected;
@@ -150,6 +189,11 @@ LighthouseDeviceInfo LighthouseWorker::currentDeviceInfo() const
 LighthouseSettings LighthouseWorker::currentSettings() const
 {
     return controller_ ? controller_->settings() : LighthouseSettings{};
+}
+
+LighthouseControllerPowerStatus LighthouseWorker::currentControllerPowerStatus() const
+{
+    return powerStatus_;
 }
 
 void LighthouseWorker::setStateCallback(StateCallback callback)
@@ -168,6 +212,12 @@ void LighthouseWorker::setSettingsCallback(SettingsCallback callback)
 {
     std::lock_guard lock(callbackMutex_);
     settingsCallback_ = std::move(callback);
+}
+
+void LighthouseWorker::setPowerStatusCallback(PowerStatusCallback callback)
+{
+    std::lock_guard lock(callbackMutex_);
+    powerStatusCallback_ = std::move(callback);
 }
 
 void LighthouseWorker::setErrorCallback(ErrorCallback callback)
@@ -247,6 +297,17 @@ void LighthouseWorker::notifySettings(const LighthouseSettings &settings)
     }
     if (callback)
         callback(settings);
+}
+
+void LighthouseWorker::notifyPowerStatus(const LighthouseControllerPowerStatus &status)
+{
+    PowerStatusCallback callback;
+    {
+        std::lock_guard lock(callbackMutex_);
+        callback = powerStatusCallback_;
+    }
+    if (callback)
+        callback(status);
 }
 
 void LighthouseWorker::notifyError(const LighthouseError &error)

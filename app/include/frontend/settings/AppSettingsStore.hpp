@@ -10,7 +10,6 @@ struct PersistedCapturePosition
 {
     double targetLengthMm = 125.0;
     double scanningSpeedMmPerSec = 25.0;
-    double cameraPositionMm[2] = {0.0, 0.0};
 };
 
 struct PersistedStageConnection
@@ -33,6 +32,12 @@ struct PersistedCameraSettings
     int blueBandIndex = -1;
 };
 
+struct PersistedLighthouseSettings
+{
+    int reflectancePercent = 100;
+    int transmissionPercent = 40;
+};
+
 class AppSettingsStore
 {
 public:
@@ -46,6 +51,9 @@ public:
 
     static PersistedCameraSettings loadCameraSettings(std::size_t cameraIndex);
     static void saveCameraSettings(std::size_t cameraIndex, const PersistedCameraSettings &settings);
+
+    static PersistedLighthouseSettings loadLighthouseSettings();
+    static void saveLighthouseSettings(const PersistedLighthouseSettings &settings);
 
     static void sync();
 };

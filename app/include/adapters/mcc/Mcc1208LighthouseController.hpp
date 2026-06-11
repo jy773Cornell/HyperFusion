@@ -17,8 +17,10 @@ public:
     LighthouseState state() const override;
     LighthouseDeviceInfo deviceInfo() const override;
     LighthouseSettings settings() const override;
+    LighthouseControllerPowerStatus controllerPowerStatus() const override;
 
     bool scan(LighthouseError &error) override;
+    void setConnectDefaults(const LighthouseSettings &settings) override;
     bool connect(LighthouseError &error) override;
     void disconnect() override;
 
@@ -27,9 +29,12 @@ public:
                                   LighthouseError &error) override;
     bool setLampOn(LighthouseLamp lamp, bool on, LighthouseError &error) override;
     bool shutdownAll(LighthouseError &error) override;
+    bool pollControllerPowerStatus(LighthouseControllerPowerStatus &status,
+                                 LighthouseError &error) override;
 
 private:
     bool ensureLibraryLoaded(LighthouseError &error);
+    bool applyConnectDefaults(LighthouseError &error);
     bool applySafeIdleOutputs(LighthouseError &error);
     static int clampPercent(int percent);
     void logMessage(const std::string &message) const;
@@ -39,6 +44,8 @@ private:
     LighthouseState state_ = LighthouseState::Disconnected;
     LighthouseDeviceInfo deviceInfo_;
     LighthouseSettings settings_;
+    LighthouseSettings connectDefaults_;
+    LighthouseControllerPowerStatus powerStatus_;
     bool deviceDetected_ = false;
     int activeBoardNumber_ = -1;
 };

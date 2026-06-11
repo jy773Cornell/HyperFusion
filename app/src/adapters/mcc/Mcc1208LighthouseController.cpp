@@ -49,6 +49,11 @@ LighthouseSettings Mcc1208LighthouseController::settings() const
     return settings_;
 }
 
+LighthouseControllerPowerStatus Mcc1208LighthouseController::controllerPowerStatus() const
+{
+    return powerStatus_;
+}
+
 bool Mcc1208LighthouseController::ensureLibraryLoaded(LighthouseError &error)
 {
     if (ul_.isLoaded())
@@ -86,6 +91,14 @@ bool Mcc1208LighthouseController::scan(LighthouseError &error)
     return true;
 }
 
+void Mcc1208LighthouseController::setConnectDefaults(const LighthouseSettings &settings)
+{
+    connectDefaults_ = settings;
+    connectDefaults_.reflectancePercent = clampPercent(connectDefaults_.reflectancePercent);
+    connectDefaults_.transmissionPercent = clampPercent(connectDefaults_.transmissionPercent);
+    connectDefaults_.lampOn.fill(true);
+}
+
 bool Mcc1208LighthouseController::connect(LighthouseError &error)
 {
     error = {};
@@ -117,13 +130,19 @@ bool Mcc1208LighthouseController::connect(LighthouseError &error)
     activeBoardNumber_ = detected.boardNumber;
     deviceInfo_ = detected;
 
+    if (!ul_.configureAnalogInputSingleEnded(activeBoardNumber_, error))
+    {
+        state_ = LighthouseState::Fault;
+        return false;
+    }
+
     if (!ul_.configurePortAOutput(activeBoardNumber_, error))
     {
         state_ = LighthouseState::Fault;
         return false;
     }
 
-    if (!applySafeIdleOutputs(error))
+    if (!applyConnectDefaults(error))
     {
         state_ = LighthouseState::Fault;
         return false;
@@ -132,7 +151,12 @@ bool Mcc1208LighthouseController::connect(LighthouseError &error)
     deviceInfo_.details = detected.details + "\nConnected. Port A configured for output.";
     state_ = LighthouseState::Connected;
     logMessage("Light backend: USB-1208FS-Plus connected on board "
-               + std::to_string(activeBoardNumber_));
+               + std::to_string(activeBoardNumber_)
+               + " — all lamps on, reflectance "
+               + std::to_string(settings_.reflectancePercent)
+               + "%, transmission "
+               + std::to_string(settings_.transmissionPercent)
+               + "%");
     return true;
 }
 
@@ -140,13 +164,44 @@ void Mcc1208LighthouseController::disconnect()
 {
     LighthouseError error;
     if (state_ == LighthouseState::Connected && activeBoardNumber_ >= 0)
-        (void)shutdownAll(error);
+    {
+        if (!shutdownAll(error))
+            logMessage("Light backend: shutdown outputs failed: " + error.message);
+    }
 
     deviceDetected_ = false;
     deviceInfo_ = {};
     activeBoardNumber_ = -1;
+    powerStatus_ = {};
     state_ = LighthouseState::Disconnected;
     logMessage("Light backend: disconnected, all outputs off");
+}
+
+bool Mcc1208LighthouseController::pollControllerPowerStatus(LighthouseControllerPowerStatus &status,
+                                                            LighthouseError &error)
+{
+    error = {};
+    status = {};
+
+    if (state_ != LighthouseState::Connected || activeBoardNumber_ < 0)
+        return true;
+
+    LighthouseControllerPowerStatus reading;
+    for (int lampIndex = 0; lampIndex < kLighthouseLampCount; ++lampIndex)
+    {
+        const int channel = lighthousePowerMonitorChannelForLamp(static_cast<LighthouseLamp>(lampIndex));
+        float volts = 0.0f;
+        if (!ul_.readAnalogInputVolts(activeBoardNumber_, channel, volts, error))
+            return false;
+
+        reading.monitorVolts[static_cast<std::size_t>(lampIndex)] = volts;
+        reading.controllerAlive[static_cast<std::size_t>(lampIndex)] = lighthouseControllerIsAlive(volts);
+    }
+
+    reading.valid = true;
+    powerStatus_ = reading;
+    status = reading;
+    return true;
 }
 
 bool Mcc1208LighthouseController::setGroupIntensityPercent(const LighthouseIntensityGroup group,
@@ -223,6 +278,50 @@ bool Mcc1208LighthouseController::shutdownAll(LighthouseError &error)
         return false;
 
     logMessage("Light backend: shutdown all outputs");
+    return true;
+}
+
+bool Mcc1208LighthouseController::applyConnectDefaults(LighthouseError &error)
+{
+    error = {};
+    if (activeBoardNumber_ < 0)
+    {
+        error.code = LighthouseErrorCode::InvalidState;
+        error.message = "USB-1208FS-Plus board number is not set.";
+        return false;
+    }
+
+    settings_.reflectancePercent = connectDefaults_.reflectancePercent;
+    settings_.transmissionPercent = connectDefaults_.transmissionPercent;
+    settings_.lampOn.fill(true);
+
+    const float reflectanceVolts =
+        static_cast<float>(percentToVolts(settings_.reflectancePercent));
+    const float transmissionVolts =
+        static_cast<float>(percentToVolts(settings_.transmissionPercent));
+
+    if (!ul_.writeAnalogVolts(activeBoardNumber_,
+                              kLighthouseAnalogChannelReflectance,
+                              reflectanceVolts,
+                              error))
+        return false;
+
+    if (!ul_.writeAnalogVolts(activeBoardNumber_,
+                              kLighthouseAnalogChannelTransmission,
+                              transmissionVolts,
+                              error))
+        return false;
+
+    for (int lampIndex = 0; lampIndex < kLighthouseLampCount; ++lampIndex)
+    {
+        const int relayPort = lighthouseRelayPortForLamp(static_cast<LighthouseLamp>(lampIndex));
+        if (!ul_.writeDigitalBit(activeBoardNumber_,
+                                 relayPort,
+                                 lighthouseRelayOutputHigh(true),
+                                 error))
+            return false;
+    }
+
     return true;
 }
 

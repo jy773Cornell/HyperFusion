@@ -18,7 +18,6 @@ constexpr int kBoardInfo = 2;
 constexpr int kGiNumBoards = 38;
 constexpr int kBiBoardType = 1;
 
-constexpr int kUni5Volts = 101;
 constexpr int kFirstPortA = 10;
 constexpr int kDigitalOut = 1;
 
@@ -88,6 +87,9 @@ void MccUniversalLibrary::unload()
     getConfig_ = nullptr;
     getErrMsg_ = nullptr;
     vOut_ = nullptr;
+    aIn_ = nullptr;
+    toEngUnits_ = nullptr;
+    aInputMode_ = nullptr;
     dBitOut_ = nullptr;
     dConfigPort_ = nullptr;
     loaded_ = false;
@@ -99,10 +101,14 @@ bool MccUniversalLibrary::resolveSymbols(LighthouseError &error)
     getConfig_ = reinterpret_cast<GetConfigFn>(GetProcAddress(module, "cbGetConfig"));
     getErrMsg_ = reinterpret_cast<GetErrMsgFn>(GetProcAddress(module, "cbGetErrMsg"));
     vOut_ = reinterpret_cast<VOutFn>(GetProcAddress(module, "cbVOut"));
+    aIn_ = reinterpret_cast<AInFn>(GetProcAddress(module, "cbAIn"));
+    toEngUnits_ = reinterpret_cast<ToEngUnitsFn>(GetProcAddress(module, "cbToEngUnits"));
+    aInputMode_ = reinterpret_cast<AInputModeFn>(GetProcAddress(module, "cbAInputMode"));
     dBitOut_ = reinterpret_cast<DBitOutFn>(GetProcAddress(module, "cbDBitOut"));
     dConfigPort_ = reinterpret_cast<DConfigPortFn>(GetProcAddress(module, "cbDConfigPort"));
 
-    if (getConfig_ == nullptr || getErrMsg_ == nullptr || vOut_ == nullptr || dBitOut_ == nullptr
+    if (getConfig_ == nullptr || getErrMsg_ == nullptr || vOut_ == nullptr || aIn_ == nullptr
+        || toEngUnits_ == nullptr || aInputMode_ == nullptr || dBitOut_ == nullptr
         || dConfigPort_ == nullptr)
     {
         error.code = LighthouseErrorCode::SdkError;
@@ -161,8 +167,7 @@ bool MccUniversalLibrary::scanFor1208FsPlus(LighthouseDeviceInfo &deviceInfo,
         deviceInfo.boardNumber = boardNumber;
         std::ostringstream details;
         details << "USB-1208FS-Plus detected (InstaCal board " << boardNumber << ").\n"
-                << "Reflectance on/off: DIO A0/A1. Transmission on/off: DIO A2/A3.\n"
-                << "Relay active-low (LOW = on). Intensity: AO0 (reflectance), AO1 (transmission).";
+                << lighthouseWiringDetailsText();
         deviceInfo.details = details.str();
         return true;
     }
@@ -171,6 +176,28 @@ bool MccUniversalLibrary::scanFor1208FsPlus(LighthouseDeviceInfo &deviceInfo,
     error.message =
         "USB-1208FS-Plus not found in InstaCal configuration. Open InstaCal and assign the device.";
     return false;
+}
+
+bool MccUniversalLibrary::configureAnalogInputSingleEnded(const int boardNumber,
+                                                          LighthouseError &error) const
+{
+    error = {};
+    if (!loaded_ || aInputMode_ == nullptr)
+    {
+        error.code = LighthouseErrorCode::InvalidState;
+        error.message = "MCC Universal Library is not loaded.";
+        return false;
+    }
+
+    const int result = aInputMode_(boardNumber, kAnalogInputModeSingleEnded);
+    if (result != kNoErrors)
+    {
+        error.code = LighthouseErrorCode::SdkError;
+        error.message = "cbAInputMode(SINGLE_ENDED): " + formatUlError(result);
+        return false;
+    }
+
+    return true;
 }
 
 bool MccUniversalLibrary::configurePortAOutput(const int boardNumber, LighthouseError &error) const
@@ -208,7 +235,7 @@ bool MccUniversalLibrary::writeAnalogVolts(const int boardNumber,
     }
 
     const float clamped = std::clamp(volts, 0.0f, kAnalogOutputVoltsMax);
-    const int result = vOut_(boardNumber, channel, kUni5Volts, clamped, 0);
+    const int result = vOut_(boardNumber, channel, kAnalogOutputRangeUni5Volts, clamped, 0);
     if (result != kNoErrors)
     {
         error.code = LighthouseErrorCode::SdkError;
@@ -216,6 +243,52 @@ bool MccUniversalLibrary::writeAnalogVolts(const int boardNumber,
         return false;
     }
 
+    return true;
+}
+
+bool MccUniversalLibrary::readAnalogInputVolts(const int boardNumber,
+                                             const int channel,
+                                             float &volts,
+                                             LighthouseError &error) const
+{
+    error = {};
+    volts = 0.0f;
+
+    if (!loaded_ || aIn_ == nullptr || toEngUnits_ == nullptr)
+    {
+        error.code = LighthouseErrorCode::InvalidState;
+        error.message = "MCC Universal Library is not loaded.";
+        return false;
+    }
+
+    if (channel < 0 || channel > 7)
+    {
+        error.code = LighthouseErrorCode::InternalError;
+        error.message = "Invalid analog input channel index.";
+        return false;
+    }
+
+    unsigned short rawValue = 0;
+    const int readResult =
+        aIn_(boardNumber, channel, kAnalogInputRangeSingleEnded10V, &rawValue);
+    if (readResult != kNoErrors)
+    {
+        error.code = LighthouseErrorCode::SdkError;
+        error.message = "cbAIn: " + formatUlError(readResult);
+        return false;
+    }
+
+    float engineeringValue = 0.0f;
+    const int convertResult =
+        toEngUnits_(boardNumber, kAnalogInputRangeSingleEnded10V, rawValue, &engineeringValue);
+    if (convertResult != kNoErrors)
+    {
+        error.code = LighthouseErrorCode::SdkError;
+        error.message = "cbToEngUnits: " + formatUlError(convertResult);
+        return false;
+    }
+
+    volts = engineeringValue;
     return true;
 }
 
