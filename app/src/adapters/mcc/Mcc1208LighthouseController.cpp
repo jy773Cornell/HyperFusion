@@ -95,7 +95,7 @@ void Mcc1208LighthouseController::setConnectDefaults(const LighthouseSettings &s
 {
     connectDefaults_ = settings;
     connectDefaults_.reflectancePercent = clampPercent(connectDefaults_.reflectancePercent);
-    connectDefaults_.transmissionPercent = clampPercent(connectDefaults_.transmissionPercent);
+    connectDefaults_.transmittancePercent = clampPercent(connectDefaults_.transmittancePercent);
     connectDefaults_.lampOn.fill(true);
 }
 
@@ -154,8 +154,8 @@ bool Mcc1208LighthouseController::connect(LighthouseError &error)
                + std::to_string(activeBoardNumber_)
                + " — all lamps on, reflectance "
                + std::to_string(settings_.reflectancePercent)
-               + "%, transmission "
-               + std::to_string(settings_.transmissionPercent)
+               + "%, transmittance "
+               + std::to_string(settings_.transmittancePercent)
                + "%");
     return true;
 }
@@ -268,7 +268,7 @@ bool Mcc1208LighthouseController::shutdownAll(LighthouseError &error)
     error = {};
 
     settings_.reflectancePercent = 0;
-    settings_.transmissionPercent = 0;
+    settings_.transmittancePercent = 0;
     settings_.lampOn.fill(false);
 
     if (state_ != LighthouseState::Connected || activeBoardNumber_ < 0)
@@ -292,13 +292,13 @@ bool Mcc1208LighthouseController::applyConnectDefaults(LighthouseError &error)
     }
 
     settings_.reflectancePercent = connectDefaults_.reflectancePercent;
-    settings_.transmissionPercent = connectDefaults_.transmissionPercent;
+    settings_.transmittancePercent = connectDefaults_.transmittancePercent;
     settings_.lampOn.fill(true);
 
     const float reflectanceVolts =
         static_cast<float>(percentToVolts(settings_.reflectancePercent));
-    const float transmissionVolts =
-        static_cast<float>(percentToVolts(settings_.transmissionPercent));
+    const float transmittanceVolts =
+        static_cast<float>(percentToVolts(settings_.transmittancePercent));
 
     if (!ul_.writeAnalogVolts(activeBoardNumber_,
                               kLighthouseAnalogChannelReflectance,
@@ -307,8 +307,8 @@ bool Mcc1208LighthouseController::applyConnectDefaults(LighthouseError &error)
         return false;
 
     if (!ul_.writeAnalogVolts(activeBoardNumber_,
-                              kLighthouseAnalogChannelTransmission,
-                              transmissionVolts,
+                              kLighthouseAnalogChannelTransmittance,
+                              transmittanceVolts,
                               error))
         return false;
 
@@ -329,7 +329,7 @@ bool Mcc1208LighthouseController::applySafeIdleOutputs(LighthouseError &error)
 {
     error = {};
     settings_.reflectancePercent = 0;
-    settings_.transmissionPercent = 0;
+    settings_.transmittancePercent = 0;
     settings_.lampOn.fill(false);
 
     if (activeBoardNumber_ < 0)

@@ -76,7 +76,7 @@ bool ZaberStageController::connect(const StageConnectSettings &settings, StageEr
         topology.portName = settings.portName;
         topology.baudRate = settings.baudRate;
 
-        if (!ZaberStageConfigurator::prepare(connection, topology, error))
+        if (!ZaberStageConfigurator::prepare(connection, topology, error, settings.motionAccelerationMmPerSec2))
         {
             connection.close();
             state_ = StageState::Fault;
@@ -92,6 +92,7 @@ bool ZaberStageController::connect(const StageConnectSettings &settings, StageEr
 
         connection_ = std::move(connection);
         topology_ = std::move(topology);
+        motionAccelerationMmPerSec2_ = topology_.motionAccelerationMmPerSec2;
         state_ = StageState::Homing;
         return true;
     }
@@ -264,7 +265,8 @@ bool ZaberStageController::moveRelativeMm(const double distanceMm,
         zaber::motion::ascii::Device device =
             connection_->getDevice(zaber_stage::kDeviceAddress);
         zaber::motion::ascii::Lockstep lockstep = ZaberStageMotion::requireEnabledLockstep(device, error);
-        return ZaberStageMotion::moveRelativeMm(lockstep, distanceMm, error, false, speedMmPerSec);
+        return ZaberStageMotion::moveRelativeMm(
+            lockstep, distanceMm, error, false, speedMmPerSec, motionAccelerationMmPerSec2_);
     }
     catch (const std::exception &)
     {
@@ -291,7 +293,8 @@ bool ZaberStageController::moveAbsoluteMm(const double positionMm,
         zaber::motion::ascii::Device device =
             connection_->getDevice(zaber_stage::kDeviceAddress);
         zaber::motion::ascii::Lockstep lockstep = ZaberStageMotion::requireEnabledLockstep(device, error);
-        return ZaberStageMotion::moveAbsoluteMm(lockstep, positionMm, error, waitUntilIdle, speedMmPerSec);
+        return ZaberStageMotion::moveAbsoluteMm(
+            lockstep, positionMm, error, waitUntilIdle, speedMmPerSec, motionAccelerationMmPerSec2_);
     }
     catch (const std::exception &)
     {
@@ -315,7 +318,7 @@ bool ZaberStageController::moveVelocityMm(const double velocityMmPerSec, StageEr
         zaber::motion::ascii::Device device =
             connection_->getDevice(zaber_stage::kDeviceAddress);
         zaber::motion::ascii::Lockstep lockstep = ZaberStageMotion::requireEnabledLockstep(device, error);
-        return ZaberStageMotion::moveVelocityMm(lockstep, velocityMmPerSec, error);
+        return ZaberStageMotion::moveVelocityMm(lockstep, velocityMmPerSec, error, motionAccelerationMmPerSec2_);
     }
     catch (const std::exception &)
     {
@@ -397,5 +400,6 @@ void ZaberStageController::disconnect()
 #endif
 
     topology_ = {};
+    motionAccelerationMmPerSec2_ = zaber_stage::kDefaultMotionAccelerationMmPerSec2;
     state_ = StageState::Disconnected;
 }

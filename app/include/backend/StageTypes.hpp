@@ -33,6 +33,8 @@ struct StageConnectSettings
 {
     std::string portName;
     int baudRate = 115200;
+    /// Trapezoidal profile acceleration (mm/s²) applied to both axes on connect and all lockstep moves.
+    double motionAccelerationMmPerSec2 = 0.0;
 };
 
 struct StageAxisInfo
@@ -68,5 +70,7 @@ struct StageTopology
     std::string stageType;
     bool axesHomed = false;
     double maxSpeedMmPerSec = 0.0;
+    double motionAccelerationRequestedMmPerSec2 = 0.0;
+    double motionAccelerationMmPerSec2 = 0.0;
     double lockstepSecondaryOffsetMm = 0.0;
 };

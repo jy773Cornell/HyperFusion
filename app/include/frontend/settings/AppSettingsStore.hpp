@@ -35,7 +35,7 @@ struct PersistedCameraSettings
 struct PersistedLighthouseSettings
 {
     int reflectancePercent = 100;
-    int transmissionPercent = 40;
+    int transmittancePercent = 40;
 };
 
 class AppSettingsStore

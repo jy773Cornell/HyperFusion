@@ -167,19 +167,23 @@ private:
     void updateCaptureCameraPositionRows();
     void updateCapturePositionControls(StageState state);
     void updateCaptureRecorderControls();
+    void updateCaptureScanningSpeedControls();
     struct CaptureScanPlan
     {
         double referencePositionMm = 0.0;
         double whiteReferenceScanLengthMm = 0.0;
-        double sampleStartPositionMm = 0.0;
+        double transmittanceWhiteRefStartPositionMm = 0.0;
+        double sampleScanStartPositionMm = 0.0;
         double sampleScanLengthMm = 0.0;
-        double scanSpeedMmPerSec = 0.0;
+        double operationSpeedMmPerSec = 0.0;
+        double recordScanSpeedMmPerSec = 0.0;
         int blackReferenceFrameCount = 0;
     };
     enum class CaptureScanPhase
     {
         Idle,
         MoveToReferencePosition,
+        MoveToTransmittanceWhiteRef,
         BlackReference,
         WhiteReferenceScan,
         MoveToSampleStart,
@@ -188,8 +192,18 @@ private:
     bool buildCaptureScanPlan(CaptureScanPlan &plan, QString &errorMessage) const;
     QString captureSequenceLogPrefix() const;
     void resetCaptureSequenceState();
+    void initializeCaptureModeQueue();
+    bool confirmCaptureStart(const LighthouseControllerPowerStatus &powerStatus) const;
+    void saveCaptureRecordLighthouseBaseline();
+    void applyCaptureRecordLighthouseIntensitiesForMode(CaptureIlluminationMode mode);
+    void restoreCaptureRecordLighthouseIntensities();
+    void startCurrentCaptureMode();
+    void beginCaptureModeMotion();
+    void completeCaptureModeSequence();
     void startCaptureSequence();
-    void requestCaptureAbsoluteMove(double positionMm, CaptureScanPhase expectedPhaseOnComplete);
+    void requestCaptureAbsoluteMove(double positionMm,
+                                    CaptureScanPhase expectedPhaseOnComplete,
+                                    double speedMmPerSec = 0.0);
     void onCaptureAbsoluteMoveComplete(bool success);
     void beginCaptureBlackReference();
     void onCaptureBlackReferenceComplete();
@@ -203,6 +217,12 @@ private:
     bool selectedCamerasReachedBlackReferenceTarget() const;
     bool validateCaptureRecordMetadata(QString &errorMessage) const;
     bool selectedCaptureCameraIndices(std::vector<std::size_t> &cameraIndices) const;
+    bool selectedCaptureIlluminationModes(std::vector<CaptureIlluminationMode> &modes) const;
+    QString captureIlluminationFolderName(CaptureIlluminationMode mode) const;
+    QString captureCameraFolderName(const LumoCameraUi &ui) const;
+    QString captureStreamRelativeRoot(CaptureIlluminationMode mode, const LumoCameraUi &ui) const;
+    bool resolveCaptureRecordingIlluminationMode(CaptureIlluminationMode &mode,
+                                                 QString &errorMessage) const;
     bool selectedCaptureCameraStreaming(QString &errorMessage) const;
     double closestSelectedCaptureCameraPositionMm(bool *hasSelection) const;
     double closestCaptureCameraPositionMm(bool *hasPosition) const;
@@ -214,7 +234,8 @@ private:
     void startCaptureRecord();
     void stopCaptureRecorder();
     void finishCaptureScan();
-    void homeStageAfterCapturePreview();
+    void homeStageAfterCapture();
+    void homeStageBeforeCapture();
     void loadHardwareConfig();
     void applyHardwareConfigToUi();
     void loadPersistedUiSettings();
@@ -303,7 +324,8 @@ private:
         BeforeDisconnect,
         Localization,
         Simple,
-        AfterPreview,
+        BeforeCapture,
+        AfterCapture,
     };
     StageHomingKind stageHomingKind_ = StageHomingKind::None;
     std::unique_ptr<StageWorker> stageWorker_;
@@ -324,6 +346,12 @@ private:
     CaptureScanPhase captureScanPhase_ = CaptureScanPhase::Idle;
     CaptureScanPlan captureScanPlan_;
     CaptureScanPhase captureMoveCompletePhase_ = CaptureScanPhase::Idle;
+    CaptureIlluminationMode captureRecordingIlluminationMode_ = CaptureIlluminationMode::Reflectance;
+    std::vector<CaptureIlluminationMode> capturePendingIlluminationModes_;
+    std::size_t captureCurrentModeIndex_ = 0;
+    bool captureLighthouseBaselineSaved_ = false;
+    int captureSavedReflectancePercent_ = 0;
+    int captureSavedTransmittancePercent_ = 0;
     std::array<int, 2> captureBlackRefFramesCollected_ = {0, 0};
     QTimer *captureScanTimer_ = nullptr;
     std::unique_ptr<CaptureWriterWorker> captureWriterWorker_;
@@ -331,7 +359,7 @@ private:
     QPushButton *captureRecorderPreviewBtn_ = nullptr;
     QPushButton *captureRecorderRecordBtn_ = nullptr;
     QCheckBox *captureReflectanceCheck_ = nullptr;
-    QCheckBox *captureTransmissionCheck_ = nullptr;
+    QCheckBox *captureTransmittanceCheck_ = nullptr;
     QGroupBox *captureCamerasBox_ = nullptr;
     QLabel *captureCamerasEmptyLabel_ = nullptr;
     QCheckBox *captureCamera1Check_ = nullptr;
@@ -340,6 +368,7 @@ private:
     QDoubleSpinBox *captureCameraPositionSpins_[2] = {nullptr, nullptr};
     QDoubleSpinBox *captureTargetLengthSpin_ = nullptr;
     QDoubleSpinBox *captureScanningSpeedSpin_ = nullptr;
+    QCheckBox *captureScanningSpeedAutoCheck_ = nullptr;
     QCheckBox *captureStageConnectedCheck_ = nullptr;
     QWidget *capturePositionContent_ = nullptr;
     QTimer *settingsSaveTimer_ = nullptr;
@@ -353,6 +382,7 @@ private:
     LumoCameraUi camera1Ui_;
     LumoCameraUi camera2Ui_;
     bool gracefulShutdownDone_ = false;
+    bool performingGracefulShutdown_ = false;
 
 private slots:
     void onCameraSettingsTabChanged(int index);

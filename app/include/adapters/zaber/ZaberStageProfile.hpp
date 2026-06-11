@@ -16,6 +16,9 @@ constexpr double kTravelMinimumMm = 0.0;
 // All HyperFusion commanded motion uses this speed except Capture scanning (user-set)
 // and homing (ZML lockstep.home() — SDK/firmware approach settings).
 constexpr double kMaxSpeedMmPerSec = 100.0;
+/// Axis accel + per-move Lockstep acceleration (mm/s²). Lower = gentler start/stop.
+/// ZML: accel setting; move options acceleration=0 falls back to this value.
+constexpr double kDefaultMotionAccelerationMmPerSec2 = 30.0;
 constexpr double kHomeOffsetMm = 0.0;
 constexpr double kLockstepSecondaryOffsetMm = 0.0;
 

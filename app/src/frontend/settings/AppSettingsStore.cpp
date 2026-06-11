@@ -77,8 +77,10 @@ PersistedLighthouseSettings AppSettingsStore::loadLighthouseSettings()
     QSettings &settings = storage();
     PersistedLighthouseSettings lighthouse;
     lighthouse.reflectancePercent = settings.value(QStringLiteral("light/reflectancePercent"), 100).toInt();
-    lighthouse.transmissionPercent =
-        settings.value(QStringLiteral("light/transmissionPercent"), 40).toInt();
+    lighthouse.transmittancePercent =
+        settings.value(QStringLiteral("light/transmittancePercent"),
+                       settings.value(QStringLiteral("light/transmissionPercent"), 40))
+            .toInt();
     return lighthouse;
 }
 
@@ -86,7 +88,7 @@ void AppSettingsStore::saveLighthouseSettings(const PersistedLighthouseSettings 
 {
     QSettings &settings = storage();
     settings.setValue(QStringLiteral("light/reflectancePercent"), lighthouse.reflectancePercent);
-    settings.setValue(QStringLiteral("light/transmissionPercent"), lighthouse.transmissionPercent);
+    settings.setValue(QStringLiteral("light/transmittancePercent"), lighthouse.transmittancePercent);
 }
 
 void AppSettingsStore::saveCameraSettings(const std::size_t cameraIndex,

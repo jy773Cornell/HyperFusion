@@ -2,6 +2,8 @@
 
 #include "backend/IStageController.hpp"
 
+#include "adapters/zaber/ZaberStageProfile.hpp"
+
 #include <optional>
 
 #ifdef HF_HAVE_ZML
@@ -40,4 +42,5 @@ private:
 #endif
     StageState state_ = StageState::Disconnected;
     StageTopology topology_;
+    double motionAccelerationMmPerSec2_ = zaber_stage::kDefaultMotionAccelerationMmPerSec2;
 };

@@ -19,6 +19,7 @@ Lockstep::MoveRelativeOptions makeMoveRelativeOptions(const bool waitUntilIdle, 
     options.waitUntilIdle = waitUntilIdle;
     options.velocity = speedMmPerSec;
     options.velocityUnit = Units::VELOCITY_MILLIMETRES_PER_SECOND;
+    // acceleration left at 0 → use axis accel setting (set at connect).
     return options;
 }
 
@@ -63,7 +64,8 @@ bool ZaberStageMotion::moveRelativeMm(zaber::motion::ascii::Lockstep &lockstep,
                                       const double distanceMm,
                                       StageError &error,
                                       const bool waitUntilIdle,
-                                      const double speedMmPerSec)
+                                      const double speedMmPerSec,
+                                      const double /*accelerationMmPerSec2*/)
 {
     try
     {
@@ -88,7 +90,8 @@ bool ZaberStageMotion::moveAbsoluteMm(zaber::motion::ascii::Lockstep &lockstep,
                                       const double positionMm,
                                       StageError &error,
                                       const bool waitUntilIdle,
-                                      const double speedMmPerSec)
+                                      const double speedMmPerSec,
+                                      const double /*accelerationMmPerSec2*/)
 {
     try
     {
@@ -135,7 +138,7 @@ bool ZaberStageMotion::stopLockstep(zaber::motion::ascii::Lockstep &lockstep, St
     try
     {
         Lockstep::StopOptions options;
-        options.waitUntilIdle = false;
+        options.waitUntilIdle = true;
         lockstep.stop(options);
         return true;
     }
@@ -153,7 +156,8 @@ bool ZaberStageMotion::stopLockstep(zaber::motion::ascii::Lockstep &lockstep, St
 
 bool ZaberStageMotion::moveVelocityMm(zaber::motion::ascii::Lockstep &lockstep,
                                       const double velocityMmPerSec,
-                                      StageError &error)
+                                      StageError &error,
+                                      const double /*accelerationMmPerSec2*/)
 {
     try
     {

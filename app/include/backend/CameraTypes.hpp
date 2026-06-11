@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 
+#include <QString>
+
 enum class CameraBackendId
 {
     Camera1,
@@ -89,9 +91,19 @@ struct CameraSettingsApplyReport
     CameraTimingApplyResult timing;
 };
 
+enum class CaptureFrameDestination
+{
+    Sample,
+    BlackReference,
+    WhiteReference,
+};
+
 struct FramePacket
 {
     CameraBackendId source = CameraBackendId::Camera1;
+    /// Lumo writer stream key (e.g. "reflectance/fx10e"). Empty uses legacy camera-only routing.
+    QString captureStreamKey;
+    CaptureFrameDestination captureDestination = CaptureFrameDestination::Sample;
     std::uint64_t frameIndex = 0;
     std::uint64_t hostTimestampNs = 0;
     int width = 0;

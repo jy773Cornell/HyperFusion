@@ -160,6 +160,16 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 else
                     config.sampleWindowLengthMm = numericValue;
             }
+            else if (key == QStringLiteral("scanning_starting_position_mm"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(
+                        QStringLiteral("Invalid scanning_starting_position_mm: %1").arg(value));
+                else if (numericValue < 0.0)
+                    warnings.push_back(QStringLiteral("scanning_starting_position_mm must be >= 0"));
+                else
+                    config.scanningStartingPositionMm = numericValue;
+            }
             else
             {
                 warnings.push_back(QStringLiteral("Unknown key in [sample_stage_position]: %1").arg(key));
@@ -176,6 +186,16 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                     warnings.push_back(QStringLiteral("operation_scanning_speed_mm_per_sec must be > 0"));
                 else
                     config.operationScanningSpeedMmPerSec = numericValue;
+            }
+            else if (key == QStringLiteral("record_scanning_speed_mm_per_sec")
+                     || key == QStringLiteral("scanning_speed_mm_per_sec"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid record_scanning_speed_mm_per_sec: %1").arg(value));
+                else if (numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral("record_scanning_speed_mm_per_sec must be > 0"));
+                else
+                    config.recordScanningSpeedMmPerSec = numericValue;
             }
             else if (key == QStringLiteral("white_reference_scanning_length_mm"))
             {
@@ -232,7 +252,15 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
         else if (section == QStringLiteral("lighthouse"))
         {
             int percent = 0;
-            if (key == QStringLiteral("reflectance_percent") || key == QStringLiteral("reflectance_percent_default")
+            if (key == QStringLiteral("idle_intensity_percent"))
+            {
+                if (!parsePercent(value, percent))
+                    warnings.push_back(
+                        QStringLiteral("Invalid lighthouse idle_intensity_percent: %1").arg(value));
+                else
+                    config.lighthouseIdleIntensityPercent = percent;
+            }
+            else if (key == QStringLiteral("reflectance_percent") || key == QStringLiteral("reflectance_percent_default")
                 || key == QStringLiteral("reflectance_intensity_percent"))
             {
                 if (!parsePercent(value, percent))
@@ -240,18 +268,46 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 else
                     config.lighthouseReflectancePercent = percent;
             }
-            else if (key == QStringLiteral("transmission_percent")
+            else if (key == QStringLiteral("transmittance_intensity_percent")
+                     || key == QStringLiteral("transmission_percent")
                      || key == QStringLiteral("transmission_percent_default")
                      || key == QStringLiteral("transmission_intensity_percent"))
             {
                 if (!parsePercent(value, percent))
-                    warnings.push_back(QStringLiteral("Invalid lighthouse transmission_percent: %1").arg(value));
+                    warnings.push_back(
+                        QStringLiteral("Invalid lighthouse transmittance_intensity_percent: %1").arg(value));
                 else
-                    config.lighthouseTransmissionPercent = percent;
+                    config.lighthouseTransmittancePercent = percent;
             }
             else
             {
                 warnings.push_back(QStringLiteral("Unknown key in [lighthouse]: %1").arg(key));
+            }
+        }
+        else if (section == QStringLiteral("stage_motion"))
+        {
+            if (key == QStringLiteral("acceleration_mm_per_sec2"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(
+                        QStringLiteral("Invalid stage_motion acceleration_mm_per_sec2: %1").arg(value));
+                else if (numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral("stage_motion acceleration_mm_per_sec2 must be > 0"));
+                else
+                {
+                    config.stageMotionAccelerationMmPerSec2 = numericValue;
+                    if (numericValue < 20.0)
+                    {
+                        warnings.push_back(
+                            QStringLiteral("stage_motion acceleration_mm_per_sec2=%1 may round to zero on NMS23; "
+                                           "effective value will be raised at connect")
+                                .arg(numericValue));
+                    }
+                }
+            }
+            else
+            {
+                warnings.push_back(QStringLiteral("Unknown key in [stage_motion]: %1").arg(key));
             }
         }
         else if (section.isEmpty())
@@ -308,19 +364,28 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "[sample_stage_position]\n"
         << "front_edge_sample_window_mm = 760\n"
         << "sample_window_length_mm = 550\n"
+        << "scanning_starting_position_mm = 810\n"
         << "\n"
         << "[scanning_settings]\n"
+        << "# All stage move speeds during preview/record.\n"
         << "operation_scanning_speed_mm_per_sec = 100\n"
         << "white_reference_scanning_length_mm = 10\n"
         << "black_reference_frames = 100\n"
+        << "# White-reference and sample scan legs during preview/record.\n"
+        << "record_scanning_speed_mm_per_sec = 15\n"
         << "\n"
         << "[calibration]\n"
         << "# Spatial scale along the scan axis (mm per detector pixel).\n"
         << "spatial_mm_per_pixel = 0.050\n"
         << "\n"
         << "[lighthouse]\n"
+        << "idle_intensity_percent = 0\n"
         << "reflectance_intensity_percent = 100\n"
-        << "transmission_intensity_percent = 40\n";
+        << "transmittance_intensity_percent = 40\n"
+        << "\n"
+        << "[stage_motion]\n"
+        << "# Trapezoidal accel for lockstep moves and stop deceleration (mm/s²). Lower = gentler.\n"
+        << "acceleration_mm_per_sec2 = 30\n";
 
     if (!file.commit())
     {

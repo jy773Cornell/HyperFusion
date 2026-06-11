@@ -17,6 +17,7 @@ namespace
 {
 #ifdef HF_HAVE_ZML
 using zaber::motion::Units;
+using zaber::motion::ascii::setting_constants::ACCEL;
 using zaber::motion::ascii::setting_constants::LIMIT_HOME_OFFSET;
 using zaber::motion::ascii::setting_constants::LIMIT_MAX;
 using zaber::motion::ascii::setting_constants::LIMIT_MIN;
@@ -128,6 +129,47 @@ void applyMotionSpeedLimits(zaber::motion::ascii::Axis &axis)
     settings.set(MAXSPEED, zaber_stage::kMaxSpeedMmPerSec, Units::VELOCITY_MILLIMETRES_PER_SECOND);
 }
 
+void applyMotionAcceleration(zaber::motion::ascii::Axis &axis, const double accelerationMmPerSec2)
+{
+    zaber::motion::ascii::AxisSettings settings = axis.getSettings();
+    settings.set(ACCEL, accelerationMmPerSec2, Units::ACCELERATION_MILLIMETRES_PER_SECOND_SQUARED);
+}
+
+double nativeRoundedAcceleration(zaber::motion::ascii::AxisSettings &settings, const double accelerationMmPerSec2)
+{
+    return settings.convertToNativeUnits(
+        ACCEL, accelerationMmPerSec2, Units::ACCELERATION_MILLIMETRES_PER_SECOND_SQUARED, true);
+}
+
+double resolveMotionAccelerationMmPerSec2(zaber::motion::ascii::Axis &axis, const double requestedMmPerSec2)
+{
+    zaber::motion::ascii::AxisSettings settings = axis.getSettings();
+    const double requested = requestedMmPerSec2 > 0.0 ? requestedMmPerSec2
+                                                        : zaber_stage::kDefaultMotionAccelerationMmPerSec2;
+
+    if (nativeRoundedAcceleration(settings, requested) > 0.0)
+        return requested;
+
+    double low = requested;
+    double high = std::max(requested * 4.0, 100.0);
+    while (nativeRoundedAcceleration(settings, high) <= 0.0 && high < 50000.0)
+        high *= 2.0;
+
+    if (nativeRoundedAcceleration(settings, high) <= 0.0)
+        return settings.getDefault(ACCEL, Units::ACCELERATION_MILLIMETRES_PER_SECOND_SQUARED);
+
+    for (int iteration = 0; iteration < 48; ++iteration)
+    {
+        const double mid = (low + high) * 0.5;
+        if (nativeRoundedAcceleration(settings, mid) > 0.0)
+            high = mid;
+        else
+            low = mid;
+    }
+
+    return high;
+}
+
 void disableLockstepIfEnabled(zaber::motion::ascii::Device &device)
 {
     zaber::motion::ascii::Lockstep lockstep = device.getLockstep(zaber_stage::kLockstepGroupId);
@@ -135,13 +177,14 @@ void disableLockstepIfEnabled(zaber::motion::ascii::Device &device)
         lockstep.disable();
 }
 
-void applyTravelLimitsToStageAxes(zaber::motion::ascii::Device &device)
+void applyTravelLimitsToStageAxes(zaber::motion::ascii::Device &device, const double accelerationMmPerSec2)
 {
     for (int axisNumber = 1; axisNumber <= zaber_stage::kAxisCount; ++axisNumber)
     {
         zaber::motion::ascii::Axis axis = device.getAxis(axisNumber);
         applyTravelLimits(axis);
         applyMotionSpeedLimits(axis);
+        applyMotionAcceleration(axis, accelerationMmPerSec2);
     }
 }
 
@@ -163,21 +206,33 @@ void alignAxesForZeroLockstepOffset(zaber::motion::ascii::Device &device)
 #ifdef HF_HAVE_ZML
 bool ZaberStageConfigurator::prepare(zaber::motion::ascii::Connection &connection,
                                      StageTopology &topology,
-                                     StageError &error)
+                                     StageError &error,
+                                     const double motionAccelerationMmPerSec2)
 {
     topology.lockstepEnabled = false;
     topology.axesHomed = false;
+
+    const double requestedAccelerationMmPerSec2 =
+        motionAccelerationMmPerSec2 > 0.0 ? motionAccelerationMmPerSec2
+                                          : zaber_stage::kDefaultMotionAccelerationMmPerSec2;
 
     zaber::motion::ascii::Device device = connection.getDevice(zaber_stage::kDeviceAddress);
     if (!validateStageDevice(device, error))
         return false;
 
     disableLockstepIfEnabled(device);
-    applyTravelLimitsToStageAxes(device);
+
+    zaber::motion::ascii::Axis primaryAxis = device.getAxis(zaber_stage::kPrimaryAxisNumber);
+    const double accelerationMmPerSec2 =
+        resolveMotionAccelerationMmPerSec2(primaryAxis, requestedAccelerationMmPerSec2);
+
+    applyTravelLimitsToStageAxes(device, accelerationMmPerSec2);
 
     topology.travelLengthMm = zaber_stage::kTravelLengthMm;
     topology.stageType = zaber_stage::kStageType;
     topology.maxSpeedMmPerSec = zaber_stage::kMaxSpeedMmPerSec;
+    topology.motionAccelerationRequestedMmPerSec2 = requestedAccelerationMmPerSec2;
+    topology.motionAccelerationMmPerSec2 = accelerationMmPerSec2;
     topology.devices.clear();
     topology.devices.push_back(buildStageDeviceInfo(device));
     return true;

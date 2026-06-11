@@ -26,13 +26,15 @@ public:
                                double distanceMm,
                                StageError &error,
                                bool waitUntilIdle = true,
-                               double speedMmPerSec = zaber_stage::kMaxSpeedMmPerSec);
+                               double speedMmPerSec = zaber_stage::kMaxSpeedMmPerSec,
+                               double accelerationMmPerSec2 = zaber_stage::kDefaultMotionAccelerationMmPerSec2);
 
     static bool moveAbsoluteMm(zaber::motion::ascii::Lockstep &lockstep,
                                double positionMm,
                                StageError &error,
                                bool waitUntilIdle = true,
-                               double speedMmPerSec = zaber_stage::kMaxSpeedMmPerSec);
+                               double speedMmPerSec = zaber_stage::kMaxSpeedMmPerSec,
+                               double accelerationMmPerSec2 = zaber_stage::kDefaultMotionAccelerationMmPerSec2);
 
     static bool homeLockstep(zaber::motion::ascii::Lockstep &lockstep, StageError &error);
 
@@ -40,7 +42,8 @@ public:
 
     static bool moveVelocityMm(zaber::motion::ascii::Lockstep &lockstep,
                                double velocityMmPerSec,
-                               StageError &error);
+                               StageError &error,
+                               double accelerationMmPerSec2 = zaber_stage::kDefaultMotionAccelerationMmPerSec2);
 
     static bool getPrimaryPositionMm(zaber::motion::ascii::Lockstep &lockstep,
                                      double &positionMm,

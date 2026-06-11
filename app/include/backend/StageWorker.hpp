@@ -29,7 +29,8 @@ public:
     /// Home lockstep (if connected), then disconnect. Optional callback runs on the worker thread.
     void requestDisconnectWithHoming(std::function<void()> onComplete = nullptr);
     /// Home (if connected), disconnect, and stop the worker thread.
-    void shutdownSync();
+    /// When @p homeBeforeDisconnect is false, motion is stopped and the stage disconnects immediately.
+    void shutdownSync(bool homeBeforeDisconnect = true);
     void requestStopMotion();
     void requestHome();
     void requestMoveRelativeMm(double distanceMm,

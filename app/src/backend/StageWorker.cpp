@@ -83,19 +83,23 @@ void StageWorker::requestDisconnectWithHoming(std::function<void()> onComplete)
     });
 }
 
-void StageWorker::shutdownSync()
+void StageWorker::shutdownSync(const bool homeBeforeDisconnect)
 {
     if (!running_.load())
         return;
 
     std::promise<void> done;
     auto future = done.get_future();
-    enqueuePriorityCommand([this, &done]() {
+    enqueuePriorityCommand([this, homeBeforeDisconnect, &done]() {
         if (controller_ && controller_->state() == StageState::Connected)
         {
-            notifyState(StageState::Homing);
-            StageError error;
-            (void)controller_->home(error);
+            controller_->stopMotion();
+            if (homeBeforeDisconnect)
+            {
+                notifyState(StageState::Homing);
+                StageError error;
+                (void)controller_->home(error);
+            }
         }
 
         if (controller_)

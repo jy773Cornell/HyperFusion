@@ -332,7 +332,7 @@ bool MccUniversalLibrary::shutdownLighthouseOutputs(const int boardNumber,
             return false;
     }
 
-    for (const int channel : {kLighthouseAnalogChannelReflectance, kLighthouseAnalogChannelTransmission})
+    for (const int channel : {kLighthouseAnalogChannelReflectance, kLighthouseAnalogChannelTransmittance})
     {
         if (!writeAnalogVolts(boardNumber, channel, 0.0f, error))
             return false;

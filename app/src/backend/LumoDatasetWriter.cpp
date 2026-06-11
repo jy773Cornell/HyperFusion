@@ -38,6 +38,24 @@ QString sensorTypeLabel(const CaptureWriterStreamConfig &config)
     return config.streamName + QStringLiteral(" , HyperFusion");
 }
 
+QString illuminationModeLabel(const CaptureIlluminationMode mode)
+{
+    return mode == CaptureIlluminationMode::Reflectance ? QStringLiteral("reflectance")
+                                                        : QStringLiteral("transmittance");
+}
+
+QString sampleCaptureBaseName(const QString &datasetName, const CaptureIlluminationMode mode)
+{
+    return QStringLiteral("%1_%2").arg(datasetName, illuminationModeLabel(mode));
+}
+
+QString referenceCaptureBaseName(const QString &prefix,
+                                 const QString &datasetName,
+                                 const CaptureIlluminationMode mode)
+{
+    return QStringLiteral("%1_%2").arg(prefix, sampleCaptureBaseName(datasetName, mode));
+}
+
 void appendWavelengthBlock(QTextStream &out, const std::vector<SpectralBand> &bands, const int bandCount)
 {
     out << "Wavelength = {\n";
@@ -79,6 +97,63 @@ void appendFwhmBlock(QTextStream &out, const std::vector<SpectralBand> &bands, c
     }
     out << "\n}\n";
 }
+
+bool writeEnviHdrFile(const QString &hdrPath,
+                      const CaptureWriterStreamConfig &config,
+                      const int width,
+                      const int bands,
+                      const std::uint64_t lineCount,
+                      const QDateTime &sessionStartedUtc,
+                      const QDateTime &startUtc,
+                      const QDateTime &stopUtc)
+{
+    QSaveFile file(hdrPath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+
+    QTextStream out(&file);
+    out.setRealNumberNotation(QTextStream::FixedNotation);
+
+    const QDateTime start = startUtc.isValid() ? startUtc : sessionStartedUtc;
+    const QDateTime stop = stopUtc.isValid() ? stopUtc : start;
+
+    out << "ENVI\n";
+    out << "description = {\nFile Imported into ENVI}\n";
+    out << "file type = ENVI\n\n";
+    out << "sensor type = " << sensorTypeLabel(config) << "\n";
+    out << "acquisition date = DATE(yyyy-mm-dd): "
+        << start.toLocalTime().toString(QStringLiteral("yyyy-MM-dd")) << "\n";
+    out << "Start Time = UTC TIME: " << start.toLocalTime().toString(QStringLiteral("HH:mm:ss")) << "\n";
+    out << "Stop Time = UTC TIME: " << stop.toLocalTime().toString(QStringLiteral("HH:mm:ss")) << "\n\n";
+    out << "samples = " << width << "\n";
+    out << "bands = " << bands << "\n";
+    out << "lines = " << lineCount << "\n\n";
+    out << "errors = {none}\n\n";
+    out << "interleave = bil\n";
+    out << "data type = 12\n";
+    out << "header offset = 0\n";
+    out << "byte order = 0\n";
+    out << "x start = 0\n";
+    out << "y start = 0\n";
+    out << "default bands = {227, 118, 42}\n\n";
+    out << "himg = {1, " << width << "}\n";
+    out << "vimg = {1, " << bands << "}\n";
+    out << "hroi = {1, " << width << "}\n";
+    out << "vroi = {1, " << bands << "}\n\n";
+    out << "fps = " << QString::number(config.settings.frameRateHz, 'f', 2) << "\n";
+    out << "tint = " << QString::number(config.settings.exposureMs, 'f', 6) << "\n";
+    out << "binning = {" << config.settings.spatialBinning << ", " << config.settings.spectralBinning
+        << "}\n";
+    out << "trigger mode = "
+        << (config.settings.externalTrigger ? QStringLiteral("External") : QStringLiteral("Internal"))
+        << "\n";
+    if (!config.calibrationPackPath.isEmpty())
+        out << "calibration pack = " << config.calibrationPackPath << "\n";
+    out << "\n";
+    appendWavelengthBlock(out, config.spectralBands, bands);
+    appendFwhmBlock(out, config.spectralBands, bands);
+    return file.commit();
+}
 } // namespace
 
 LumoDatasetWriter::~LumoDatasetWriter()
@@ -94,6 +169,14 @@ bool LumoDatasetWriter::begin(const CaptureWriterSessionConfig &config, QString 
     {
         if (errorMessage != nullptr)
             *errorMessage = QStringLiteral("Save folder is empty.");
+        return false;
+    }
+
+    const QFileInfo saveFolderInfo(config.saveFolder.trimmed());
+    if (!saveFolderInfo.exists() || !saveFolderInfo.isDir())
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("Save folder does not exist: %1").arg(config.saveFolder.trimmed());
         return false;
     }
 
@@ -118,35 +201,59 @@ bool LumoDatasetWriter::begin(const CaptureWriterSessionConfig &config, QString 
     sessionStartedUtc_ = QDateTime::currentDateTimeUtc();
 
     QDir root;
-    if (!root.mkpath(QDir(sessionDirectory_).filePath(QStringLiteral("capture")))
-        || !root.mkpath(QDir(sessionDirectory_).filePath(QStringLiteral("metadata"))))
+    if (!root.mkpath(sessionDirectory_))
     {
         if (errorMessage != nullptr)
             *errorMessage =
-                QStringLiteral("Could not create dataset directories under %1.").arg(sessionDirectory_);
+                QStringLiteral("Could not create dataset directory %1.").arg(sessionDirectory_);
         sessionDirectory_.clear();
         datasetName_.clear();
         return false;
     }
 
-    if (!copyMetadataStylesheet(errorMessage))
-        return false;
+    writePropertiesXml();
 
     const int streamCount = static_cast<int>(config.streams.size());
     for (const CaptureWriterStreamConfig &streamConfig : config.streams)
     {
+        if (streamConfig.relativeRoot.trimmed().isEmpty())
+        {
+            if (errorMessage != nullptr)
+                *errorMessage = QStringLiteral("Capture stream relative path is empty.");
+            end();
+            return false;
+        }
+
         StreamState state;
         state.config = streamConfig;
-        state.baseName = streamBaseName(datasetName_, streamConfig.streamName, streamCount);
+        state.streamRoot = QDir(sessionDirectory_).filePath(streamConfig.relativeRoot);
+        state.baseName = sampleCaptureBaseName(datasetName_, streamConfig.illuminationMode);
+        state.summary.relativeRoot = streamConfig.relativeRoot;
         state.summary.baseName = state.baseName;
 
+        if (!root.mkpath(QDir(state.streamRoot).filePath(QStringLiteral("capture")))
+            || !root.mkpath(QDir(state.streamRoot).filePath(QStringLiteral("metadata"))))
+        {
+            if (errorMessage != nullptr)
+                *errorMessage = QStringLiteral("Could not create capture directories under %1.")
+                                     .arg(state.streamRoot);
+            end();
+            return false;
+        }
+
+        if (!copyMetadataStylesheet(state.streamRoot, errorMessage))
+        {
+            end();
+            return false;
+        }
+
         const QString rawPath =
-            QDir(sessionDirectory_).filePath(QStringLiteral("capture/%1.raw").arg(state.baseName));
+            QDir(state.streamRoot).filePath(QStringLiteral("capture/%1.raw").arg(state.baseName));
         state.summary.rawPath = rawPath;
         state.summary.hdrPath =
-            QDir(sessionDirectory_).filePath(QStringLiteral("capture/%1.hdr").arg(state.baseName));
+            QDir(state.streamRoot).filePath(QStringLiteral("capture/%1.hdr").arg(state.baseName));
         state.summary.logPath =
-            QDir(sessionDirectory_).filePath(QStringLiteral("capture/%1.log").arg(state.baseName));
+            QDir(state.streamRoot).filePath(QStringLiteral("metadata/%1.log").arg(state.baseName));
 
         state.rawFile = std::make_unique<QFile>(rawPath);
         if (!state.rawFile->open(QIODevice::WriteOnly | QIODevice::Truncate))
@@ -157,18 +264,17 @@ bool LumoDatasetWriter::begin(const CaptureWriterSessionConfig &config, QString 
             return false;
         }
 
-        streams_.emplace(streamConfig.source, std::move(state));
+        streams_.emplace(streamConfig.relativeRoot, std::move(state));
     }
 
-    writePropertiesXml();
     active_ = true;
     return true;
 }
 
-bool LumoDatasetWriter::copyMetadataStylesheet(QString *errorMessage)
+bool LumoDatasetWriter::copyMetadataStylesheet(const QString &streamRoot, QString *errorMessage)
 {
     const QString destination =
-        QDir(sessionDirectory_).filePath(QStringLiteral("metadata/%1.xsl").arg(datasetName_));
+        QDir(streamRoot).filePath(QStringLiteral("metadata/%1.xsl").arg(datasetName_));
 
 #ifdef HF_APP_SOURCE_DIR
     const QString templatePath = QStringLiteral(HF_APP_SOURCE_DIR)
@@ -208,8 +314,10 @@ bool LumoDatasetWriter::copyMetadataStylesheet(QString *errorMessage)
     return true;
 }
 
-bool LumoDatasetWriter::ensureStream(const FramePacket &frame, QString *errorMessage)
+bool LumoDatasetWriter::ensureStream(const FramePacket &frame, StreamState *&stateOut, QString *errorMessage)
 {
+    stateOut = nullptr;
+
     if (!active_)
     {
         if (errorMessage != nullptr)
@@ -217,7 +325,19 @@ bool LumoDatasetWriter::ensureStream(const FramePacket &frame, QString *errorMes
         return false;
     }
 
-    const auto streamIt = streams_.find(frame.source);
+    const auto streamIt = [&]() {
+        const QString streamKey = frame.captureStreamKey.trimmed();
+        if (!streamKey.isEmpty())
+            return streams_.find(streamKey);
+
+        for (auto it = streams_.begin(); it != streams_.end(); ++it)
+        {
+            if (it->second.config.source == frame.source)
+                return it;
+        }
+        return streams_.end();
+    }();
+
     if (streamIt == streams_.end())
     {
         if (errorMessage != nullptr)
@@ -265,6 +385,7 @@ bool LumoDatasetWriter::ensureStream(const FramePacket &frame, QString *errorMes
         return false;
     }
 
+    stateOut = &state;
     return true;
 }
 
@@ -286,25 +407,121 @@ bool LumoDatasetWriter::writeFramePayload(QFile &file, const FramePacket &frame,
     return true;
 }
 
-bool LumoDatasetWriter::appendFrame(const FramePacket &frame, QString *errorMessage)
+bool LumoDatasetWriter::appendReferenceFrame(ReferenceCaptureState &reference,
+                                             const QString &fileBaseName,
+                                             StreamState &stream,
+                                             const FramePacket &frame,
+                                             QString *errorMessage)
 {
-    if (!ensureStream(frame, errorMessage))
-        return false;
-
-    StreamState &state = streams_.at(frame.source);
-    if (state.rawFile == nullptr)
+    if (frame.width <= 0 || frame.height <= 0 || frame.pixels.empty())
     {
         if (errorMessage != nullptr)
-            *errorMessage = QStringLiteral("No output file for %1.").arg(state.config.streamName);
+            *errorMessage = QStringLiteral("Frame geometry is empty.");
         return false;
     }
 
-    if (!writeFramePayload(*state.rawFile, frame, errorMessage))
+    const std::size_t required =
+        static_cast<std::size_t>(frame.width) * static_cast<std::size_t>(frame.height);
+    if (frame.pixels.size() < required)
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("Frame buffer is smaller than %1 × %2.")
+                                 .arg(frame.width)
+                                 .arg(frame.height);
+        return false;
+    }
+
+    if (reference.frameCount == 0)
+    {
+        reference.width = frame.width;
+        reference.bands = frame.height;
+        reference.firstFrameUtc = QDateTime::currentDateTimeUtc();
+        const QString rawPath =
+            QDir(stream.streamRoot).filePath(QStringLiteral("capture/%1.raw").arg(fileBaseName));
+        reference.rawPath = rawPath;
+        reference.hdrPath =
+            QDir(stream.streamRoot).filePath(QStringLiteral("capture/%1.hdr").arg(fileBaseName));
+        reference.rawFile = std::make_unique<QFile>(rawPath);
+        if (!reference.rawFile->open(QIODevice::WriteOnly | QIODevice::Truncate))
+        {
+            if (errorMessage != nullptr)
+                *errorMessage = QStringLiteral("Could not open %1 for writing.").arg(rawPath);
+            reference.rawFile.reset();
+            return false;
+        }
+    }
+    else if (reference.width != frame.width || reference.bands != frame.height)
+    {
+        if (errorMessage != nullptr)
+        {
+            *errorMessage =
+                QStringLiteral("%1 frame size changed (%2×%3 → %4×%5).")
+                    .arg(fileBaseName)
+                    .arg(reference.width)
+                    .arg(reference.bands)
+                    .arg(frame.width)
+                    .arg(frame.height);
+        }
+        return false;
+    }
+
+    if (!writeFramePayload(*reference.rawFile, frame, errorMessage))
         return false;
 
-    state.lastFrameUtc = QDateTime::currentDateTimeUtc();
-    ++state.summary.frameCount;
-    state.summary.bytesWritten +=
+    reference.lastFrameUtc = QDateTime::currentDateTimeUtc();
+    ++reference.frameCount;
+    return true;
+}
+
+bool LumoDatasetWriter::appendFrame(const FramePacket &frame, QString *errorMessage)
+{
+    StreamState *state = nullptr;
+    if (!ensureStream(frame, state, errorMessage))
+        return false;
+
+    if (frame.captureDestination == CaptureFrameDestination::BlackReference)
+    {
+        const QString fileBaseName =
+            referenceCaptureBaseName(QStringLiteral("DARKREF"), datasetName_, state->config.illuminationMode);
+        const bool ok =
+            appendReferenceFrame(state->blackReference, fileBaseName, *state, frame, errorMessage);
+        if (ok)
+        {
+            state->summary.blackReferenceRawPath = state->blackReference.rawPath;
+            state->summary.blackReferenceHdrPath = state->blackReference.hdrPath;
+            state->summary.blackReferenceFrameCount = state->blackReference.frameCount;
+        }
+        return ok;
+    }
+
+    if (frame.captureDestination == CaptureFrameDestination::WhiteReference)
+    {
+        const QString fileBaseName =
+            referenceCaptureBaseName(QStringLiteral("WHITEREF"), datasetName_, state->config.illuminationMode);
+        const bool ok =
+            appendReferenceFrame(state->whiteReference, fileBaseName, *state, frame, errorMessage);
+        if (ok)
+        {
+            state->summary.whiteReferenceRawPath = state->whiteReference.rawPath;
+            state->summary.whiteReferenceHdrPath = state->whiteReference.hdrPath;
+            state->summary.whiteReferenceFrameCount = state->whiteReference.frameCount;
+        }
+        return ok;
+    }
+
+    if (state->rawFile == nullptr)
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("No output file for %1.").arg(state->config.streamName);
+        return false;
+    }
+
+    if (!writeFramePayload(*state->rawFile, frame, errorMessage))
+        return false;
+
+    state->lastFrameUtc = QDateTime::currentDateTimeUtc();
+    ++state->summary.frameCount;
+    state->summary.bytesWritten +=
         static_cast<std::uint64_t>(frame.width) * static_cast<std::uint64_t>(frame.height)
         * sizeof(std::uint16_t);
     return true;
@@ -342,9 +559,10 @@ void LumoDatasetWriter::writePropertiesXml() const
     file.commit();
 }
 
-void LumoDatasetWriter::writeMetadataXml() const
+void LumoDatasetWriter::writeMetadataXml(const StreamState &stream) const
 {
-    const QString path = QDir(sessionDirectory_).filePath(QStringLiteral("metadata/%1.xml").arg(datasetName_));
+    const QString path =
+        QDir(stream.streamRoot).filePath(QStringLiteral("metadata/%1.xml").arg(datasetName_));
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
         return;
@@ -356,41 +574,46 @@ void LumoDatasetWriter::writeMetadataXml() const
                                    QStringLiteral("type=\"text/xsl\" href=\"%1.xsl\"").arg(datasetName_));
     xml.writeStartElement(QStringLiteral("properties"));
 
-    if (!streams_.empty())
+    if (stream.summary.frameCount > 0 || stream.summary.width > 0)
     {
-        const StreamState &primary = streams_.cbegin()->second;
         xml.writeStartElement(QStringLiteral("header"));
         xml.writeStartElement(QStringLiteral("key"));
         xml.writeAttribute(QStringLiteral("field"), QStringLiteral("sensor type"));
-        xml.writeCharacters(primary.config.streamName);
+        xml.writeCharacters(stream.config.streamName);
+        xml.writeEndElement();
+        xml.writeStartElement(QStringLiteral("key"));
+        xml.writeAttribute(QStringLiteral("field"), QStringLiteral("illumination mode"));
+        xml.writeCharacters(stream.config.illuminationMode == CaptureIlluminationMode::Reflectance
+                                ? QStringLiteral("reflectance")
+                                : QStringLiteral("transmittance"));
         xml.writeEndElement();
         xml.writeStartElement(QStringLiteral("key"));
         xml.writeAttribute(QStringLiteral("field"), QStringLiteral("frame rate"));
-        xml.writeCharacters(QString::number(primary.config.settings.frameRateHz, 'f', 0));
+        xml.writeCharacters(QString::number(stream.config.settings.frameRateHz, 'f', 0));
         xml.writeEndElement();
         xml.writeStartElement(QStringLiteral("key"));
         xml.writeAttribute(QStringLiteral("field"), QStringLiteral("integration time"));
-        xml.writeCharacters(QString::number(primary.config.settings.exposureMs, 'f', 0));
+        xml.writeCharacters(QString::number(stream.config.settings.exposureMs, 'f', 0));
         xml.writeEndElement();
         xml.writeStartElement(QStringLiteral("key"));
         xml.writeAttribute(QStringLiteral("field"), QStringLiteral("samples"));
-        xml.writeCharacters(QString::number(primary.summary.width));
+        xml.writeCharacters(QString::number(stream.summary.width));
         xml.writeEndElement();
         xml.writeStartElement(QStringLiteral("key"));
         xml.writeAttribute(QStringLiteral("field"), QStringLiteral("active bands"));
-        xml.writeCharacters(QString::number(primary.summary.bands));
+        xml.writeCharacters(QString::number(stream.summary.bands));
         xml.writeEndElement();
         xml.writeStartElement(QStringLiteral("key"));
         xml.writeAttribute(QStringLiteral("field"), QStringLiteral("spatial binning"));
-        xml.writeCharacters(QString::number(primary.config.settings.spatialBinning));
+        xml.writeCharacters(QString::number(stream.config.settings.spatialBinning));
         xml.writeEndElement();
         xml.writeStartElement(QStringLiteral("key"));
         xml.writeAttribute(QStringLiteral("field"), QStringLiteral("spectral binning"));
-        xml.writeCharacters(QString::number(primary.config.settings.spectralBinning));
+        xml.writeCharacters(QString::number(stream.config.settings.spectralBinning));
         xml.writeEndElement();
         xml.writeStartElement(QStringLiteral("key"));
         xml.writeAttribute(QStringLiteral("field"), QStringLiteral("frames recorded"));
-        xml.writeCharacters(QString::number(primary.summary.frameCount));
+        xml.writeCharacters(QString::number(stream.summary.frameCount));
         xml.writeEndElement();
         xml.writeStartElement(QStringLiteral("key"));
         xml.writeAttribute(QStringLiteral("field"), QStringLiteral("frames dropped"));
@@ -408,11 +631,11 @@ void LumoDatasetWriter::writeMetadataXml() const
         xml.writeAttribute(QStringLiteral("field"), QStringLiteral("time"));
         xml.writeCharacters(sessionStartedUtc_.toLocalTime().toString(QStringLiteral("HH:mm:ss")));
         xml.writeEndElement();
-        if (!primary.config.calibrationPackPath.isEmpty())
+        if (!stream.config.calibrationPackPath.isEmpty())
         {
             xml.writeStartElement(QStringLiteral("key"));
             xml.writeAttribute(QStringLiteral("field"), QStringLiteral("calibration pack"));
-            xml.writeCharacters(primary.config.calibrationPackPath);
+            xml.writeCharacters(stream.config.calibrationPackPath);
             xml.writeEndElement();
         }
         xml.writeEndElement();
@@ -458,16 +681,46 @@ void LumoDatasetWriter::writeManifestXml() const
     for (const auto &entry : streams_)
     {
         const StreamState &state = entry.second;
-        const QString rawRel = QStringLiteral("capture/%1.raw").arg(state.baseName);
-        const QString hdrRel = QStringLiteral("capture/%1.hdr").arg(state.baseName);
+        const QString prefix =
+            state.config.relativeRoot.isEmpty() ? QString() : state.config.relativeRoot + QLatin1Char('/');
+
+        if (state.blackReference.frameCount > 0 && !state.blackReference.rawPath.isEmpty())
+        {
+            const QString rawName = QFileInfo(state.blackReference.rawPath).fileName();
+            const QString hdrName = QFileInfo(state.blackReference.hdrPath).fileName();
+            writeEntry(QStringLiteral("raw"), QStringLiteral("darkref"), prefix + QStringLiteral("capture/") + rawName);
+            writeEntry(QStringLiteral("hdr"), QStringLiteral("darkref"), prefix + QStringLiteral("capture/") + hdrName);
+        }
+        if (state.whiteReference.frameCount > 0 && !state.whiteReference.rawPath.isEmpty())
+        {
+            const QString rawName = QFileInfo(state.whiteReference.rawPath).fileName();
+            const QString hdrName = QFileInfo(state.whiteReference.hdrPath).fileName();
+            writeEntry(QStringLiteral("raw"), QStringLiteral("whiteref"), prefix + QStringLiteral("capture/") + rawName);
+            writeEntry(QStringLiteral("hdr"), QStringLiteral("whiteref"), prefix + QStringLiteral("capture/") + hdrName);
+        }
+
+        const QString rawRel = prefix + QStringLiteral("capture/%1.raw").arg(state.baseName);
+        const QString hdrRel = prefix + QStringLiteral("capture/%1.hdr").arg(state.baseName);
         writeEntry(QStringLiteral("raw"), QStringLiteral("capture"), rawRel);
         writeEntry(QStringLiteral("hdr"), QStringLiteral("capture"), hdrRel);
+
+        if (!state.summary.logPath.isEmpty())
+        {
+            const QString logName = QFileInfo(state.summary.logPath).fileName();
+            writeEntry(QStringLiteral("log"), QStringLiteral("capture"), prefix + QStringLiteral("metadata/") + logName);
+        }
     }
 
-    writeEntry(QStringLiteral("xml"), QStringLiteral("properties"),
-               QStringLiteral("metadata/%1.xml").arg(datasetName_));
-    writeEntry(QStringLiteral("xsl"), QStringLiteral("properties"),
-               QStringLiteral("metadata/%1.xsl").arg(datasetName_));
+    for (const auto &entry : streams_)
+    {
+        const StreamState &state = entry.second;
+        const QString prefix =
+            state.config.relativeRoot.isEmpty() ? QString() : state.config.relativeRoot + QLatin1Char('/');
+        writeEntry(QStringLiteral("xml"), QStringLiteral("properties"),
+                   prefix + QStringLiteral("metadata/%1.xml").arg(datasetName_));
+        writeEntry(QStringLiteral("xsl"), QStringLiteral("properties"),
+                   prefix + QStringLiteral("metadata/%1.xsl").arg(datasetName_));
+    }
 
     xml.writeEndElement();
     xml.writeEndDocument();
@@ -476,56 +729,33 @@ void LumoDatasetWriter::writeManifestXml() const
 
 void LumoDatasetWriter::writeStreamHdr(const StreamState &stream) const
 {
-    QSaveFile file(stream.summary.hdrPath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    if (stream.summary.frameCount == 0 || stream.summary.hdrPath.isEmpty())
         return;
 
-    QTextStream out(&file);
-    out.setRealNumberNotation(QTextStream::FixedNotation);
+    writeEnviHdrFile(stream.summary.hdrPath,
+                     stream.config,
+                     stream.summary.width,
+                     stream.summary.bands,
+                     stream.summary.frameCount,
+                     sessionStartedUtc_,
+                     stream.firstFrameUtc,
+                     stream.lastFrameUtc);
+}
 
-    const QDateTime startUtc =
-        stream.firstFrameUtc.isValid() ? stream.firstFrameUtc : sessionStartedUtc_;
-    const QDateTime stopUtc = stream.lastFrameUtc.isValid() ? stream.lastFrameUtc : startUtc;
+void LumoDatasetWriter::writeReferenceHdr(const StreamState &stream,
+                                          const ReferenceCaptureState &reference) const
+{
+    if (reference.frameCount == 0 || reference.hdrPath.isEmpty())
+        return;
 
-    out << "ENVI\n";
-    out << "description = {\nFile Imported into ENVI}\n";
-    out << "file type = ENVI\n\n";
-    out << "sensor type = " << sensorTypeLabel(stream.config) << "\n";
-    out << "acquisition date = DATE(yyyy-mm-dd): "
-        << startUtc.toLocalTime().toString(QStringLiteral("yyyy-MM-dd")) << "\n";
-    out << "Start Time = UTC TIME: "
-        << startUtc.toLocalTime().toString(QStringLiteral("HH:mm:ss")) << "\n";
-    out << "Stop Time = UTC TIME: "
-        << stopUtc.toLocalTime().toString(QStringLiteral("HH:mm:ss")) << "\n\n";
-    out << "samples = " << stream.summary.width << "\n";
-    out << "bands = " << stream.summary.bands << "\n";
-    out << "lines = " << stream.summary.frameCount << "\n\n";
-    out << "errors = {none}\n\n";
-    out << "interleave = bil\n";
-    out << "data type = 12\n";
-    out << "header offset = 0\n";
-    out << "byte order = 0\n";
-    out << "x start = 0\n";
-    out << "y start = 0\n";
-    out << "default bands = {227, 118, 42}\n\n";
-    out << "himg = {1, " << stream.summary.width << "}\n";
-    out << "vimg = {1, " << stream.summary.bands << "}\n";
-    out << "hroi = {1, " << stream.summary.width << "}\n";
-    out << "vroi = {1, " << stream.summary.bands << "}\n\n";
-    out << "fps = " << QString::number(stream.config.settings.frameRateHz, 'f', 2) << "\n";
-    out << "tint = " << QString::number(stream.config.settings.exposureMs, 'f', 6) << "\n";
-    out << "binning = {" << stream.config.settings.spatialBinning << ", "
-        << stream.config.settings.spectralBinning << "}\n";
-    out << "trigger mode = "
-        << (stream.config.settings.externalTrigger ? QStringLiteral("External")
-                                                   : QStringLiteral("Internal"))
-        << "\n";
-    if (!stream.config.calibrationPackPath.isEmpty())
-        out << "calibration pack = " << stream.config.calibrationPackPath << "\n";
-    out << "\n";
-    appendWavelengthBlock(out, stream.config.spectralBands, stream.summary.bands);
-    appendFwhmBlock(out, stream.config.spectralBands, stream.summary.bands);
-    file.commit();
+    writeEnviHdrFile(reference.hdrPath,
+                     stream.config,
+                     reference.width,
+                     reference.bands,
+                     reference.frameCount,
+                     sessionStartedUtc_,
+                     reference.firstFrameUtc,
+                     reference.lastFrameUtc);
 }
 
 void LumoDatasetWriter::writeStreamLog(const StreamState &stream) const
@@ -556,13 +786,21 @@ CaptureWriterSessionSummary LumoDatasetWriter::end()
         if (state.rawFile != nullptr)
             state.rawFile->close();
         state.rawFile.reset();
+        if (state.blackReference.rawFile != nullptr)
+            state.blackReference.rawFile->close();
+        state.blackReference.rawFile.reset();
+        if (state.whiteReference.rawFile != nullptr)
+            state.whiteReference.rawFile->close();
+        state.whiteReference.rawFile.reset();
 
         writeStreamHdr(state);
+        writeReferenceHdr(state, state.blackReference);
+        writeReferenceHdr(state, state.whiteReference);
         writeStreamLog(state);
+        writeMetadataXml(state);
         summary.streams.insert(entry.first, state.summary);
     }
 
-    writeMetadataXml();
     writeManifestXml();
 
     active_ = false;

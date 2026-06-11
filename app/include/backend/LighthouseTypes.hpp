@@ -28,14 +28,14 @@ enum class LighthouseLamp : int
 {
     Reflectance1 = 0,
     Reflectance2 = 1,
-    Transmission1 = 2,
-    Transmission2 = 3
+    Transmittance1 = 2,
+    Transmittance2 = 3
 };
 
 enum class LighthouseIntensityGroup : int
 {
     Reflectance = 0,
-    Transmission = 1
+    Transmittance = 1
 };
 
 inline constexpr int kLighthouseLampCount = 4;
@@ -45,12 +45,12 @@ inline constexpr int kLighthouseIntensityPercentMax = 100;
 // On/off: 8-ch relay board on DIO Port A (A0-A3). Active-low: LOW = lamp on, HIGH = lamp off.
 inline constexpr int kLighthouseRelayPortReflectance1 = 0; // Port A0
 inline constexpr int kLighthouseRelayPortReflectance2 = 1; // Port A1
-inline constexpr int kLighthouseRelayPortTransmission1 = 2; // Port A2
-inline constexpr int kLighthouseRelayPortTransmission2 = 3; // Port A3
+inline constexpr int kLighthouseRelayPortTransmittance1 = 2; // Port A2
+inline constexpr int kLighthouseRelayPortTransmittance2 = 3; // Port A3
 
 // Intensity: shared analog voltage per pair (0-5 V from UI 0-100%).
 inline constexpr int kLighthouseAnalogChannelReflectance = 0; // AO0
-inline constexpr int kLighthouseAnalogChannelTransmission = 1; // AO1
+inline constexpr int kLighthouseAnalogChannelTransmittance = 1; // AO1
 
 // DC950 controller power monitor: Pin 1 (+5V) on AI CH0-CH3 (see docs/DC950).
 inline constexpr int kLighthousePowerMonitorChannelStart = 0;
@@ -80,12 +80,12 @@ struct LighthouseControllerPowerStatus
 struct LighthouseSettings
 {
     int reflectancePercent = 0;
-    int transmissionPercent = 0;
+    int transmittancePercent = 0;
     std::array<bool, kLighthouseLampCount> lampOn{};
 
     int groupPercent(const LighthouseIntensityGroup group) const
     {
-        return group == LighthouseIntensityGroup::Reflectance ? reflectancePercent : transmissionPercent;
+        return group == LighthouseIntensityGroup::Reflectance ? reflectancePercent : transmittancePercent;
     }
 
     void setGroupPercent(const LighthouseIntensityGroup group, const int percent)
@@ -93,13 +93,13 @@ struct LighthouseSettings
         if (group == LighthouseIntensityGroup::Reflectance)
             reflectancePercent = percent;
         else
-            transmissionPercent = percent;
+            transmittancePercent = percent;
     }
 
     int lampPercent(const LighthouseLamp lamp) const
     {
         const auto group = static_cast<int>(lamp) < 2 ? LighthouseIntensityGroup::Reflectance
-                                                     : LighthouseIntensityGroup::Transmission;
+                                                      : LighthouseIntensityGroup::Transmittance;
         return groupPercent(group);
     }
 };
@@ -107,12 +107,12 @@ struct LighthouseSettings
 inline LighthouseIntensityGroup lighthouseGroupForLamp(const LighthouseLamp lamp)
 {
     return static_cast<int>(lamp) < 2 ? LighthouseIntensityGroup::Reflectance
-                                      : LighthouseIntensityGroup::Transmission;
+                                      : LighthouseIntensityGroup::Transmittance;
 }
 
 inline LighthouseIntensityGroup lighthouseGroupForRowIndex(const int rowIndex)
 {
-    return rowIndex < 2 ? LighthouseIntensityGroup::Reflectance : LighthouseIntensityGroup::Transmission;
+    return rowIndex < 2 ? LighthouseIntensityGroup::Reflectance : LighthouseIntensityGroup::Transmittance;
 }
 
 inline int lighthouseRelayPortForLamp(const LighthouseLamp lamp)
@@ -123,10 +123,10 @@ inline int lighthouseRelayPortForLamp(const LighthouseLamp lamp)
         return kLighthouseRelayPortReflectance1;
     case LighthouseLamp::Reflectance2:
         return kLighthouseRelayPortReflectance2;
-    case LighthouseLamp::Transmission1:
-        return kLighthouseRelayPortTransmission1;
-    case LighthouseLamp::Transmission2:
-        return kLighthouseRelayPortTransmission2;
+    case LighthouseLamp::Transmittance1:
+        return kLighthouseRelayPortTransmittance1;
+    case LighthouseLamp::Transmittance2:
+        return kLighthouseRelayPortTransmittance2;
     default:
         return -1;
     }
@@ -135,7 +135,7 @@ inline int lighthouseRelayPortForLamp(const LighthouseLamp lamp)
 inline int lighthouseAnalogChannelForGroup(const LighthouseIntensityGroup group)
 {
     return group == LighthouseIntensityGroup::Reflectance ? kLighthouseAnalogChannelReflectance
-                                                          : kLighthouseAnalogChannelTransmission;
+                                                          : kLighthouseAnalogChannelTransmittance;
 }
 
 // Maps UI "lamp on" to DIO level for the active-low relay board.
@@ -157,7 +157,7 @@ inline bool lighthouseControllerIsAlive(const float monitorVolts)
 inline const char *lighthouseWiringDetailsText()
 {
     return "Reflectance 1 and 2 share AO0 intensity (on/off: DIO A0, A1).\n"
-           "Transmission 1 and 2 share AO1 intensity (on/off: DIO A2, A3).\n"
+           "Transmittance 1 and 2 share AO1 intensity (on/off: DIO A2, A3).\n"
            "Relay active-low (LOW = on, HIGH = off).\n"
            "DC950 power: AI CH0-CH3 (~5 V = controller alive).";
 }
