@@ -26,6 +26,11 @@ PersistedCapturePosition AppSettingsStore::loadCapturePosition()
     position.targetLengthMm = settings.value(QStringLiteral("capture/position/targetLengthMm"), 125.0).toDouble();
     position.scanningSpeedMmPerSec =
         settings.value(QStringLiteral("capture/position/scanningSpeedMmPerSec"), 25.0).toDouble();
+    position.useStageForRecording =
+        settings.value(QStringLiteral("capture/position/useStageForRecording"), true).toBool();
+    position.preprocessAfterScan =
+        settings.value(QStringLiteral("capture/preprocess/afterScan"), true).toBool();
+    position.saveFfcImage = settings.value(QStringLiteral("capture/preprocess/saveFfcImage"), true).toBool();
     return position;
 }
 
@@ -34,6 +39,9 @@ void AppSettingsStore::saveCapturePosition(const PersistedCapturePosition &posit
     QSettings &settings = storage();
     settings.setValue(QStringLiteral("capture/position/targetLengthMm"), position.targetLengthMm);
     settings.setValue(QStringLiteral("capture/position/scanningSpeedMmPerSec"), position.scanningSpeedMmPerSec);
+    settings.setValue(QStringLiteral("capture/position/useStageForRecording"), position.useStageForRecording);
+    settings.setValue(QStringLiteral("capture/preprocess/afterScan"), position.preprocessAfterScan);
+    settings.setValue(QStringLiteral("capture/preprocess/saveFfcImage"), position.saveFfcImage);
 }
 
 PersistedStageConnection AppSettingsStore::loadStageConnection()

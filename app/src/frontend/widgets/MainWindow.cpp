@@ -15,12 +15,14 @@
 #include "frontend/widgets/DetectorCrosshairWidget.hpp"
 #include "frontend/widgets/ProfilePlotWidget.hpp"
 #include "frontend/processing/ProfileProcessor.hpp"
+#include "frontend/processing/DetectorFrameConverter.hpp"
 #include "frontend/widgets/IntensityBarWidget.hpp"
 #include "frontend/widgets/StageAxisWidget.hpp"
 #include "frontend/widgets/OperationWaitDialog.hpp"
 
 #include "frontend/settings/AppSettingsStore.hpp"
 #include "backend/CaptureWriterWorker.hpp"
+#include "backend/processing/CapturePostProcessorWorker.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -74,46 +76,6 @@
 
 namespace
 {
-QImage framePacketToQImage(const FramePacket &frame)
-{
-    if (frame.width <= 0 || frame.height <= 0 || frame.pixels.empty())
-        return {};
-
-    const int width = frame.width;
-    const int height = frame.height;
-    const std::size_t pixelCount = static_cast<std::size_t>(width * height);
-    if (frame.pixels.size() < pixelCount)
-        return {};
-
-    std::uint16_t minValue = frame.pixels[0];
-    std::uint16_t maxValue = frame.pixels[0];
-    for (std::size_t i = 1; i < pixelCount; ++i)
-    {
-        minValue = std::min(minValue, frame.pixels[i]);
-        maxValue = std::max(maxValue, frame.pixels[i]);
-    }
-
-    QImage image(width, height, QImage::Format_Grayscale8);
-    if (maxValue == minValue)
-    {
-        image.fill(0);
-        return image;
-    }
-
-    const double scale = 255.0 / static_cast<double>(maxValue - minValue);
-    for (int y = 0; y < height; ++y)
-    {
-        auto *scanLine = image.scanLine(y);
-        for (int x = 0; x < width; ++x)
-        {
-            const std::uint16_t value = frame.pixels[static_cast<std::size_t>(y * width + x)];
-            scanLine[x] = static_cast<unsigned char>((value - minValue) * scale);
-        }
-    }
-
-    return image;
-}
-
 constexpr auto kFx10eCalibrationFileName = "3210441_20211027_calpack.scp";
 constexpr auto kSwir3CalibrationFileName = "462111_OLES15_20250109_calpack.scp";
 constexpr auto kCalibrationPackPathProperty = "hf_calibrationPackPath";
@@ -854,6 +816,15 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
             Qt::QueuedConnection);
     });
     captureWriterWorker_->start();
+
+    capturePostProcessorWorker_ = std::make_unique<CapturePostProcessorWorker>();
+    capturePostProcessorWorker_->setStatusListener([this]() {
+        QMetaObject::invokeMethod(
+            this,
+            [this]() { updateCaptureRecorderControls(); },
+            Qt::QueuedConnection);
+    });
+    capturePostProcessorWorker_->start();
 }
 
 MainWindow::~MainWindow()
@@ -2487,10 +2458,26 @@ QWidget *MainWindow::createCaptureSettingsTab()
     positionLayout->setContentsMargins(6, 4, 6, 6);
     positionLayout->setSpacing(6);
 
-    captureStageConnectedCheck_ =
-        new QCheckBox(QStringLiteral("HyperFusion linear stage connected"), positionBox);
-    captureStageConnectedCheck_->setEnabled(false);
-    positionLayout->addWidget(captureStageConnectedCheck_);
+    captureUseStageForRecordingCheck_ =
+        new QCheckBox(QStringLiteral("Use HyperFusion Stage for recording"), positionBox);
+    captureUseStageForRecordingCheck_->setChecked(true);
+    captureUseStageForRecordingCheck_->setToolTip(
+        tr("When enabled, Preview and Record follow the stage scanning procedure "
+           "(black ref, white ref, sample scan). When disabled, Record saves reflectance "
+           "frames only and Preview is unavailable."));
+    positionLayout->addWidget(captureUseStageForRecordingCheck_);
+    connect(captureUseStageForRecordingCheck_, &QCheckBox::toggled, this, [this](const bool checked) {
+        if (checked && captureRecorderMode_ == CaptureRecorderMode::Idle)
+        {
+            const QSignalBlocker reflectanceBlocker(captureReflectanceCheck_);
+            const QSignalBlocker transmittanceBlocker(captureTransmittanceCheck_);
+            if (captureReflectanceCheck_ != nullptr)
+                captureReflectanceCheck_->setChecked(true);
+            if (captureTransmittanceCheck_ != nullptr)
+                captureTransmittanceCheck_->setChecked(true);
+        }
+        updateCaptureRecorderControls();
+    });
 
     capturePositionContent_ = new QWidget(positionBox);
     auto *positionContentLayout = new QVBoxLayout(capturePositionContent_);
@@ -2594,6 +2581,30 @@ QWidget *MainWindow::createCaptureSettingsTab()
     updateCapturePositionControls(stageWorker_ != nullptr ? stageWorker_->currentState()
                                                           : StageState::Disconnected);
 
+    auto *preprocessingBox = new QGroupBox(QStringLiteral("Preprocessing"), page);
+    capturePreprocessingBox_ = preprocessingBox;
+    preprocessingBox->setToolTip(
+        tr("Post-processing requires a stage scan with dark and white references. "
+           "Enable \"Use HyperFusion Stage for recording\" to use these options."));
+    auto *preprocessingLayout = new QVBoxLayout(preprocessingBox);
+    preprocessingLayout->setContentsMargins(6, 4, 6, 6);
+    preprocessingLayout->setSpacing(6);
+
+    capturePreprocessAfterScanCheck_ = new QCheckBox(
+        QStringLiteral("Preprocess the image when the scanning is done"), preprocessingBox);
+    capturePreprocessAfterScanCheck_->setChecked(true);
+    capturePreprocessAfterScanCheck_->setToolTip(
+        tr("Run post-processing on captured data after a stage scan sequence completes. "
+           "Requires a connected stage."));
+    preprocessingLayout->addWidget(capturePreprocessAfterScanCheck_);
+
+    captureSaveFfcImageCheck_ =
+        new QCheckBox(QStringLiteral("Save FFC image"), preprocessingBox);
+    captureSaveFfcImageCheck_->setChecked(true);
+    captureSaveFfcImageCheck_->setToolTip(
+        tr("Write flat-field corrected sample data as ENVI under preprocessed/ when post-processing runs."));
+    preprocessingLayout->addWidget(captureSaveFfcImageCheck_);
+
     auto *metadataBox = new QGroupBox("Metadata", page);
     auto *metadataForm = new QFormLayout(metadataBox);
     metadataForm->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
@@ -2673,6 +2684,7 @@ QWidget *MainWindow::createCaptureSettingsTab()
     layout->addWidget(metadataBox);
     layout->addWidget(captureCamerasBox_);
     layout->addWidget(positionBox);
+    layout->addWidget(preprocessingBox);
     layout->addStretch();
     updateCaptureCamerasList();
     updateCaptureCameraPositionRows();
@@ -2683,9 +2695,6 @@ QWidget *MainWindow::createCaptureSettingsTab()
 void MainWindow::updateCapturePositionControls(const StageState state)
 {
     const bool connected = state == StageState::Connected;
-
-    if (captureStageConnectedCheck_ != nullptr)
-        captureStageConnectedCheck_->setChecked(connected);
 
     if (capturePositionContent_ != nullptr)
         capturePositionContent_->setEnabled(connected);
@@ -2725,29 +2734,73 @@ void MainWindow::updateCaptureScanningSpeedControls()
 
 void MainWindow::updateCaptureRecorderControls()
 {
-    const bool stageConnected =
-        stageWorker_ != nullptr && stageWorker_->currentState() == StageState::Connected;
+    const bool stageConnected = isCaptureStageConnected();
+    const bool useStage = useStageForCapture();
     const bool anyCameraConnected = anyCameraSessionActive();
     const bool scanActive = captureRecorderMode_ != CaptureRecorderMode::Idle;
+    const bool postProcessActive =
+        capturePostProcessorWorker_ != nullptr
+        && capturePostProcessorWorker_->queueStatus().outstandingTotal() > 0;
+
+    if (captureUseStageForRecordingCheck_ != nullptr)
+        captureUseStageForRecordingCheck_->setEnabled(stageConnected && !scanActive);
+
+    const bool preprocessingEnabled = useStage && !scanActive;
+    if (capturePreprocessingBox_ != nullptr)
+        capturePreprocessingBox_->setEnabled(preprocessingEnabled);
+
+    if (capturePreprocessAfterScanCheck_ != nullptr)
+        capturePreprocessAfterScanCheck_->setEnabled(preprocessingEnabled);
+
+    if (captureSaveFfcImageCheck_ != nullptr)
+        captureSaveFfcImageCheck_->setEnabled(preprocessingEnabled
+                                                && capturePreprocessAfterScanCheck_ != nullptr
+                                                && capturePreprocessAfterScanCheck_->isChecked());
+
+    if (!useStage && !scanActive)
+    {
+        const QSignalBlocker reflectanceBlocker(captureReflectanceCheck_);
+        const QSignalBlocker transmittanceBlocker(captureTransmittanceCheck_);
+        if (captureReflectanceCheck_ != nullptr)
+            captureReflectanceCheck_->setChecked(true);
+        if (captureTransmittanceCheck_ != nullptr)
+            captureTransmittanceCheck_->setChecked(false);
+    }
 
     if (captureRecorderPreviewBtn_ != nullptr)
     {
-        captureRecorderPreviewBtn_->setEnabled(stageConnected && !scanActive);
-        captureRecorderPreviewBtn_->setToolTip(
-            stageConnected
-                ? tr("Run scan sequence without black reference or file save")
-                : tr("Connect the stage on the Stage tab to enable preview"));
+        captureRecorderPreviewBtn_->setEnabled(useStage && !scanActive);
+        if (!stageConnected)
+        {
+            captureRecorderPreviewBtn_->setToolTip(
+                tr("Connect the stage on the Stage tab to enable preview"));
+        }
+        else if (!useStage)
+        {
+            captureRecorderPreviewBtn_->setToolTip(
+                tr("Enable \"Use HyperFusion Stage for recording\" to run a stage scan preview"));
+        }
+        else
+        {
+            captureRecorderPreviewBtn_->setToolTip(
+                tr("Run scan sequence without black reference or file save"));
+        }
     }
 
     if (captureRecorderRecordBtn_ != nullptr)
     {
-        captureRecorderRecordBtn_->setEnabled(anyCameraConnected && !scanActive);
+        captureRecorderRecordBtn_->setEnabled(anyCameraConnected && !scanActive && !postProcessActive);
         if (!anyCameraConnected)
         {
             captureRecorderRecordBtn_->setToolTip(
                 tr("Connect at least one camera on the Camera tab to enable recording"));
         }
-        else if (stageConnected)
+        else if (postProcessActive)
+        {
+            captureRecorderRecordBtn_->setToolTip(
+                tr("Wait for background post-processing to finish before starting a new record"));
+        }
+        else if (useStage)
         {
             captureRecorderRecordBtn_->setToolTip(
                 tr("Run full scan sequence (black ref, white ref, sample) and save .raw frames"));
@@ -2755,18 +2808,28 @@ void MainWindow::updateCaptureRecorderControls()
         else
         {
             captureRecorderRecordBtn_->setToolTip(
-                tr("Save streaming .raw frames locally (stage not connected — press Stop when done)"));
+                tr("Record reflectance .raw frames locally without stage scanning — press Stop when done"));
         }
     }
 
     if (captureRecorderStopBtn_ != nullptr)
         captureRecorderStopBtn_->setEnabled(scanActive);
 
-    const bool modeSelectionEnabled = stageConnected && !scanActive;
+    const bool modeSelectionEnabled = useStage && !scanActive;
     if (captureReflectanceCheck_ != nullptr)
+    {
         captureReflectanceCheck_->setEnabled(modeSelectionEnabled);
+        captureReflectanceCheck_->setToolTip(
+            useStage ? tr("Include reflectance scan (requires linear stage)")
+                     : tr("Reflectance only when stage scanning is disabled"));
+    }
     if (captureTransmittanceCheck_ != nullptr)
+    {
         captureTransmittanceCheck_->setEnabled(modeSelectionEnabled);
+        captureTransmittanceCheck_->setToolTip(
+            useStage ? tr("Include transmittance scan (requires linear stage)")
+                     : tr("Requires stage scanning (enable \"Use HyperFusion Stage for recording\")"));
+    }
 
     if (captureTargetLengthSpin_ != nullptr)
         captureTargetLengthSpin_->setEnabled(!scanActive);
@@ -2798,24 +2861,92 @@ bool MainWindow::buildCaptureScanPlan(CaptureScanPlan &plan, QString &errorMessa
     else
         plan.recordScanSpeedMmPerSec = captureScanningSpeedSpin_->value();
     plan.whiteReferenceScanLengthMm = hw.whiteReferenceScanningLengthMm;
-    plan.transmittanceWhiteRefStartPositionMm = hw.frontEdgeSampleWindowMm;
-    plan.sampleScanStartPositionMm = hw.scanningStartingPositionMm;
     plan.blackReferenceFrameCount = hw.blackReferenceFrames;
+    plan.whiteRefStartMm[0] = hw.whiteRefMm[0];
+    plan.whiteRefStartMm[1] = hw.whiteRefMm[1];
+    plan.brightRefStartMm[0] = hw.brightRefMm[0];
+    plan.brightRefStartMm[1] = hw.brightRefMm[1];
+    plan.sampleScanStartMm[0] = hw.sampleScanStartMm[0];
+    plan.sampleScanStartMm[1] = hw.sampleScanStartMm[1];
 
-    bool hasReference = false;
-    plan.referencePositionMm = closestCaptureCameraPositionMm(&hasReference);
-    if (!hasReference)
+    std::vector<std::size_t> selectedCameras;
+    if (!selectedCaptureCameraIndices(selectedCameras))
     {
-        errorMessage = QStringLiteral("No camera position available for white-reference alignment.");
+        errorMessage = QStringLiteral("Select at least one connected camera in the Cameras list.");
         return false;
     }
 
-    if (plan.sampleScanLengthMm > hw.sampleWindowLengthMm)
+    bool hasSampleOrigin = false;
+    double sampleOriginMm = 0.0;
+    double sampleEndMm = 0.0;
+    for (const std::size_t cameraIndex : selectedCameras)
+    {
+        const LumoCameraUi &ui = cameraIndex == 0 ? camera1Ui_ : camera2Ui_;
+        const std::size_t stageCameraIndex = stageCameraIndexForUi(ui, cameraIndex);
+
+        const double whiteStart =
+            whiteRefStartMmForStageCamera(plan, CaptureIlluminationMode::Reflectance, stageCameraIndex);
+        const double brightStart =
+            whiteRefStartMmForStageCamera(plan, CaptureIlluminationMode::Transmittance, stageCameraIndex);
+        const double sampleStart = plan.sampleScanStartMm[stageCameraIndex];
+
+        if (whiteStart + plan.whiteReferenceScanLengthMm > zaber_stage::kTravelLengthMm)
+        {
+            errorMessage = QStringLiteral("Reflectance white-reference scan for camera %1 would exceed "
+                                          "stage travel limit.")
+                               .arg(captureCameraFolderName(ui));
+            return false;
+        }
+
+        if (brightStart + plan.whiteReferenceScanLengthMm > zaber_stage::kTravelLengthMm)
+        {
+            errorMessage = QStringLiteral("Transmittance bright-reference scan for camera %1 would exceed "
+                                          "stage travel limit.")
+                               .arg(captureCameraFolderName(ui));
+            return false;
+        }
+
+        if (sampleStart + plan.sampleScanLengthMm > zaber_stage::kTravelLengthMm)
+        {
+            errorMessage =
+                QStringLiteral("Sample scan for camera %1 would exceed stage travel limit.")
+                    .arg(captureCameraFolderName(ui));
+            return false;
+        }
+
+        if (!hasSampleOrigin)
+        {
+            sampleOriginMm = sampleStart;
+            sampleEndMm = sampleStart + plan.sampleScanLengthMm;
+            hasSampleOrigin = true;
+        }
+        else
+        {
+            sampleOriginMm = std::min(sampleOriginMm, sampleStart);
+            sampleEndMm = std::max(sampleEndMm, sampleStart + plan.sampleScanLengthMm);
+        }
+    }
+
+    if (!hasSampleOrigin)
+    {
+        errorMessage = QStringLiteral("No camera positions available for sample scan planning.");
+        return false;
+    }
+
+    plan.sampleScanOriginMm = sampleOriginMm;
+    plan.sampleScanTotalDistanceMm = sampleEndMm - sampleOriginMm;
+    if (plan.sampleScanTotalDistanceMm <= 0.0)
+    {
+        errorMessage = QStringLiteral("Computed sample scan distance must be > 0.");
+        return false;
+    }
+
+    if (plan.sampleScanLengthMm > hw.sampleWindowMaxLengthMm)
     {
         errorMessage =
-            QStringLiteral("Target length (%1 mm) must not exceed the sample window length (%2 mm).")
+            QStringLiteral("Target length (%1 mm) must not exceed sample_window_max_length_mm (%2 mm).")
                 .arg(plan.sampleScanLengthMm, 0, 'f', 2)
-                .arg(hw.sampleWindowLengthMm, 0, 'f', 2);
+                .arg(hw.sampleWindowMaxLengthMm, 0, 'f', 2);
         return false;
     }
 
@@ -2849,47 +2980,6 @@ bool MainWindow::buildCaptureScanPlan(CaptureScanPlan &plan, QString &errorMessa
         return false;
     }
 
-    if (plan.referencePositionMm + plan.whiteReferenceScanLengthMm > zaber_stage::kTravelLengthMm)
-    {
-        errorMessage = QStringLiteral("Reflectance white-reference scan would exceed stage travel limit.");
-        return false;
-    }
-
-    if (plan.transmittanceWhiteRefStartPositionMm + plan.whiteReferenceScanLengthMm
-        > zaber_stage::kTravelLengthMm)
-    {
-        errorMessage =
-            QStringLiteral("Transmittance white-reference scan would exceed stage travel limit.");
-        return false;
-    }
-
-    if (plan.sampleScanStartPositionMm < plan.transmittanceWhiteRefStartPositionMm)
-    {
-        errorMessage = QStringLiteral("scanning_starting_position_mm must be at or after "
-                                      "front_edge_sample_window_mm.");
-        return false;
-    }
-
-    const double sampleWindowEndMm =
-        plan.transmittanceWhiteRefStartPositionMm + hw.sampleWindowLengthMm;
-    if (plan.sampleScanStartPositionMm + plan.sampleScanLengthMm > sampleWindowEndMm)
-    {
-        errorMessage =
-            QStringLiteral("Sample scan (%1 mm start + %2 mm length) exceeds the sample window "
-                             "(%3 mm front edge + %4 mm window).")
-                .arg(plan.sampleScanStartPositionMm, 0, 'f', 2)
-                .arg(plan.sampleScanLengthMm, 0, 'f', 2)
-                .arg(plan.transmittanceWhiteRefStartPositionMm, 0, 'f', 2)
-                .arg(hw.sampleWindowLengthMm, 0, 'f', 2);
-        return false;
-    }
-
-    if (plan.sampleScanStartPositionMm + plan.sampleScanLengthMm > zaber_stage::kTravelLengthMm)
-    {
-        errorMessage = QStringLiteral("Sample scan would exceed stage travel limit.");
-        return false;
-    }
-
     return true;
 }
 
@@ -2904,12 +2994,15 @@ void MainWindow::resetCaptureSequenceState()
     captureScanPhase_ = CaptureScanPhase::Idle;
     captureMoveCompletePhase_ = CaptureScanPhase::Idle;
     captureBlackRefFramesCollected_ = {0, 0};
+    captureWhiteRefCameraQueue_.clear();
+    captureWhiteRefQueueIndex_ = 0;
+    captureScanTimingActive_ = false;
 }
 
 void MainWindow::initializeCaptureModeQueue()
 {
     capturePendingIlluminationModes_.clear();
-    selectedCaptureIlluminationModes(capturePendingIlluminationModes_);
+    effectiveCaptureIlluminationModes(capturePendingIlluminationModes_);
 
     std::stable_sort(capturePendingIlluminationModes_.begin(),
                      capturePendingIlluminationModes_.end(),
@@ -3062,28 +3155,10 @@ void MainWindow::beginCaptureModeMotion()
 {
     resetCaptureSequenceState();
 
-    if (captureRecordingIlluminationMode_ == CaptureIlluminationMode::Reflectance)
-    {
-        captureScanPhase_ = CaptureScanPhase::MoveToReferencePosition;
-        appendLog(QStringLiteral("%1 (%2): moving to reference camera position %3 mm @ %4 mm/s…")
-                      .arg(captureSequenceLogPrefix())
-                      .arg(captureIlluminationFolderName(captureRecordingIlluminationMode_))
-                      .arg(captureScanPlan_.referencePositionMm, 0, 'f', 2)
-                      .arg(captureScanPlan_.operationSpeedMmPerSec, 0, 'f', 1));
-        requestCaptureAbsoluteMove(captureScanPlan_.referencePositionMm,
-                                   CaptureScanPhase::MoveToReferencePosition);
-        return;
-    }
-
-    captureScanPhase_ = CaptureScanPhase::MoveToTransmittanceWhiteRef;
-    appendLog(QStringLiteral("%1 (%2): moving to sample-window front edge %3 mm for white reference @ "
-                              "%4 mm/s…")
-                  .arg(captureSequenceLogPrefix())
-                  .arg(captureIlluminationFolderName(captureRecordingIlluminationMode_))
-                  .arg(captureScanPlan_.transmittanceWhiteRefStartPositionMm, 0, 'f', 2)
-                  .arg(captureScanPlan_.operationSpeedMmPerSec, 0, 'f', 1));
-    requestCaptureAbsoluteMove(captureScanPlan_.transmittanceWhiteRefStartPositionMm,
-                               CaptureScanPhase::MoveToTransmittanceWhiteRef);
+    if (captureRecorderMode_ == CaptureRecorderMode::Record)
+        beginCaptureBlackReference();
+    else
+        beginCaptureWhiteReferenceSequence();
 }
 
 void MainWindow::setSelectedCameraShutters(const bool open)
@@ -3152,26 +3227,19 @@ void MainWindow::onCaptureAbsoluteMoveComplete(const bool success)
         return;
     }
 
-    if (completedPhase == CaptureScanPhase::MoveToReferencePosition)
+    if (completedPhase == CaptureScanPhase::MoveToWhiteRefCamera)
     {
-        if (captureRecorderMode_ == CaptureRecorderMode::Record)
-            beginCaptureBlackReference();
-        else
-            beginCaptureWhiteReferenceScan();
+        beginCaptureWhiteReferenceScan();
         return;
     }
 
-    if (completedPhase == CaptureScanPhase::MoveToTransmittanceWhiteRef)
+    if (completedPhase == CaptureScanPhase::MoveToSampleScanOrigin)
     {
-        if (captureRecorderMode_ == CaptureRecorderMode::Record)
-            beginCaptureBlackReference();
-        else
-            beginCaptureWhiteReferenceScan();
+        startCaptureRelativeScan(captureScanPlan_.sampleScanTotalDistanceMm,
+                                 captureScanPlan_.recordScanSpeedMmPerSec,
+                                 CaptureScanPhase::SampleScan);
         return;
     }
-
-    if (completedPhase == CaptureScanPhase::MoveToSampleStart)
-        beginCaptureSampleScan();
 }
 
 void MainWindow::beginCaptureBlackReference()
@@ -3205,44 +3273,108 @@ void MainWindow::onCaptureBlackReferenceComplete()
 
     setSelectedCameraShutters(true);
 
-    QTimer::singleShot(750, this, [this]() { beginCaptureWhiteReferenceScan(); });
+    QTimer::singleShot(750, this, [this]() { beginCaptureWhiteReferenceSequence(); });
+}
+
+void MainWindow::beginCaptureWhiteReferenceSequence()
+{
+    captureWhiteRefCameraQueue_.clear();
+    captureWhiteRefQueueIndex_ = 0;
+
+    std::vector<std::size_t> selectedCameras;
+    if (!selectedCaptureCameraIndices(selectedCameras))
+        return;
+
+    std::sort(selectedCameras.begin(),
+              selectedCameras.end(),
+              [this](const std::size_t a, const std::size_t b) {
+                  const LumoCameraUi &uiA = a == 0 ? camera1Ui_ : camera2Ui_;
+                  const LumoCameraUi &uiB = b == 0 ? camera1Ui_ : camera2Ui_;
+                  return stageCameraIndexForUi(uiA, a) < stageCameraIndexForUi(uiB, b);
+              });
+    captureWhiteRefCameraQueue_ = std::move(selectedCameras);
+    beginCaptureWhiteReferenceScanForCurrentCamera();
+}
+
+void MainWindow::beginCaptureWhiteReferenceScanForCurrentCamera()
+{
+    if (captureWhiteRefQueueIndex_ >= captureWhiteRefCameraQueue_.size())
+    {
+        beginCaptureSampleScan();
+        return;
+    }
+
+    const std::size_t cameraIndex = captureWhiteRefCameraQueue_[captureWhiteRefQueueIndex_];
+    const LumoCameraUi &ui = cameraIndex == 0 ? camera1Ui_ : camera2Ui_;
+    const std::size_t stageCameraIndex = stageCameraIndexForUi(ui, cameraIndex);
+    const double targetMm = whiteRefStartMmForStageCamera(captureScanPlan_,
+                                                          captureRecordingIlluminationMode_,
+                                                          stageCameraIndex);
+    const QString refLabel =
+        captureRecordingIlluminationMode_ == CaptureIlluminationMode::Reflectance
+            ? QStringLiteral("white reference")
+            : QStringLiteral("bright reference");
+
+    captureScanPhase_ = CaptureScanPhase::MoveToWhiteRefCamera;
+    appendLog(QStringLiteral("%1 (%2): moving %3 to %4 position %5 mm @ %6 mm/s…")
+                  .arg(captureSequenceLogPrefix())
+                  .arg(captureIlluminationFolderName(captureRecordingIlluminationMode_))
+                  .arg(profileTabNameForUi(ui))
+                  .arg(refLabel)
+                  .arg(targetMm, 0, 'f', 2)
+                  .arg(captureScanPlan_.operationSpeedMmPerSec, 0, 'f', 1));
+    requestCaptureAbsoluteMove(targetMm, CaptureScanPhase::MoveToWhiteRefCamera);
 }
 
 void MainWindow::beginCaptureWhiteReferenceScan()
 {
-    captureScanPhase_ = CaptureScanPhase::WhiteReferenceScan;
-
     if (captureRecorderMode_ == CaptureRecorderMode::Preview)
         setSelectedCameraShutters(true);
 
-    appendLog(QStringLiteral("%1: white-reference scan %2 mm @ %3 mm/s…")
+    if (captureWhiteRefQueueIndex_ >= captureWhiteRefCameraQueue_.size())
+        return;
+
+    const std::size_t cameraIndex = captureWhiteRefCameraQueue_[captureWhiteRefQueueIndex_];
+    const LumoCameraUi &ui = cameraIndex == 0 ? camera1Ui_ : camera2Ui_;
+    const QString refLabel =
+        captureRecordingIlluminationMode_ == CaptureIlluminationMode::Reflectance
+            ? QStringLiteral("white-reference")
+            : QStringLiteral("bright-reference");
+
+    appendLog(QStringLiteral("%1: %2 scan for %3 — %4 mm @ %5 mm/s…")
                   .arg(captureSequenceLogPrefix())
+                  .arg(refLabel)
+                  .arg(profileTabNameForUi(ui))
                   .arg(captureScanPlan_.whiteReferenceScanLengthMm, 0, 'f', 2)
                   .arg(captureScanPlan_.recordScanSpeedMmPerSec, 0, 'f', 1));
 
     startCaptureRelativeScan(captureScanPlan_.whiteReferenceScanLengthMm,
-                             captureScanPlan_.recordScanSpeedMmPerSec);
+                             captureScanPlan_.recordScanSpeedMmPerSec,
+                             CaptureScanPhase::WhiteReferenceScan);
 }
 
 void MainWindow::beginCaptureSampleScan()
 {
-    captureScanPhase_ = CaptureScanPhase::SampleScan;
-
-    appendLog(QStringLiteral("%1: sample scan %2 mm @ %3 mm/s…")
+    captureScanPhase_ = CaptureScanPhase::MoveToSampleScanOrigin;
+    appendLog(QStringLiteral("%1 (%2): moving to sample scan origin %3 mm @ %4 mm/s…")
                   .arg(captureSequenceLogPrefix())
-                  .arg(captureScanPlan_.sampleScanLengthMm, 0, 'f', 2)
-                  .arg(captureScanPlan_.recordScanSpeedMmPerSec, 0, 'f', 1));
-
-    startCaptureRelativeScan(captureScanPlan_.sampleScanLengthMm, captureScanPlan_.recordScanSpeedMmPerSec);
+                  .arg(captureIlluminationFolderName(captureRecordingIlluminationMode_))
+                  .arg(captureScanPlan_.sampleScanOriginMm, 0, 'f', 2)
+                  .arg(captureScanPlan_.operationSpeedMmPerSec, 0, 'f', 1));
+    requestCaptureAbsoluteMove(captureScanPlan_.sampleScanOriginMm,
+                               CaptureScanPhase::MoveToSampleScanOrigin,
+                               captureScanPlan_.operationSpeedMmPerSec);
 }
 
-void MainWindow::startCaptureRelativeScan(const double distanceMm, const double speedMmPerSec)
+void MainWindow::startCaptureRelativeScan(const double distanceMm,
+                                          const double speedMmPerSec,
+                                          const CaptureScanPhase capturePhaseOnMoveStart)
 {
-    stageWorker_->requestPrimaryPosition([this, distanceMm, speedMmPerSec](const double positionMm,
-                                                                           const bool ok) {
+    stageWorker_->requestPrimaryPosition([this, distanceMm, speedMmPerSec, capturePhaseOnMoveStart](
+                                             const double positionMm, const bool ok) {
         QMetaObject::invokeMethod(
             this,
-            [this, positionMm, ok, distanceMm, speedMmPerSec]() {
+            [this, positionMm, ok, distanceMm, speedMmPerSec, capturePhaseOnMoveStart]() {
                 if (captureRecorderMode_ == CaptureRecorderMode::Idle)
                     return;
 
@@ -3265,6 +3397,12 @@ void MainWindow::startCaptureRelativeScan(const double distanceMm, const double 
                 }
 
                 stageWorker_->requestMoveRelativeMm(distanceMm, speedMmPerSec);
+                captureScanOriginPositionMm_ = positionMm;
+                captureActiveScanDistanceMm_ = distanceMm;
+                captureScanElapsed_.restart();
+                captureScanTimingActive_ = true;
+                if (capturePhaseOnMoveStart != CaptureScanPhase::Idle)
+                    captureScanPhase_ = capturePhaseOnMoveStart;
 
                 const int durationMs =
                     static_cast<int>(std::ceil((distanceMm / speedMmPerSec) * 1000.0)) + 750;
@@ -3283,17 +3421,12 @@ void MainWindow::onCaptureRelativeScanComplete()
     if (stageWorker_ != nullptr)
         stageWorker_->requestStopMotion();
 
+    captureScanTimingActive_ = false;
+
     if (captureScanPhase_ == CaptureScanPhase::WhiteReferenceScan)
     {
-        captureScanPhase_ = CaptureScanPhase::MoveToSampleStart;
-        appendLog(QStringLiteral("%1 (%2): moving to scanning start position %3 mm @ %4 mm/s…")
-                      .arg(captureSequenceLogPrefix())
-                      .arg(captureIlluminationFolderName(captureRecordingIlluminationMode_))
-                      .arg(captureScanPlan_.sampleScanStartPositionMm, 0, 'f', 2)
-                      .arg(captureScanPlan_.recordScanSpeedMmPerSec, 0, 'f', 1));
-        requestCaptureAbsoluteMove(captureScanPlan_.sampleScanStartPositionMm,
-                                   CaptureScanPhase::MoveToSampleStart,
-                                   captureScanPlan_.recordScanSpeedMmPerSec);
+        ++captureWhiteRefQueueIndex_;
+        beginCaptureWhiteReferenceScanForCurrentCamera();
         return;
     }
 
@@ -3354,6 +3487,7 @@ void MainWindow::completeCaptureSequence()
     if (wasRecord)
     {
         endCaptureRawDumpSession();
+        runCapturePostProcessingIfEnabled();
         appendLog(QStringLiteral("Capture record: scan sequence finished."));
         homeStageAfterCapture();
     }
@@ -3362,6 +3496,41 @@ void MainWindow::completeCaptureSequence()
         appendLog(QStringLiteral("Capture preview: scan sequence finished."));
         homeStageAfterCapture();
     }
+}
+
+void MainWindow::runCapturePostProcessingIfEnabled()
+{
+    if (capturePreprocessAfterScanCheck_ == nullptr || !capturePreprocessAfterScanCheck_->isChecked())
+        return;
+
+    if (!useStageForCapture())
+        return;
+
+    if (lastEndedCaptureSessionSummary_.sessionDirectory.isEmpty())
+        return;
+
+    if (capturePostProcessorWorker_ == nullptr)
+        return;
+
+    hf::processing::CapturePostProcessOptions options;
+    options.saveFfcImage =
+        captureSaveFfcImageCheck_ != nullptr && captureSaveFfcImageCheck_->isChecked();
+
+    appendLog(QStringLiteral("Capture post-process: started in background…"));
+
+  capturePostProcessorWorker_->requestProcess(
+        lastEndedCaptureSessionSummary_,
+        options,
+        [this](const hf::processing::CapturePostProcessResult &result) {
+            QMetaObject::invokeMethod(
+                this,
+                [this, result]() {
+                    for (const QString &line : result.logLines)
+                        appendLog(line);
+                    updateCaptureRecorderControls();
+                },
+                Qt::QueuedConnection);
+        });
 }
 
 void MainWindow::startCaptureSequence()
@@ -3419,13 +3588,11 @@ void MainWindow::startCapturePreview()
     captureRecorderMode_ = CaptureRecorderMode::Preview;
     updateCaptureRecorderControls();
 
-    appendLog(QStringLiteral("Capture preview: reflectance ref %1 mm or transmittance front edge %2 mm "
-                              "→ white ref %3 mm → scan start %4 mm → sample scan %5 mm @ %6 mm/s "
+    appendLog(QStringLiteral("Capture preview: per-camera reference positions from hyperfusion.cfg, "
+                              "sample origin %1 mm, total scan %2 mm, target length %3 mm @ %4 mm/s "
                               "(no save)…")
-                  .arg(plan.referencePositionMm, 0, 'f', 2)
-                  .arg(plan.transmittanceWhiteRefStartPositionMm, 0, 'f', 2)
-                  .arg(plan.whiteReferenceScanLengthMm, 0, 'f', 2)
-                  .arg(plan.sampleScanStartPositionMm, 0, 'f', 2)
+                  .arg(plan.sampleScanOriginMm, 0, 'f', 2)
+                  .arg(plan.sampleScanTotalDistanceMm, 0, 'f', 2)
                   .arg(plan.sampleScanLengthMm, 0, 'f', 2)
                   .arg(plan.recordScanSpeedMmPerSec, 0, 'f', 1));
 
@@ -3467,6 +3634,77 @@ bool MainWindow::selectedCaptureCameraIndices(std::vector<std::size_t> &cameraIn
     consider(captureCamera1Check_, 0);
     consider(captureCamera2Check_, 1);
     return !cameraIndices.empty();
+}
+
+std::size_t MainWindow::stageCameraIndexForUi(const LumoCameraUi &ui,
+                                              const std::size_t cameraIndex) const
+{
+    if (ui.sensorKind == LumoSensorKind::Fx10ePleora)
+        return 0;
+    if (ui.sensorKind == LumoSensorKind::Swir3Ni)
+        return 1;
+    return cameraIndex;
+}
+
+double MainWindow::whiteRefStartMmForStageCamera(const CaptureScanPlan &plan,
+                                                 const CaptureIlluminationMode mode,
+                                                 const std::size_t stageCameraIndex) const
+{
+    if (stageCameraIndex >= 2)
+        return 0.0;
+
+    if (mode == CaptureIlluminationMode::Transmittance)
+        return plan.brightRefStartMm[stageCameraIndex];
+
+    return plan.whiteRefStartMm[stageCameraIndex];
+}
+
+double MainWindow::estimatedStageScanPositionMm() const
+{
+    if (!captureScanTimingActive_)
+        return 0.0;
+
+    const double elapsedSec = static_cast<double>(captureScanElapsed_.elapsed()) / 1000.0;
+    const double traveledMm =
+        std::min(elapsedSec * captureScanPlan_.recordScanSpeedMmPerSec, captureActiveScanDistanceMm_);
+    return captureScanOriginPositionMm_ + traveledMm;
+}
+
+bool MainWindow::isStagePositionWithinScanWindow(const double positionMm,
+                                                 const double windowStartMm,
+                                                 const double windowLengthMm) const
+{
+    constexpr double kMarginMm = 0.25;
+    return positionMm + kMarginMm >= windowStartMm
+           && positionMm - kMarginMm <= windowStartMm + windowLengthMm;
+}
+
+bool MainWindow::shouldRecordWhiteReferenceFrameForCamera(const std::size_t stageCameraIndex) const
+{
+    if (captureWhiteRefQueueIndex_ >= captureWhiteRefCameraQueue_.size())
+        return false;
+
+    const std::size_t cameraIndex = captureWhiteRefCameraQueue_[captureWhiteRefQueueIndex_];
+    const LumoCameraUi &ui = cameraIndex == 0 ? camera1Ui_ : camera2Ui_;
+    if (stageCameraIndexForUi(ui, cameraIndex) != stageCameraIndex)
+        return false;
+
+    const double windowStart =
+        whiteRefStartMmForStageCamera(captureScanPlan_,
+                                      captureRecordingIlluminationMode_,
+                                      stageCameraIndex);
+    return isStagePositionWithinScanWindow(estimatedStageScanPositionMm(),
+                                           windowStart,
+                                           captureScanPlan_.whiteReferenceScanLengthMm);
+}
+
+bool MainWindow::shouldRecordSampleFrameForCamera(const std::size_t stageCameraIndex,
+                                                  const double stagePositionMm) const
+{
+    const double windowStart = captureScanPlan_.sampleScanStartMm[stageCameraIndex];
+    return isStagePositionWithinScanWindow(stagePositionMm,
+                                           windowStart,
+                                           captureScanPlan_.sampleScanLengthMm);
 }
 
 bool MainWindow::selectedCaptureCameraStreaming(QString &errorMessage) const
@@ -3565,6 +3803,29 @@ bool MainWindow::selectedCaptureIlluminationModes(std::vector<CaptureIlluminatio
     return !modes.empty();
 }
 
+bool MainWindow::isCaptureStageConnected() const
+{
+    return stageWorker_ != nullptr && stageWorker_->currentState() == StageState::Connected;
+}
+
+bool MainWindow::useStageForCapture() const
+{
+    return isCaptureStageConnected()
+           && captureUseStageForRecordingCheck_ != nullptr
+           && captureUseStageForRecordingCheck_->isChecked();
+}
+
+bool MainWindow::effectiveCaptureIlluminationModes(std::vector<CaptureIlluminationMode> &modes) const
+{
+    if (!useStageForCapture())
+    {
+        modes = {CaptureIlluminationMode::Reflectance};
+        return true;
+    }
+
+    return selectedCaptureIlluminationModes(modes);
+}
+
 QString MainWindow::captureIlluminationFolderName(const CaptureIlluminationMode mode) const
 {
     return mode == CaptureIlluminationMode::Reflectance ? QStringLiteral("reflectance")
@@ -3594,7 +3855,7 @@ bool MainWindow::resolveCaptureRecordingIlluminationMode(CaptureIlluminationMode
                                                          QString &errorMessage) const
 {
     std::vector<CaptureIlluminationMode> modes;
-    if (!selectedCaptureIlluminationModes(modes))
+    if (!effectiveCaptureIlluminationModes(modes))
     {
         errorMessage = QStringLiteral("Select reflectance and/or transmittance mode.");
         return false;
@@ -3630,7 +3891,7 @@ bool MainWindow::buildCaptureWriterSessionConfig(CaptureWriterSessionConfig &con
     config.streams.clear();
 
     std::vector<CaptureIlluminationMode> illuminationModes;
-    if (!selectedCaptureIlluminationModes(illuminationModes))
+    if (!effectiveCaptureIlluminationModes(illuminationModes))
     {
         errorMessage = QStringLiteral("Select reflectance and/or transmittance mode.");
         return false;
@@ -3689,6 +3950,7 @@ void MainWindow::endCaptureRawDumpSession()
         return;
 
     const CaptureWriterSessionSummary summary = captureWriterWorker_->endSessionSync();
+    lastEndedCaptureSessionSummary_ = summary;
 
     if (summary.sessionDirectory.isEmpty())
         return;
@@ -3696,7 +3958,7 @@ void MainWindow::endCaptureRawDumpSession()
     appendLog(QStringLiteral("Capture record: saved to %1").arg(summary.sessionDirectory));
     for (auto it = summary.streams.cbegin(); it != summary.streams.cend(); ++it)
     {
-        appendLog(QStringLiteral("  %1 — %2 frames (%3 bytes) → %4")
+        appendLog(QStringLiteral("  %1 - %2: %3 frames (%4 bytes) -> %5")
                       .arg(it->relativeRoot.isEmpty() ? it.key() : it->relativeRoot)
                       .arg(it->baseName)
                       .arg(it->frameCount)
@@ -3704,13 +3966,13 @@ void MainWindow::endCaptureRawDumpSession()
                       .arg(QFileInfo(it->rawPath).fileName()));
         if (!it->blackReferenceRawPath.isEmpty() && it->blackReferenceFrameCount > 0)
         {
-            appendLog(QStringLiteral("    DARKREF — %1 frames → %2")
+            appendLog(QStringLiteral("    DARKREF - %1 frames -> %2")
                           .arg(it->blackReferenceFrameCount)
                           .arg(QFileInfo(it->blackReferenceRawPath).fileName()));
         }
         if (!it->whiteReferenceRawPath.isEmpty() && it->whiteReferenceFrameCount > 0)
         {
-            appendLog(QStringLiteral("    WHITEREF — %1 frames → %2")
+            appendLog(QStringLiteral("    WHITEREF - %1 frames -> %2")
                           .arg(it->whiteReferenceFrameCount)
                           .arg(QFileInfo(it->whiteReferenceRawPath).fileName()));
         }
@@ -3736,9 +3998,10 @@ void MainWindow::appendCaptureRecordFrame(const FramePacket &frame)
     routed.captureStreamKey =
         captureStreamRelativeRoot(captureRecordingIlluminationMode_, cameraUi);
 
-    // Stage disconnected: continuous raw dump (no scan sequence).
-    if (captureScanPhase_ == CaptureScanPhase::Idle)
+    // Reflectance-only continuous dump when stage scanning is disabled.
+    if (!useStageForCapture())
     {
+        routed.captureDestination = CaptureFrameDestination::Sample;
         captureWriterWorker_->submitFrame(std::move(routed));
         return;
     }
@@ -3756,6 +4019,10 @@ void MainWindow::appendCaptureRecordFrame(const FramePacket &frame)
 
     if (captureScanPhase_ == CaptureScanPhase::WhiteReferenceScan)
     {
+        const std::size_t stageCameraIndex = stageCameraIndexForUi(cameraUi, cameraIndex);
+        if (!shouldRecordWhiteReferenceFrameForCamera(stageCameraIndex))
+            return;
+
         routed.captureDestination = CaptureFrameDestination::WhiteReference;
         captureWriterWorker_->submitFrame(std::move(routed));
         return;
@@ -3763,9 +4030,17 @@ void MainWindow::appendCaptureRecordFrame(const FramePacket &frame)
 
     if (captureScanPhase_ == CaptureScanPhase::SampleScan)
     {
+        const std::size_t stageCameraIndex = stageCameraIndexForUi(cameraUi, cameraIndex);
+        const double stagePositionMm = estimatedStageScanPositionMm();
+        if (!shouldRecordSampleFrameForCamera(stageCameraIndex, stagePositionMm))
+            return;
+
         routed.captureDestination = CaptureFrameDestination::Sample;
         captureWriterWorker_->submitFrame(std::move(routed));
+        return;
     }
+
+    // Discard frames during homing, stage moves, and shutter transitions.
 }
 
 void MainWindow::startCaptureRecord()
@@ -3773,9 +4048,17 @@ void MainWindow::startCaptureRecord()
     if (captureRecorderMode_ != CaptureRecorderMode::Idle)
         return;
 
+    if (capturePostProcessorWorker_ != nullptr
+        && capturePostProcessorWorker_->queueStatus().outstandingTotal() > 0)
+    {
+        appendLog(QStringLiteral(
+            "Capture record: post-processing is still running — wait for it to finish."));
+        return;
+    }
+
     QString errorMessage;
     std::vector<CaptureIlluminationMode> illuminationModes;
-    if (!selectedCaptureIlluminationModes(illuminationModes))
+    if (!effectiveCaptureIlluminationModes(illuminationModes))
     {
         appendLog(QStringLiteral("Capture record: Select reflectance and/or transmittance mode."));
         return;
@@ -3796,20 +4079,25 @@ void MainWindow::startCaptureRecord()
     for (const CaptureIlluminationMode mode : illuminationModes)
         modeFolders.push_back(captureIlluminationFolderName(mode));
 
+    const bool useStage = useStageForCapture();
+
+    if (!useStage)
+    {
+        const QString reason =
+            isCaptureStageConnected()
+                ? QStringLiteral("stage scanning disabled")
+                : QStringLiteral("stage not connected");
+        appendLog(QStringLiteral("Capture record: reflectance only → %1 (%2). "
+                                  "Press Stop when finished.")
+                      .arg(captureWriterWorker_->sessionDirectory(), reason));
+        saveCaptureRecordLighthouseBaseline();
+        applyCaptureRecordLighthouseIntensitiesForMode(CaptureIlluminationMode::Reflectance);
+        return;
+    }
+
     appendLog(QStringLiteral("Capture record: illumination folders — %1 (reflectance first, then "
                               "transmittance when both selected)")
                   .arg(modeFolders.join(QStringLiteral(", "))));
-
-    const bool stageConnected =
-        stageWorker_ != nullptr && stageWorker_->currentState() == StageState::Connected;
-
-    if (!stageConnected)
-    {
-        appendLog(QStringLiteral("Capture record: writing .raw to %1 (stage not connected). "
-                                  "Press Stop when finished.")
-                      .arg(captureWriterWorker_->sessionDirectory()));
-        return;
-    }
 
     CaptureScanPlan plan;
     if (!buildCaptureScanPlan(plan, errorMessage))
@@ -3819,15 +4107,12 @@ void MainWindow::startCaptureRecord()
         return;
     }
 
-    appendLog(QStringLiteral("Capture record: session %1 — reflectance: ref %2 mm → black → white "
-                              "%3 mm → scan start %4 mm → sample %5 mm; transmittance: front edge "
-                              "%6 mm → black → white %3 mm → scan start %4 mm → sample %5 mm @ %7 mm/s.")
+    appendLog(QStringLiteral("Capture record: session %1 — per-camera white/bright ref from cfg, "
+                              "sample origin %2 mm, total scan %3 mm, target length %4 mm @ %5 mm/s.")
                   .arg(captureWriterWorker_->sessionDirectory())
-                  .arg(plan.referencePositionMm, 0, 'f', 2)
-                  .arg(plan.whiteReferenceScanLengthMm, 0, 'f', 2)
-                  .arg(plan.sampleScanStartPositionMm, 0, 'f', 2)
+                  .arg(plan.sampleScanOriginMm, 0, 'f', 2)
+                  .arg(plan.sampleScanTotalDistanceMm, 0, 'f', 2)
                   .arg(plan.sampleScanLengthMm, 0, 'f', 2)
-                  .arg(plan.transmittanceWhiteRefStartPositionMm, 0, 'f', 2)
                   .arg(plan.recordScanSpeedMmPerSec, 0, 'f', 1));
 
     homeStageBeforeCapture();
@@ -4021,6 +4306,8 @@ void MainWindow::performGracefulShutdown()
 
     if (captureWriterWorker_ != nullptr)
         captureWriterWorker_->stop();
+    if (capturePostProcessorWorker_ != nullptr)
+        capturePostProcessorWorker_->stop();
 
     if (coordinator_ != nullptr && anyCameraSessionActive())
     {
@@ -4095,11 +4382,15 @@ void MainWindow::loadHardwareConfig()
         appendLog(QStringLiteral("Hardware config: using built-in defaults (hyperfusion.cfg not found)"));
     }
 
-    appendLog(QStringLiteral("  fx10e_mm=%1, swir3_mm=%2, sample_front=%3 mm, sample_window=%4 mm")
-                  .arg(config.cameraPositionMm[0], 0, 'f', 2)
-                  .arg(config.cameraPositionMm[1], 0, 'f', 2)
-                  .arg(config.frontEdgeSampleWindowMm, 0, 'f', 2)
-                  .arg(config.sampleWindowLengthMm, 0, 'f', 2));
+    appendLog(QStringLiteral("  fx10e white=%1 mm, swir3 white=%2 mm, fx10e bright=%3 mm, swir3 bright=%4 mm")
+                  .arg(config.whiteRefMm[0], 0, 'f', 2)
+                  .arg(config.whiteRefMm[1], 0, 'f', 2)
+                  .arg(config.brightRefMm[0], 0, 'f', 2)
+                  .arg(config.brightRefMm[1], 0, 'f', 2));
+    appendLog(QStringLiteral("  fx10e sample start=%1 mm, swir3 sample start=%2 mm, sample window max=%3 mm")
+                  .arg(config.sampleScanStartMm[0], 0, 'f', 2)
+                  .arg(config.sampleScanStartMm[1], 0, 'f', 2)
+                  .arg(config.sampleWindowMaxLengthMm, 0, 'f', 2));
     appendLog(QStringLiteral("  operation_speed=%1 mm/s, record_scan_speed=%2 mm/s, white_ref_scan=%3 mm, black_ref_frames=%4, spatial=%5 mm/px")
                   .arg(config.operationScanningSpeedMmPerSec, 0, 'f', 1)
                   .arg(config.recordScanningSpeedMmPerSec, 0, 'f', 1)
@@ -4140,9 +4431,7 @@ void MainWindow::applyHardwareConfigToUi()
     if (captureTargetLengthSpin_ != nullptr)
     {
         constexpr double kMinTargetLengthMm = 0.01;
-        const double maxTarget = std::min(
-            config.sampleWindowLengthMm,
-            zaber_stage::kTravelLengthMm - config.frontEdgeSampleWindowMm);
+        const double maxTarget = std::min(config.sampleWindowMaxLengthMm, zaber_stage::kTravelLengthMm);
         captureTargetLengthSpin_->setRange(kMinTargetLengthMm, std::max(kMinTargetLengthMm, maxTarget));
         if (captureTargetLengthSpin_->value() > maxTarget)
             captureTargetLengthSpin_->setValue(maxTarget);
@@ -4156,6 +4445,12 @@ void MainWindow::loadPersistedUiSettings()
     const PersistedCapturePosition capturePosition = AppSettingsStore::loadCapturePosition();
     if (captureTargetLengthSpin_ != nullptr)
         captureTargetLengthSpin_->setValue(capturePosition.targetLengthMm);
+    if (captureUseStageForRecordingCheck_ != nullptr)
+        captureUseStageForRecordingCheck_->setChecked(capturePosition.useStageForRecording);
+    if (capturePreprocessAfterScanCheck_ != nullptr)
+        capturePreprocessAfterScanCheck_->setChecked(capturePosition.preprocessAfterScan);
+    if (captureSaveFfcImageCheck_ != nullptr)
+        captureSaveFfcImageCheck_->setChecked(capturePosition.saveFfcImage);
 
     const PersistedStageConnection stageConnection = AppSettingsStore::loadStageConnection();
     persistedStagePort_ = stageConnection.port;
@@ -4172,6 +4467,12 @@ void MainWindow::savePersistedUiSettings()
     PersistedCapturePosition capturePosition;
     if (captureTargetLengthSpin_ != nullptr)
         capturePosition.targetLengthMm = captureTargetLengthSpin_->value();
+    if (captureUseStageForRecordingCheck_ != nullptr)
+        capturePosition.useStageForRecording = captureUseStageForRecordingCheck_->isChecked();
+    if (capturePreprocessAfterScanCheck_ != nullptr)
+        capturePosition.preprocessAfterScan = capturePreprocessAfterScanCheck_->isChecked();
+    if (captureSaveFfcImageCheck_ != nullptr)
+        capturePosition.saveFfcImage = captureSaveFfcImageCheck_->isChecked();
     AppSettingsStore::saveCapturePosition(capturePosition);
 
     PersistedStageConnection stageConnection;
@@ -4338,6 +4639,12 @@ void MainWindow::connectPersistedSettingsAutosave()
 
     if (captureTargetLengthSpin_ != nullptr)
         connect(captureTargetLengthSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged), this, schedule);
+    if (captureUseStageForRecordingCheck_ != nullptr)
+        connect(captureUseStageForRecordingCheck_, &QCheckBox::toggled, this, schedule);
+    if (capturePreprocessAfterScanCheck_ != nullptr)
+        connect(capturePreprocessAfterScanCheck_, &QCheckBox::toggled, this, schedule);
+    if (captureSaveFfcImageCheck_ != nullptr)
+        connect(captureSaveFfcImageCheck_, &QCheckBox::toggled, this, schedule);
     if (stagePortCombo_ != nullptr)
         connect(stagePortCombo_, &QComboBox::currentIndexChanged, this, schedule);
     if (stageBaudCombo_ != nullptr)
@@ -4917,7 +5224,7 @@ void MainWindow::updateDetectorFrame(const FramePacket &frame)
         syncProfileRgbMarkers(*ui);
     }
 
-    const QImage image = framePacketToQImage(frame);
+    const QImage image = ui::framePacketToQImage(frame);
     if (image.isNull())
         return;
 

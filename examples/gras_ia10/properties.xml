@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<properties>
- <property name="countervalue">0000</property>
- <property name="prefix"></property>
- <property name="name">gras_ia10</property>
- <property name="timestampformat">!%Y-%m-%d_%H-%M-%S</property>
- <property name="timestamp">2025-10-31_19-03-35</property>
- <property name="namingformat">only_name</property>
-</properties>

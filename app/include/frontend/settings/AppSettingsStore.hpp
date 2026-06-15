@@ -10,6 +10,9 @@ struct PersistedCapturePosition
 {
     double targetLengthMm = 125.0;
     double scanningSpeedMmPerSec = 25.0;
+    bool useStageForRecording = true;
+    bool preprocessAfterScan = true;
+    bool saveFfcImage = true;
 };
 
 struct PersistedStageConnection

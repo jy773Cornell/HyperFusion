@@ -1,0 +1,206 @@
+#include "backend/processing/ReferenceSpectrumPlot.hpp"
+
+#include <QDir>
+#include <QFileInfo>
+#include <QFont>
+#include <QFontMetrics>
+#include <QImage>
+#include <QPainter>
+#include <QPen>
+#include <QPolygonF>
+#include <QSaveFile>
+
+#include <algorithm>
+#include <cmath>
+
+namespace hf::processing
+{
+namespace
+{
+constexpr int kPlotWidth = 960;
+constexpr int kPlotHeight = 540;
+constexpr int kMarginLeft = 72;
+constexpr int kMarginRight = 24;
+constexpr int kMarginTop = 48;
+constexpr int kMarginBottom = 56;
+constexpr double kDnAxisMax = 4096.0;
+
+QPointF mapDataToPlot(const QRectF &plotRect,
+                      const double wavelengthMin,
+                      const double wavelengthMax,
+                      const double yMin,
+                      const double yMax,
+                      const double wavelengthNm,
+                      const double dn)
+{
+    const double xNorm =
+        (wavelengthNm - wavelengthMin) / std::max(1e-9, wavelengthMax - wavelengthMin);
+    const double yNorm = (dn - yMin) / std::max(1e-9, yMax - yMin);
+    return QPointF(plotRect.left() + xNorm * plotRect.width(),
+                   plotRect.bottom() - yNorm * plotRect.height());
+}
+} // namespace
+
+bool saveReferenceMeanStdPlotPng(const std::vector<double> &wavelengthsNm,
+                                 const std::vector<double> &meanDn,
+                                 const std::vector<double> &stdDn,
+                                 const QString &title,
+                                 const QString &outputPath,
+                                 QString *errorMessage)
+{
+    if (wavelengthsNm.empty() || meanDn.empty() || stdDn.empty())
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("Reference spectrum plot has no data.");
+        return false;
+    }
+
+    const std::size_t bandCount =
+        std::min({wavelengthsNm.size(), meanDn.size(), stdDn.size()});
+    if (bandCount == 0)
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("Reference spectrum plot has no bands.");
+        return false;
+    }
+
+    const double wavelengthMin = wavelengthsNm.front();
+    const double wavelengthMax = wavelengthsNm[bandCount - 1];
+    const double yMin = 0.0;
+    const double yMax = kDnAxisMax;
+
+    QImage image(kPlotWidth, kPlotHeight, QImage::Format_RGB32);
+    image.fill(Qt::white);
+
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    QFont titleFont = painter.font();
+    titleFont.setBold(true);
+    titleFont.setPointSize(11);
+    painter.setFont(titleFont);
+    painter.setPen(Qt::black);
+    painter.drawText(QRect(0, 8, kPlotWidth, kMarginTop), Qt::AlignHCenter | Qt::AlignVCenter, title);
+
+    const QRectF plotRect(kMarginLeft,
+                          kMarginTop,
+                          kPlotWidth - kMarginLeft - kMarginRight,
+                          kPlotHeight - kMarginTop - kMarginBottom);
+
+    painter.setPen(QPen(QColor(220, 220, 220)));
+    for (int grid = 0; grid <= 4; ++grid)
+    {
+        const double yValue = yMin + (static_cast<double>(grid) / 4.0) * (yMax - yMin);
+        const QPointF left = mapDataToPlot(plotRect, wavelengthMin, wavelengthMax, yMin, yMax, wavelengthMin, yValue);
+        const QPointF right = mapDataToPlot(plotRect, wavelengthMin, wavelengthMax, yMin, yMax, wavelengthMax, yValue);
+        painter.drawLine(left, right);
+    }
+
+    painter.setPen(QPen(Qt::black, 1.2));
+    painter.drawRect(plotRect);
+
+    QPolygonF upper;
+    QPolygonF lower;
+    upper.reserve(static_cast<int>(bandCount));
+    lower.reserve(static_cast<int>(bandCount));
+
+    for (std::size_t band = 0; band < bandCount; ++band)
+    {
+        const double wavelength = wavelengthsNm[band];
+        const double mean = meanDn[band];
+        const double std = stdDn[band];
+        upper.push_back(
+            mapDataToPlot(plotRect, wavelengthMin, wavelengthMax, yMin, yMax, wavelength, mean + std));
+        lower.push_front(
+            mapDataToPlot(plotRect, wavelengthMin, wavelengthMax, yMin, yMax, wavelength, mean - std));
+    }
+
+    QPolygonF fill = upper;
+    fill.append(lower);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(120, 170, 230, 90));
+    painter.drawPolygon(fill);
+
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(QColor(30, 90, 180), 2.0));
+    QPolygonF meanLine;
+    meanLine.reserve(static_cast<int>(bandCount));
+    for (std::size_t band = 0; band < bandCount; ++band)
+    {
+        meanLine.push_back(mapDataToPlot(plotRect,
+                                         wavelengthMin,
+                                         wavelengthMax,
+                                         yMin,
+                                         yMax,
+                                         wavelengthsNm[band],
+                                         meanDn[band]));
+    }
+    painter.drawPolyline(meanLine);
+
+    QFont axisFont = painter.font();
+    axisFont.setBold(false);
+    axisFont.setPointSize(9);
+    painter.setFont(axisFont);
+    painter.setPen(Qt::black);
+
+    painter.drawText(QRect(0, kPlotHeight - kMarginBottom + 8, kPlotWidth, 24),
+                     Qt::AlignHCenter | Qt::AlignTop,
+                     QStringLiteral("Wavelength (nm)"));
+
+    painter.save();
+    painter.translate(18, kPlotHeight / 2);
+    painter.rotate(-90.0);
+    painter.drawText(QRect(-kPlotHeight / 2, 0, kPlotHeight, 20),
+                     Qt::AlignHCenter | Qt::AlignTop,
+                     QStringLiteral("Intensity (DN, 0–4096)"));
+    painter.restore();
+
+    for (int tick = 0; tick <= 4; ++tick)
+    {
+        const double yValue = yMin + (static_cast<double>(tick) / 4.0) * (yMax - yMin);
+        const QPointF tickPos =
+            mapDataToPlot(plotRect, wavelengthMin, wavelengthMax, yMin, yMax, wavelengthMin, yValue);
+        painter.drawLine(QPointF(plotRect.left() - 4.0, tickPos.y()),
+                         QPointF(plotRect.left(), tickPos.y()));
+        painter.drawText(QRectF(8.0, tickPos.y() - 8.0, kMarginLeft - 12.0, 16.0),
+                         Qt::AlignRight | Qt::AlignVCenter,
+                         QString::number(static_cast<int>(yValue)));
+    }
+
+    painter.drawText(QRectF(plotRect.left(), plotRect.bottom() + 6.0, plotRect.width() / 2.0, 16.0),
+                     Qt::AlignLeft | Qt::AlignTop,
+                     QString::number(wavelengthMin, 'f', 0));
+    painter.drawText(QRectF(plotRect.center().x(), plotRect.bottom() + 6.0, plotRect.width() / 2.0, 16.0),
+                     Qt::AlignRight | Qt::AlignTop,
+                     QString::number(wavelengthMax, 'f', 0));
+
+    painter.end();
+
+    QDir().mkpath(QFileInfo(outputPath).absolutePath());
+
+    QSaveFile file(outputPath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("Could not write plot PNG: %1").arg(outputPath);
+        return false;
+    }
+
+    if (!image.save(&file, "PNG"))
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("Failed to encode plot PNG: %1").arg(outputPath);
+        return false;
+    }
+
+    if (!file.commit())
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("Failed to save plot PNG: %1").arg(outputPath);
+        return false;
+    }
+
+    return true;
+}
+
+} // namespace hf::processing

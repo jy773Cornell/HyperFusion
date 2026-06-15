@@ -1,6 +1,8 @@
 // RGB line extraction from BIL 16-bit hyperspectral frames.
 #include "frontend/processing/RgbBandExtractor.hpp"
 
+#include "frontend/processing/Overexposure.hpp"
+
 #include <algorithm>
 
 namespace ui
@@ -18,9 +20,6 @@ int mapCalpackBandToBilRow(const int calpackBandIndex,
 
 namespace
 {
-constexpr double kDnAxisMax = 4096.0;
-constexpr double kByteScale = 255.0 / kDnAxisMax;
-
 void scaleBandRowToBytes(const std::uint16_t *row,
                          int width,
                          std::vector<std::uint8_t> &channelOut)
@@ -31,11 +30,7 @@ void scaleBandRowToBytes(const std::uint16_t *row,
         return;
 
     for (int x = 0; x < width; ++x)
-    {
-        const double dn = static_cast<double>(row[x]);
-        channelOut[static_cast<std::size_t>(x)] = static_cast<std::uint8_t>(
-            std::min(255.0, std::max(0.0, dn * kByteScale)));
-    }
+        channelOut[static_cast<std::size_t>(x)] = dnToDisplayGray(row[x]);
 }
 } // namespace
 
@@ -73,6 +68,8 @@ bool extractRgbLineFromBilFrame(const FramePacket &frame,
         rgbRowOut[index * 3 + 1] = greenChannel[index];
         rgbRowOut[index * 3 + 2] = blueChannel[index];
     }
+
+    markOverexposedColumnsRed(rgbRowOut, width, frame);
 
     return true;
 }

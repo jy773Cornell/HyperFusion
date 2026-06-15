@@ -1,6 +1,7 @@
 // Main application window UI layout and control wiring.
 #pragma once
 
+#include <QElapsedTimer>
 #include <QImage>
 #include <QMainWindow>
 
@@ -20,10 +21,13 @@
 #include "frontend/processing/ProfileProcessor.hpp"
 #include "frontend/processing/WaterfallProcessor.hpp"
 
+class CaptureWriterWorker;
+class CapturePostProcessorWorker;
 class LumoCamera;
+class QLabel;
+class QGroupBox;
 class Swir3NiCamera;
 
-class CaptureWriterWorker;
 class LighthouseWorker;
 class OperationWaitDialog;
 class StageWorker;
@@ -170,11 +174,13 @@ private:
     void updateCaptureScanningSpeedControls();
     struct CaptureScanPlan
     {
-        double referencePositionMm = 0.0;
-        double whiteReferenceScanLengthMm = 0.0;
-        double transmittanceWhiteRefStartPositionMm = 0.0;
-        double sampleScanStartPositionMm = 0.0;
+        double whiteRefStartMm[2] = {0.0, 0.0};
+        double brightRefStartMm[2] = {0.0, 0.0};
+        double sampleScanStartMm[2] = {0.0, 0.0};
+        double sampleScanOriginMm = 0.0;
+        double sampleScanTotalDistanceMm = 0.0;
         double sampleScanLengthMm = 0.0;
+        double whiteReferenceScanLengthMm = 0.0;
         double operationSpeedMmPerSec = 0.0;
         double recordScanSpeedMmPerSec = 0.0;
         int blackReferenceFrameCount = 0;
@@ -182,11 +188,10 @@ private:
     enum class CaptureScanPhase
     {
         Idle,
-        MoveToReferencePosition,
-        MoveToTransmittanceWhiteRef,
+        MoveToWhiteRefCamera,
+        MoveToSampleScanOrigin,
         BlackReference,
         WhiteReferenceScan,
-        MoveToSampleStart,
         SampleScan,
     };
     bool buildCaptureScanPlan(CaptureScanPlan &plan, QString &errorMessage) const;
@@ -207,17 +212,36 @@ private:
     void onCaptureAbsoluteMoveComplete(bool success);
     void beginCaptureBlackReference();
     void onCaptureBlackReferenceComplete();
+    void beginCaptureWhiteReferenceSequence();
+    void beginCaptureWhiteReferenceScanForCurrentCamera();
     void beginCaptureWhiteReferenceScan();
     void beginCaptureSampleScan();
-    void startCaptureRelativeScan(double distanceMm, double speedMmPerSec);
+    void startCaptureRelativeScan(double distanceMm,
+                                  double speedMmPerSec,
+                                  CaptureScanPhase capturePhaseOnMoveStart = CaptureScanPhase::Idle);
     void onCaptureRelativeScanComplete();
     void completeCaptureSequence();
+    void runCapturePostProcessingIfEnabled();
     void failCaptureSequence(const QString &message);
     void setSelectedCameraShutters(bool open);
     bool selectedCamerasReachedBlackReferenceTarget() const;
     bool validateCaptureRecordMetadata(QString &errorMessage) const;
     bool selectedCaptureCameraIndices(std::vector<std::size_t> &cameraIndices) const;
+    std::size_t stageCameraIndexForUi(const LumoCameraUi &ui, std::size_t cameraIndex) const;
+    double whiteRefStartMmForStageCamera(const CaptureScanPlan &plan,
+                                           CaptureIlluminationMode mode,
+                                           std::size_t stageCameraIndex) const;
+    double estimatedStageScanPositionMm() const;
+    bool isStagePositionWithinScanWindow(double positionMm,
+                                         double windowStartMm,
+                                         double windowLengthMm) const;
+    bool shouldRecordSampleFrameForCamera(std::size_t stageCameraIndex,
+                                          double stagePositionMm) const;
+    bool shouldRecordWhiteReferenceFrameForCamera(std::size_t stageCameraIndex) const;
     bool selectedCaptureIlluminationModes(std::vector<CaptureIlluminationMode> &modes) const;
+    bool isCaptureStageConnected() const;
+    bool useStageForCapture() const;
+    bool effectiveCaptureIlluminationModes(std::vector<CaptureIlluminationMode> &modes) const;
     QString captureIlluminationFolderName(CaptureIlluminationMode mode) const;
     QString captureCameraFolderName(const LumoCameraUi &ui) const;
     QString captureStreamRelativeRoot(CaptureIlluminationMode mode, const LumoCameraUi &ui) const;
@@ -346,6 +370,12 @@ private:
     CaptureScanPhase captureScanPhase_ = CaptureScanPhase::Idle;
     CaptureScanPlan captureScanPlan_;
     CaptureScanPhase captureMoveCompletePhase_ = CaptureScanPhase::Idle;
+    std::vector<std::size_t> captureWhiteRefCameraQueue_;
+    std::size_t captureWhiteRefQueueIndex_ = 0;
+    double captureScanOriginPositionMm_ = 0.0;
+    double captureActiveScanDistanceMm_ = 0.0;
+    bool captureScanTimingActive_ = false;
+    QElapsedTimer captureScanElapsed_;
     CaptureIlluminationMode captureRecordingIlluminationMode_ = CaptureIlluminationMode::Reflectance;
     std::vector<CaptureIlluminationMode> capturePendingIlluminationModes_;
     std::size_t captureCurrentModeIndex_ = 0;
@@ -355,6 +385,8 @@ private:
     std::array<int, 2> captureBlackRefFramesCollected_ = {0, 0};
     QTimer *captureScanTimer_ = nullptr;
     std::unique_ptr<CaptureWriterWorker> captureWriterWorker_;
+    std::unique_ptr<CapturePostProcessorWorker> capturePostProcessorWorker_;
+    CaptureWriterSessionSummary lastEndedCaptureSessionSummary_;
     QPushButton *captureRecorderStopBtn_ = nullptr;
     QPushButton *captureRecorderPreviewBtn_ = nullptr;
     QPushButton *captureRecorderRecordBtn_ = nullptr;
@@ -369,7 +401,10 @@ private:
     QDoubleSpinBox *captureTargetLengthSpin_ = nullptr;
     QDoubleSpinBox *captureScanningSpeedSpin_ = nullptr;
     QCheckBox *captureScanningSpeedAutoCheck_ = nullptr;
-    QCheckBox *captureStageConnectedCheck_ = nullptr;
+    QCheckBox *captureUseStageForRecordingCheck_ = nullptr;
+    QGroupBox *capturePreprocessingBox_ = nullptr;
+    QCheckBox *capturePreprocessAfterScanCheck_ = nullptr;
+    QCheckBox *captureSaveFfcImageCheck_ = nullptr;
     QWidget *capturePositionContent_ = nullptr;
     QTimer *settingsSaveTimer_ = nullptr;
     QString persistedStagePort_;

@@ -72,3 +72,5 @@ docs/
 
 # Example capture binaries (too large for GitHub; keep .hdr/.xml locally)
 examples/**/*.raw
+
+./processing/

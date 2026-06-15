@@ -65,6 +65,7 @@ qt_add_executable(app
     # frontend/processing — frame pipelines (worker threads, extractors)
     src/frontend/processing/BilProfileExtractor.cpp
     src/frontend/processing/DetectorFrameConverter.cpp
+    src/frontend/processing/Overexposure.cpp
     src/frontend/processing/ProfileProcessor.cpp
     src/frontend/processing/RgbBandExtractor.cpp
     src/frontend/processing/WaterfallProcessor.cpp
@@ -82,6 +83,16 @@ qt_add_executable(app
     src/backend/HyperFusionConfig.cpp
     src/backend/ICameraController.cpp
     src/backend/CameraCoordinator.cpp
+    src/backend/processing/EnviBilReader.cpp
+    src/backend/processing/ReferenceSpectrumStats.cpp
+    src/backend/processing/ReferenceSpectrumPlot.cpp
+    src/backend/processing/CapturePostProcessor.cpp
+    src/backend/processing/CapturePostProcessorWorker.cpp
+    src/backend/processing/IlluminantTables.cpp
+    src/backend/processing/ReferenceBuilder.cpp
+    src/backend/processing/EnviBilWriter.cpp
+    src/backend/processing/FlatFieldCorrector.cpp
+    src/backend/processing/HsiToColor.cpp
     include/backend/CameraTypes.hpp
     include/backend/ICameraController.hpp
     include/backend/CameraWorker.hpp
@@ -234,6 +245,20 @@ if(EXISTS "${HF_CALIBRATION_DIR}")
                 "${HF_CALIBRATION_DIR}"
                 "$<TARGET_FILE_DIR:app>/calibration"
         COMMENT "Copying calibration packs to output directory")
+endif()
+
+set(HF_PROCESSING_REFERENCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/processing/reference")
+if(EXISTS "${HF_PROCESSING_REFERENCE_DIR}")
+    add_custom_command(
+        TARGET app POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:app>/backend/processing/reference"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${HF_PROCESSING_REFERENCE_DIR}/D_illuminants.json"
+                "$<TARGET_FILE_DIR:app>/backend/processing/reference/D_illuminants.json"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${HF_PROCESSING_REFERENCE_DIR}/D_illuminants.mat"
+                "$<TARGET_FILE_DIR:app>/backend/processing/reference/D_illuminants.mat"
+        COMMENT "Copying preprocessing illuminant reference tables")
 endif()
 
 file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}" HF_APP_SOURCE_DIR)

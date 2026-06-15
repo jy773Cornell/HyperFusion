@@ -9,9 +9,144 @@
 #include <algorithm>
 #include <cmath>
 
+#include <QHash>
+
 namespace
 {
 hf::HardwareConfig g_hardwareConfig;
+
+struct SampleStagePositionDraft
+{
+    QHash<QString, QString> rawValues;
+};
+
+bool parseDouble(const QString &text, double &valueOut);
+
+bool lookupResolvedValue(const QHash<QString, double> &resolved, const QString &token, double &valueOut)
+{
+    const QString key = token.trimmed().toLower();
+    if (!resolved.contains(key))
+        return false;
+
+    valueOut = resolved.value(key);
+    return true;
+}
+
+bool evaluateSampleStageExpression(const QString &expression,
+                                   const QHash<QString, double> &resolved,
+                                   double &valueOut)
+{
+    const QString trimmed = expression.trimmed();
+    if (trimmed.isEmpty())
+        return false;
+
+    bool ok = false;
+    const double direct = trimmed.toDouble(&ok);
+    if (ok && std::isfinite(direct))
+    {
+        valueOut = direct;
+        return true;
+    }
+
+    const int minusIndex = trimmed.indexOf(QStringLiteral(" - "));
+    if (minusIndex > 0)
+    {
+        double lhs = 0.0;
+        double rhs = 0.0;
+        if (!lookupResolvedValue(resolved, trimmed.left(minusIndex), lhs)
+            || !lookupResolvedValue(resolved, trimmed.mid(minusIndex + 3), rhs))
+        {
+            return false;
+        }
+
+        valueOut = lhs - rhs;
+        return std::isfinite(valueOut);
+    }
+
+    return lookupResolvedValue(resolved, trimmed, valueOut);
+}
+
+bool resolveSampleStagePositions(const SampleStagePositionDraft &draft,
+                                 hf::HardwareConfig &config,
+                                 QStringList &warnings)
+{
+    QHash<QString, double> resolved;
+    for (auto it = draft.rawValues.cbegin(); it != draft.rawValues.cend(); ++it)
+    {
+        double numericValue = 0.0;
+        if (parseDouble(it.value(), numericValue))
+            resolved.insert(it.key(), numericValue);
+    }
+
+    bool changed = true;
+    int passCount = 0;
+    while (changed && passCount < static_cast<int>(draft.rawValues.size()) + 2)
+    {
+        changed = false;
+        ++passCount;
+
+        for (auto it = draft.rawValues.cbegin(); it != draft.rawValues.cend(); ++it)
+        {
+            if (resolved.contains(it.key()))
+                continue;
+
+            double numericValue = 0.0;
+            if (!evaluateSampleStageExpression(it.value(), resolved, numericValue))
+                continue;
+
+            resolved.insert(it.key(), numericValue);
+            changed = true;
+        }
+    }
+
+    const auto require = [&](const QString &key, double &target, const QString &label) -> bool {
+        if (!resolved.contains(key))
+        {
+            warnings.push_back(QStringLiteral("Missing or unresolved %1 in [sample_stage_position]")
+                                   .arg(label));
+            return false;
+        }
+
+        const double value = resolved.value(key);
+        if (!std::isfinite(value) || value < 0.0)
+        {
+            warnings.push_back(QStringLiteral("Invalid %1 in [sample_stage_position]").arg(label));
+            return false;
+        }
+
+        target = value;
+        return true;
+    };
+
+    bool ok = true;
+    ok = require(QStringLiteral("distance_dual_camera_mm"), config.distanceDualCameraMm,
+                 QStringLiteral("distance_dual_camera_mm"))
+         && ok;
+    ok = require(QStringLiteral("white_ref_fx10e_mm"), config.whiteRefMm[0],
+                 QStringLiteral("white_ref_fx10e_mm"))
+         && ok;
+    ok = require(QStringLiteral("white_ref_swir3_mm"), config.whiteRefMm[1],
+                 QStringLiteral("white_ref_swir3_mm"))
+         && ok;
+    ok = require(QStringLiteral("bright_ref_fx10e_mm"), config.brightRefMm[0],
+                 QStringLiteral("bright_ref_fx10e_mm"))
+         && ok;
+    ok = require(QStringLiteral("bright_ref_swir3_mm"), config.brightRefMm[1],
+                 QStringLiteral("bright_ref_swir3_mm"))
+         && ok;
+    ok = require(QStringLiteral("sample_scanning_starting_position_fx10e_mm"),
+                 config.sampleScanStartMm[0],
+                 QStringLiteral("sample_scanning_starting_position_fx10e_mm"))
+         && ok;
+    ok = require(QStringLiteral("sample_scanning_starting_position_swir3_mm"),
+                 config.sampleScanStartMm[1],
+                 QStringLiteral("sample_scanning_starting_position_swir3_mm"))
+         && ok;
+
+    config.cameraPositionMm[0] = config.whiteRefMm[0];
+    config.cameraPositionMm[1] = config.whiteRefMm[1];
+    return ok;
+}
 
 QString trimmedLine(QString line)
 {
@@ -87,6 +222,7 @@ void assignCameraPosition(hf::HardwareConfig &config,
 bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStringList &warnings)
 {
     QString section;
+    SampleStagePositionDraft sampleStageDraft;
 
     for (const QString &rawLine : lines)
     {
@@ -141,39 +277,7 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
         }
         else if (section == QStringLiteral("sample_stage_position"))
         {
-            if (key == QStringLiteral("front_edge_sample_window_mm"))
-            {
-                if (!hasNumber)
-                    warnings.push_back(
-                        QStringLiteral("Invalid front_edge_sample_window_mm: %1").arg(value));
-                else if (numericValue < 0.0)
-                    warnings.push_back(QStringLiteral("front_edge_sample_window_mm must be >= 0"));
-                else
-                    config.frontEdgeSampleWindowMm = numericValue;
-            }
-            else if (key == QStringLiteral("sample_window_length_mm"))
-            {
-                if (!hasNumber)
-                    warnings.push_back(QStringLiteral("Invalid sample_window_length_mm: %1").arg(value));
-                else if (numericValue <= 0.0)
-                    warnings.push_back(QStringLiteral("sample_window_length_mm must be > 0"));
-                else
-                    config.sampleWindowLengthMm = numericValue;
-            }
-            else if (key == QStringLiteral("scanning_starting_position_mm"))
-            {
-                if (!hasNumber)
-                    warnings.push_back(
-                        QStringLiteral("Invalid scanning_starting_position_mm: %1").arg(value));
-                else if (numericValue < 0.0)
-                    warnings.push_back(QStringLiteral("scanning_starting_position_mm must be >= 0"));
-                else
-                    config.scanningStartingPositionMm = numericValue;
-            }
-            else
-            {
-                warnings.push_back(QStringLiteral("Unknown key in [sample_stage_position]: %1").arg(key));
-            }
+            sampleStageDraft.rawValues.insert(key, value);
         }
         else if (section == QStringLiteral("scanning_settings"))
         {
@@ -215,6 +319,17 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                     warnings.push_back(QStringLiteral("Invalid black_reference_frames: %1").arg(value));
                 else
                     config.blackReferenceFrames = frames;
+            }
+            else if (key == QStringLiteral("sample_window_max_length_mm")
+                     || key == QStringLiteral("sample_window_length_mm"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(
+                        QStringLiteral("Invalid sample_window_max_length_mm: %1").arg(value));
+                else if (numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral("sample_window_max_length_mm must be > 0"));
+                else
+                    config.sampleWindowMaxLengthMm = numericValue;
             }
             else
             {
@@ -310,6 +425,50 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 warnings.push_back(QStringLiteral("Unknown key in [stage_motion]: %1").arg(key));
             }
         }
+        else if (section == QStringLiteral("preprocessing"))
+        {
+            if (key == QStringLiteral("illuminant_d"))
+            {
+                bool ok = false;
+                const int illuminantD = value.toInt(&ok);
+                if (!ok || (illuminantD != 50 && illuminantD != 55 && illuminantD != 65 && illuminantD != 75))
+                    warnings.push_back(QStringLiteral("Invalid preprocessing illuminant_d: %1").arg(value));
+                else
+                    config.preprocessing.illuminantD = illuminantD;
+            }
+            else if (key == QStringLiteral("ffc_epsilon"))
+            {
+                if (!hasNumber || numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral("Invalid preprocessing ffc_epsilon: %1").arg(value));
+                else
+                    config.preprocessing.ffcEpsilon = numericValue;
+            }
+            else if (key == QStringLiteral("ffc_clamp_min"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid preprocessing ffc_clamp_min: %1").arg(value));
+                else
+                    config.preprocessing.ffcClampMin = numericValue;
+            }
+            else if (key == QStringLiteral("ffc_clamp_max"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid preprocessing ffc_clamp_max: %1").arg(value));
+                else
+                    config.preprocessing.ffcClampMax = numericValue;
+            }
+            else if (key == QStringLiteral("truncate_nm"))
+            {
+                if (!hasNumber || numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral("Invalid preprocessing truncate_nm: %1").arg(value));
+                else
+                    config.preprocessing.truncateNm = numericValue;
+            }
+            else
+            {
+                warnings.push_back(QStringLiteral("Unknown key in [preprocessing]: %1").arg(key));
+            }
+        }
         else if (section.isEmpty())
         {
             warnings.push_back(QStringLiteral("Key outside a section (ignored): %1").arg(key));
@@ -319,6 +478,9 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
             warnings.push_back(QStringLiteral("Unknown section [%1]").arg(section));
         }
     }
+
+    if (!sampleStageDraft.rawValues.isEmpty())
+        resolveSampleStagePositions(sampleStageDraft, config, warnings);
 
     return true;
 }
@@ -356,23 +518,21 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "# Edit this file manually. Values are reloaded on every app start.\n"
         << "# Distances are in millimetres unless noted.\n"
         << "\n"
-        << "[camera_positions]\n"
-        << "# Default stage position for each camera at the white reference.\n"
-        << "fx10e_mm = 735\n"
-        << "swir3_mm = 545\n"
-        << "\n"
         << "[sample_stage_position]\n"
-        << "front_edge_sample_window_mm = 760\n"
-        << "sample_window_length_mm = 550\n"
-        << "scanning_starting_position_mm = 810\n"
+        << "distance_dual_camera_mm = 190\n"
+        << "white_ref_fx10e_mm = 735\n"
+        << "white_ref_swir3_mm = white_ref_fx10e_mm - distance_dual_camera_mm\n"
+        << "bright_ref_fx10e_mm = 760\n"
+        << "bright_ref_swir3_mm = bright_ref_fx10e_mm - distance_dual_camera_mm\n"
+        << "sample_scanning_starting_position_fx10e_mm = 840\n"
+        << "sample_scanning_starting_position_swir3_mm = sample_scanning_starting_position_fx10e_mm - distance_dual_camera_mm\n"
         << "\n"
         << "[scanning_settings]\n"
-        << "# All stage move speeds during preview/record.\n"
-        << "operation_scanning_speed_mm_per_sec = 100\n"
+        << "operation_scanning_speed_mm_per_sec = 80\n"
+        << "record_scanning_speed_mm_per_sec = 15\n"
         << "white_reference_scanning_length_mm = 10\n"
         << "black_reference_frames = 100\n"
-        << "# White-reference and sample scan legs during preview/record.\n"
-        << "record_scanning_speed_mm_per_sec = 15\n"
+        << "sample_window_max_length_mm = 500\n"
         << "\n"
         << "[calibration]\n"
         << "# Spatial scale along the scan axis (mm per detector pixel).\n"
@@ -385,7 +545,14 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "\n"
         << "[stage_motion]\n"
         << "# Trapezoidal accel for lockstep moves and stop deceleration (mm/s²). Lower = gentler.\n"
-        << "acceleration_mm_per_sec2 = 30\n";
+        << "acceleration_mm_per_sec2 = 30\n"
+        << "\n"
+        << "[preprocessing]\n"
+        << "illuminant_d = 65\n"
+        << "ffc_epsilon = 1e-6\n"
+        << "ffc_clamp_min = 0.0\n"
+        << "ffc_clamp_max = 1.0\n"
+        << "truncate_nm = 780.0\n";
 
     if (!file.commit())
     {
