@@ -142,6 +142,9 @@ bool resolveSampleStagePositions(const SampleStagePositionDraft &draft,
                  config.sampleScanStartMm[1],
                  QStringLiteral("sample_scanning_starting_position_swir3_mm"))
          && ok;
+    ok = require(QStringLiteral("temp_stop_position_mm"), config.tempStopPositionMm,
+                 QStringLiteral("temp_stop_position_mm"))
+         && ok;
 
     config.cameraPositionMm[0] = config.whiteRefMm[0];
     config.cameraPositionMm[1] = config.whiteRefMm[1];
@@ -294,22 +297,23 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
             else if (key == QStringLiteral("record_scanning_speed_mm_per_sec")
                      || key == QStringLiteral("scanning_speed_mm_per_sec"))
             {
-                if (!hasNumber)
-                    warnings.push_back(QStringLiteral("Invalid record_scanning_speed_mm_per_sec: %1").arg(value));
-                else if (numericValue <= 0.0)
-                    warnings.push_back(QStringLiteral("record_scanning_speed_mm_per_sec must be > 0"));
+                warnings.push_back(
+                    QStringLiteral("Deprecated record_scanning_speed_mm_per_sec — record scan speed is "
+                                   "frame rate × spatial_mm_per_pixel"));
+            }
+            else if (key == QStringLiteral("white_reference_frames"))
+            {
+                bool ok = false;
+                const int frames = value.toInt(&ok);
+                if (!ok || frames <= 0)
+                    warnings.push_back(QStringLiteral("Invalid white_reference_frames: %1").arg(value));
                 else
-                    config.recordScanningSpeedMmPerSec = numericValue;
+                    config.whiteReferenceFrames = frames;
             }
             else if (key == QStringLiteral("white_reference_scanning_length_mm"))
             {
-                if (!hasNumber)
-                    warnings.push_back(
-                        QStringLiteral("Invalid white_reference_scanning_length_mm: %1").arg(value));
-                else if (numericValue <= 0.0)
-                    warnings.push_back(QStringLiteral("white_reference_scanning_length_mm must be > 0"));
-                else
-                    config.whiteReferenceScanningLengthMm = numericValue;
+                warnings.push_back(
+                    QStringLiteral("Deprecated white_reference_scanning_length_mm — use white_reference_frames instead"));
             }
             else if (key == QStringLiteral("black_reference_frames"))
             {
@@ -526,11 +530,11 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "bright_ref_swir3_mm = bright_ref_fx10e_mm - distance_dual_camera_mm\n"
         << "sample_scanning_starting_position_fx10e_mm = 840\n"
         << "sample_scanning_starting_position_swir3_mm = sample_scanning_starting_position_fx10e_mm - distance_dual_camera_mm\n"
+        << "temp_stop_position_mm = 500\n"
         << "\n"
         << "[scanning_settings]\n"
         << "operation_scanning_speed_mm_per_sec = 80\n"
-        << "record_scanning_speed_mm_per_sec = 15\n"
-        << "white_reference_scanning_length_mm = 10\n"
+        << "white_reference_frames = 100\n"
         << "black_reference_frames = 100\n"
         << "sample_window_max_length_mm = 500\n"
         << "\n"
@@ -629,6 +633,14 @@ HardwareConfig loadHardwareConfig()
 const HardwareConfig &hardwareConfig()
 {
     return g_hardwareConfig;
+}
+
+double recordScanSpeedMmPerSec(const double frameRateHz, const double spatialMmPerPixel)
+{
+    if (frameRateHz <= 0.0 || spatialMmPerPixel <= 0.0)
+        return 0.0;
+
+    return frameRateHz * spatialMmPerPixel;
 }
 
 void setHardwareConfig(HardwareConfig config)

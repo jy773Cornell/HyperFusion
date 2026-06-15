@@ -57,6 +57,7 @@ private:
                               StreamState &stream,
                               const FramePacket &frame,
                               QString *errorMessage);
+    bool openSampleRawFile(StreamState &state, QString *errorMessage);
     bool writeFramePayload(QFile &file, const FramePacket &frame, QString *errorMessage);
     void writePropertiesXml() const;
     void writeMetadataXml(const StreamState &stream) const;

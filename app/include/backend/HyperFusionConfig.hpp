@@ -14,12 +14,12 @@ struct HardwareConfig
     double whiteRefMm[2] = {735.0, 545.0};
     double brightRefMm[2] = {760.0, 570.0};
     double sampleScanStartMm[2] = {840.0, 650.0};
+    double tempStopPositionMm = 500.0;
     /// Legacy UI mirror of whiteRefMm (capture position spin boxes).
     double cameraPositionMm[2] = {735.0, 545.0};
     double sampleWindowMaxLengthMm = 500.0;
     double operationScanningSpeedMmPerSec = 100.0;
-    double recordScanningSpeedMmPerSec = 15.0;
-    double whiteReferenceScanningLengthMm = 10.0;
+    int whiteReferenceFrames = 100;
     int blackReferenceFrames = 100;
     double spatialMmPerPixel = 0.050;
     int lighthouseIdleIntensityPercent = 0;
@@ -47,5 +47,7 @@ QStringList hyperFusionConfigSearchPaths();
 HardwareConfig loadHardwareConfig();
 const HardwareConfig &hardwareConfig();
 void setHardwareConfig(HardwareConfig config);
+/// Stage speed (mm/s) matching one line per frame: frame rate × spatial scale along scan axis.
+double recordScanSpeedMmPerSec(double frameRateHz, double spatialMmPerPixel);
 bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage = nullptr);
 } // namespace hf

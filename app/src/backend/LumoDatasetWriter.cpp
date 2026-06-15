@@ -200,6 +200,20 @@ bool LumoDatasetWriter::begin(const CaptureWriterSessionConfig &config, QString 
     sessionDirectory_ = QDir(config.saveFolder.trimmed()).filePath(datasetName_);
     sessionStartedUtc_ = QDateTime::currentDateTimeUtc();
 
+    const QDir sessionDir(sessionDirectory_);
+    if (sessionDir.exists())
+    {
+        if (errorMessage != nullptr)
+        {
+            *errorMessage =
+                QStringLiteral("Dataset folder already exists — choose a different dataset name: %1")
+                    .arg(sessionDirectory_);
+        }
+        sessionDirectory_.clear();
+        datasetName_.clear();
+        return false;
+    }
+
     QDir root;
     if (!root.mkpath(sessionDirectory_))
     {
@@ -254,15 +268,6 @@ bool LumoDatasetWriter::begin(const CaptureWriterSessionConfig &config, QString 
             QDir(state.streamRoot).filePath(QStringLiteral("capture/%1.hdr").arg(state.baseName));
         state.summary.logPath =
             QDir(state.streamRoot).filePath(QStringLiteral("metadata/%1.log").arg(state.baseName));
-
-        state.rawFile = std::make_unique<QFile>(rawPath);
-        if (!state.rawFile->open(QIODevice::WriteOnly | QIODevice::Truncate))
-        {
-            if (errorMessage != nullptr)
-                *errorMessage = QStringLiteral("Could not open %1 for writing.").arg(rawPath);
-            end();
-            return false;
-        }
 
         streams_.emplace(streamConfig.relativeRoot, std::move(state));
     }
@@ -473,6 +478,31 @@ bool LumoDatasetWriter::appendReferenceFrame(ReferenceCaptureState &reference,
     return true;
 }
 
+bool LumoDatasetWriter::openSampleRawFile(StreamState &state, QString *errorMessage)
+{
+    if (state.rawFile != nullptr)
+        return true;
+
+    if (state.summary.rawPath.isEmpty())
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("Sample raw path is empty for %1.").arg(state.config.streamName);
+        return false;
+    }
+
+    state.rawFile = std::make_unique<QFile>(state.summary.rawPath);
+    if (!state.rawFile->open(QIODevice::WriteOnly | QIODevice::Truncate))
+    {
+        if (errorMessage != nullptr)
+            *errorMessage =
+                QStringLiteral("Could not open %1 for writing.").arg(state.summary.rawPath);
+        state.rawFile.reset();
+        return false;
+    }
+
+    return true;
+}
+
 bool LumoDatasetWriter::appendFrame(const FramePacket &frame, QString *errorMessage)
 {
     StreamState *state = nullptr;
@@ -511,9 +541,8 @@ bool LumoDatasetWriter::appendFrame(const FramePacket &frame, QString *errorMess
 
     if (state->rawFile == nullptr)
     {
-        if (errorMessage != nullptr)
-            *errorMessage = QStringLiteral("No output file for %1.").arg(state->config.streamName);
-        return false;
+        if (!openSampleRawFile(*state, errorMessage))
+            return false;
     }
 
     if (!writeFramePayload(*state->rawFile, frame, errorMessage))
