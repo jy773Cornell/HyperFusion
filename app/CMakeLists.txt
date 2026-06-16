@@ -9,7 +9,7 @@ set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network)
 
 # Lumo Sensor SDK. Override with -DLUMO_SDK_ROOT=... or env LUMO_SDK_ROOT.
 set(HF_DEFAULT_LUMO_SDK_ROOT "C:/Program Files (x86)/Specim/SDKs/SpecSensor/2020_519")
@@ -89,6 +89,11 @@ qt_add_executable(app
     src/backend/processing/ReferenceSpectrumPlot.cpp
     src/backend/processing/CapturePostProcessor.cpp
     src/backend/processing/CapturePostProcessorWorker.cpp
+    src/backend/processing/Gsam2SegmentationClient.cpp
+    src/backend/processing/Gsam2ServerManager.cpp
+    src/backend/processing/Gsam2RoiAnalysis.cpp
+    src/backend/processing/Gsam2SpectrumPlot.cpp
+    src/backend/processing/GsamWslPathUtil.cpp
     src/backend/processing/IlluminantTables.cpp
     src/backend/processing/ReferenceBuilder.cpp
     src/backend/processing/EnviBilWriter.cpp
@@ -109,6 +114,12 @@ qt_add_executable(app
     include/backend/HyperFusionConfig.hpp
     include/backend/DualCameraScanOrchestrator.hpp
     include/backend/CameraCoordinator.hpp
+    include/backend/processing/Gsam2ServerManager.hpp
+    include/backend/processing/Gsam2SegmentationClient.hpp
+    include/backend/processing/Gsam2RoiAnalysis.hpp
+    include/backend/processing/Gsam2SpectrumPlot.hpp
+    include/backend/processing/GsamWslPathUtil.hpp
+    include/backend/processing/CapturePostProcessor.hpp
     # adapters — vendor SDK / hardware
     src/adapters/zaber/ZaberStageController.cpp
     src/adapters/zaber/ZaberStageConfigurator.cpp
@@ -226,7 +237,7 @@ else()
     message(STATUS "MCC UL runtime not found at ${MCC_UL_ROOT} (Light tab needs InstaCal/cbw64.dll at runtime)")
 endif()
 
-target_link_libraries(app PRIVATE Qt6::Widgets Qt6::Core)
+target_link_libraries(app PRIVATE Qt6::Widgets Qt6::Core Qt6::Network)
 
 # Ship hyperfusion.cfg beside app.exe (hardware parameters).
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/hyperfusion.cfg")

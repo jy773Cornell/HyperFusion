@@ -24,6 +24,7 @@
 #include "frontend/settings/AppSettingsStore.hpp"
 #include "backend/CaptureWriterWorker.hpp"
 #include "backend/processing/CapturePostProcessorWorker.hpp"
+#include "backend/processing/Gsam2ServerManager.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -48,6 +49,7 @@
 #include <QLineEdit>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSpinBox>
 #include <QSplitter>
 #include <QTabWidget>
@@ -396,23 +398,8 @@ void MainWindow::updateCameraTabLabel(const LumoCameraUi &ui)
     if (cameraSettingsTabs_ != nullptr && tabIndex >= 0 && tabIndex < cameraSettingsTabs_->count())
         cameraSettingsTabs_->setTabText(tabIndex, tabName);
 
-    if (streamTabs_ != nullptr && tabIndex >= 0 && tabIndex < streamTabs_->count())
+    if (streamTabs_ != nullptr && tabIndex >= kStreamTabCamera1 && tabIndex <= kStreamTabCamera2)
         streamTabs_->setTabText(tabIndex, tabName);
-}
-
-void MainWindow::onCameraSettingsTabChanged(const int index)
-{
-    if (index < 0 || index > 1)
-        return;
-
-    QSignalBlocker settingsBlocker(settingsTabs_);
-    QSignalBlocker streamBlocker(streamTabs_);
-
-    if (settingsTabs_ != nullptr && settingsTabs_->currentIndex() != kSettingsTabCamera)
-        settingsTabs_->setCurrentIndex(kSettingsTabCamera);
-
-    if (streamTabs_ != nullptr && streamTabs_->currentIndex() != index)
-        streamTabs_->setCurrentIndex(index);
 }
 
 void MainWindow::onSettingsTabChanged(const int index)
@@ -535,26 +522,6 @@ void MainWindow::refreshBandCombos(LumoCameraUi &ui)
                   .arg(bands.size())
                   .arg(spectralBinning)
                   .arg(QFileInfo(calpackPath).fileName()));
-}
-
-void MainWindow::onStreamTabChanged(const int index)
-{
-    QSignalBlocker settingsBlocker(settingsTabs_);
-    QSignalBlocker cameraSettingsBlocker(cameraSettingsTabs_);
-
-    if (index == 0 || index == 1)
-    {
-        if (settingsTabs_ != nullptr && settingsTabs_->currentIndex() != kSettingsTabCamera)
-            settingsTabs_->setCurrentIndex(kSettingsTabCamera);
-
-        if (cameraSettingsTabs_ != nullptr && cameraSettingsTabs_->currentIndex() != index)
-            cameraSettingsTabs_->setCurrentIndex(index);
-        return;
-    }
-
-    if (index == 2 && settingsTabs_ != nullptr
-        && settingsTabs_->currentIndex() != kSettingsTabUr3e)
-        settingsTabs_->setCurrentIndex(kSettingsTabUr3e);
 }
 
 QString MainWindow::calibrationPackPath(const LumoCameraUi &ui)
@@ -829,6 +796,22 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
             Qt::QueuedConnection);
     });
     capturePostProcessorWorker_->start();
+
+    gsam2ServerManager_ = std::make_unique<hf::processing::Gsam2ServerManager>(this);
+    connect(gsam2ServerManager_.get(),
+            &hf::processing::Gsam2ServerManager::stateChanged,
+            this,
+            [this](const hf::processing::Gsam2ServerManager::State state, const QString &detail) {
+                updateCaptureGsamServerUi();
+                if (state == hf::processing::Gsam2ServerManager::State::Running
+                    && captureRunGsamCheck_ != nullptr)
+                {
+                    captureRunGsamCheck_->setChecked(true);
+                    schedulePersistedUiSettingsSave();
+                }
+                if (!detail.isEmpty())
+                    appendLog(QStringLiteral("GSAM2 server: %1").arg(detail));
+            });
 }
 
 MainWindow::~MainWindow()
@@ -848,11 +831,56 @@ QWidget *MainWindow::createStreamTabsPanel()
     streamTabs_->addTab(createStreamTabPage(profileTabNameForUi(camera2Ui_), camera2Ui_),
                         profileTabNameForUi(camera2Ui_));
     streamTabs_->addTab(createRgbUr3eStreamTab(), QStringLiteral("UR3e"));
-
-    connect(streamTabs_, &QTabWidget::currentChanged, this, &MainWindow::onStreamTabChanged);
+    streamTabs_->addTab(createCaptureStreamTab(), QStringLiteral("Capture"));
 
     layout->addWidget(streamTabs_, 1);
     return panel;
+}
+
+QWidget *MainWindow::createCaptureStreamTab()
+{
+    captureStreamPage_ = new QWidget(this);
+    auto *layout = new QVBoxLayout(captureStreamPage_);
+    layout->setContentsMargins(8, 8, 8, 8);
+    layout->setSpacing(8);
+
+    captureStreamEmptyLabel_ = new QLabel(
+        QStringLiteral("Select one or more connected cameras under Capture → Cameras."),
+        captureStreamPage_);
+    captureStreamEmptyLabel_->setAlignment(Qt::AlignCenter);
+    captureStreamEmptyLabel_->setWordWrap(true);
+    captureStreamEmptyLabel_->setStyleSheet(QStringLiteral("color: #888888;"));
+
+    auto *gridHost = new QWidget(captureStreamPage_);
+    captureStreamGrid_ = new QGridLayout(gridHost);
+    captureStreamGrid_->setContentsMargins(0, 0, 0, 0);
+    captureStreamGrid_->setSpacing(10);
+
+    for (std::size_t cameraIndex = 0; cameraIndex < 2; ++cameraIndex)
+    {
+        LumoCameraUi *ui = cameraUiForIndex(cameraIndex);
+        const QString cameraName =
+            ui != nullptr ? profileTabNameForUi(*ui) : defaultCameraTabName(cameraIndex);
+
+        QLabel *waterfallLabel = nullptr;
+        captureWaterfallPanes_[cameraIndex] =
+            createPreviewPane(cameraName + QStringLiteral(" waterfall"), waterfallLabel);
+        captureWaterfallViews_[cameraIndex] = waterfallLabel;
+        if (captureWaterfallViews_[cameraIndex] != nullptr)
+        {
+            captureWaterfallViews_[cameraIndex]->setScaledContents(true);
+            captureWaterfallViews_[cameraIndex]->setAlignment(Qt::AlignCenter);
+        }
+        setPreviewDisconnectedText(captureWaterfallViews_[cameraIndex],
+                                   QStringLiteral("waterfall"),
+                                   cameraName);
+        captureWaterfallPanes_[cameraIndex]->hide();
+    }
+
+    layout->addWidget(captureStreamEmptyLabel_);
+    layout->addWidget(gridHost, 1);
+    updateCaptureStreamLayout();
+    return captureStreamPage_;
 }
 
 QWidget *MainWindow::createStreamTabPage(const QString &cameraName, LumoCameraUi &cameraUi)
@@ -1018,11 +1046,6 @@ QWidget *MainWindow::createCameraSettingsTab()
                                 defaultCameraTabName(camera1Ui_.cameraIndex));
     cameraSettingsTabs_->addTab(createLumoCameraGroup(cameraSettingsTabs_, camera2Ui_, LumoSensorKind::Swir3Ni),
                                 defaultCameraTabName(camera2Ui_.cameraIndex));
-
-    connect(cameraSettingsTabs_,
-            &QTabWidget::currentChanged,
-            this,
-            &MainWindow::onCameraSettingsTabChanged);
 
     layout->addWidget(cameraSettingsTabs_, 1);
     return page;
@@ -2521,8 +2544,16 @@ QWidget *MainWindow::createUr3eSettingsTab()
 
 QWidget *MainWindow::createCaptureSettingsTab()
 {
-    auto *page = new QWidget(this);
+    auto *scrollArea = new QScrollArea(this);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
+    auto *page = new QWidget();
+    scrollArea->setWidget(page);
+
     auto *layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
 
     auto *recorderBox = new QGroupBox("Recorder", page);
     auto *recorderLayout = new QVBoxLayout(recorderBox);
@@ -2547,21 +2578,8 @@ QWidget *MainWindow::createCaptureSettingsTab()
     recorderButtonLayout->addWidget(captureRecorderRecordBtn_, 1);
     recorderLayout->addLayout(recorderButtonLayout);
 
-    auto *recorderStatusLayout = new QHBoxLayout();
-    recorderStatusLayout->setContentsMargins(0, 6, 0, 0);
-    recorderStatusLayout->setSpacing(8);
-    captureRecorderStatusIndicator_ = new QLabel(recorderBox);
-    captureRecorderStatusIndicator_->setFixedSize(14, 14);
-    captureRecorderStatusIndicator_->setToolTip(tr("Recorder activity"));
-    captureRecorderStatusLabel_ = new QLabel(recorderBox);
-    captureRecorderStatusLabel_->setWordWrap(true);
-    captureRecorderStatusLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    recorderStatusLayout->addWidget(captureRecorderStatusIndicator_);
-    recorderStatusLayout->addWidget(captureRecorderStatusLabel_, 1);
-    recorderLayout->addLayout(recorderStatusLayout);
-
     auto *recorderModeLayout = new QHBoxLayout();
-    recorderModeLayout->setContentsMargins(0, 4, 0, 0);
+    recorderModeLayout->setContentsMargins(0, 6, 0, 0);
     recorderModeLayout->setSpacing(16);
     captureReflectanceCheck_ = new QCheckBox(QStringLiteral("Reflectance"), recorderBox);
     captureTransmittanceCheck_ = new QCheckBox(QStringLiteral("Transmittance"), recorderBox);
@@ -2577,6 +2595,19 @@ QWidget *MainWindow::createCaptureSettingsTab()
     recorderModeLayout->addWidget(captureTransmittanceCheck_);
     recorderModeLayout->addStretch(1);
     recorderLayout->addLayout(recorderModeLayout);
+
+    auto *recorderStatusLayout = new QHBoxLayout();
+    recorderStatusLayout->setContentsMargins(0, 4, 0, 0);
+    recorderStatusLayout->setSpacing(8);
+    captureRecorderStatusIndicator_ = new QLabel(recorderBox);
+    captureRecorderStatusIndicator_->setFixedSize(14, 14);
+    captureRecorderStatusIndicator_->setToolTip(tr("Recorder activity"));
+    captureRecorderStatusLabel_ = new QLabel(recorderBox);
+    captureRecorderStatusLabel_->setWordWrap(true);
+    captureRecorderStatusLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    recorderStatusLayout->addWidget(captureRecorderStatusIndicator_);
+    recorderStatusLayout->addWidget(captureRecorderStatusLabel_, 1);
+    recorderLayout->addLayout(recorderStatusLayout);
 
     captureScanTimer_ = new QTimer(this);
     captureScanTimer_->setSingleShot(true);
@@ -2606,6 +2637,7 @@ QWidget *MainWindow::createCaptureSettingsTab()
         updateCaptureDualCameraSyncControls();
         updateCaptureRecorderControls();
         updateCaptureScanningSpeedControls();
+        updateCaptureStreamLayout();
     };
     connect(captureCamera1Check_, &QCheckBox::toggled, this, refreshRecorder);
     connect(captureCamera2Check_, &QCheckBox::toggled, this, refreshRecorder);
@@ -2790,6 +2822,54 @@ QWidget *MainWindow::createCaptureSettingsTab()
         tr("Write flat-field corrected sample data as ENVI under preprocessed/ when post-processing runs."));
     preprocessingLayout->addWidget(captureSaveFfcImageCheck_);
 
+    captureRunGsamCheck_ =
+        new QCheckBox(QStringLiteral("Run GSAM segmentation"), preprocessingBox);
+    captureRunGsamCheck_->setToolTip(
+        tr("After preprocessing, send the RGB preview to the GSAM2 WSL server and write masks "
+           "and ROI spectra under preprocessed/segmentation/"));
+
+    auto *gsamServerRow = new QWidget(preprocessingBox);
+    auto *gsamServerLayout = new QHBoxLayout(gsamServerRow);
+    gsamServerLayout->setContentsMargins(0, 0, 0, 0);
+    gsamServerLayout->setSpacing(8);
+    captureGsamStartServerBtn_ = new QPushButton(QStringLiteral("Start server"), gsamServerRow);
+    captureGsamStartServerBtn_->setToolTip(
+        tr("Cold-start the GSAM2 HTTP server in WSL. Keep it running for segmentation requests."));
+    gsamServerLayout->addWidget(captureRunGsamCheck_);
+    gsamServerLayout->addWidget(captureGsamStartServerBtn_);
+    gsamServerLayout->addStretch(1);
+    preprocessingLayout->addWidget(gsamServerRow);
+
+    auto *gsamPromptRow = new QWidget(preprocessingBox);
+    auto *gsamPromptLayout = new QFormLayout(gsamPromptRow);
+    gsamPromptLayout->setContentsMargins(0, 0, 0, 0);
+    gsamPromptLayout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+    gsamPromptLayout->setRowWrapPolicy(QFormLayout::DontWrapRows);
+    captureGsamPromptEdit_ = new QLineEdit(gsamPromptRow);
+    captureGsamPromptEdit_->setPlaceholderText(QStringLiteral("sample."));
+    captureGsamPromptEdit_->setToolTip(tr("GroundingDINO text prompt (e.g. \"grape. leaf.\")."));
+    captureGsamSampleCountSpin_ = new QSpinBox(gsamPromptRow);
+    captureGsamSampleCountSpin_->setRange(1, 100);
+    captureGsamSampleCountSpin_->setValue(5);
+    captureGsamSampleCountSpin_->setToolTip(tr("Maximum number of detections (intended sample count)."));
+    gsamPromptLayout->addRow(QStringLiteral("GSAM prompt"), captureGsamPromptEdit_);
+    gsamPromptLayout->addRow(QStringLiteral("Max samples"), captureGsamSampleCountSpin_);
+    preprocessingLayout->addWidget(gsamPromptRow);
+
+    connect(captureGsamStartServerBtn_, &QPushButton::clicked, this, [this]() {
+        if (gsam2ServerManager_ == nullptr)
+            return;
+
+        if (gsam2ServerManager_->state() == hf::processing::Gsam2ServerManager::State::Running
+            || gsam2ServerManager_->state() == hf::processing::Gsam2ServerManager::State::Starting)
+        {
+            gsam2ServerManager_->stopServer();
+            return;
+        }
+
+        gsam2ServerManager_->startServer();
+    });
+
     auto *metadataBox = new QGroupBox(QStringLiteral("Metadata"), page);
     captureMetadataBox_ = metadataBox;
     auto *metadataForm = new QFormLayout(metadataBox);
@@ -2877,11 +2957,10 @@ QWidget *MainWindow::createCaptureSettingsTab()
     layout->addWidget(captureCamerasBox_);
     layout->addWidget(positionBox);
     layout->addWidget(preprocessingBox);
-    layout->addStretch();
     updateCaptureCamerasList();
     updateCaptureCameraPositionRows();
     updateCaptureRecorderControls();
-    return page;
+    return scrollArea;
 }
 
 void MainWindow::updateCapturePositionControls(const StageState state)
@@ -3116,6 +3195,19 @@ void MainWindow::updateCaptureRecorderControls()
                                                 && capturePreprocessAfterScanCheck_ != nullptr
                                                 && capturePreprocessAfterScanCheck_->isChecked());
 
+    const bool gsamChildEnabled = preprocessingEnabled && capturePreprocessAfterScanCheck_ != nullptr
+                                  && capturePreprocessAfterScanCheck_->isChecked();
+    if (captureRunGsamCheck_ != nullptr)
+        captureRunGsamCheck_->setEnabled(gsamChildEnabled);
+    if (captureGsamPromptEdit_ != nullptr)
+        captureGsamPromptEdit_->setEnabled(gsamChildEnabled);
+    if (captureGsamSampleCountSpin_ != nullptr)
+        captureGsamSampleCountSpin_->setEnabled(gsamChildEnabled);
+    if (captureGsamStartServerBtn_ != nullptr)
+        captureGsamStartServerBtn_->setEnabled(preprocessingEnabled);
+
+    updateCaptureGsamServerUi();
+
     if (captureRecorderPreviewBtn_ != nullptr)
     {
         captureRecorderPreviewBtn_->setEnabled(useStage && !scanActive);
@@ -3199,6 +3291,56 @@ void MainWindow::updateCaptureRecorderControls()
     updateLightControlsEnabled();
     updateCaptureSessionUiLock();
     updateCaptureRecorderStatus();
+}
+
+void MainWindow::updateCaptureGsamServerUi()
+{
+    if (gsam2ServerManager_ == nullptr || captureGsamStartServerBtn_ == nullptr)
+        return;
+
+    using GsamState = hf::processing::Gsam2ServerManager::State;
+    const GsamState state = gsam2ServerManager_->state();
+
+    QString label;
+    QString textColor;
+    QString borderColor;
+
+    switch (state)
+    {
+    case GsamState::Starting:
+        label = QStringLiteral("Connecting…");
+        textColor = QStringLiteral("#b8860b");
+        borderColor = QStringLiteral("#e6c200");
+        break;
+    case GsamState::Running:
+        label = QStringLiteral("Stop server");
+        textColor = QStringLiteral("#c62828");
+        borderColor = QStringLiteral("#e57373");
+        break;
+    case GsamState::Stopped:
+    case GsamState::Failed:
+    default:
+        label = QStringLiteral("Start server");
+        textColor = QStringLiteral("#1b8f1b");
+        borderColor = QStringLiteral("#81c784");
+        break;
+    }
+
+    captureGsamStartServerBtn_->setText(label);
+    captureGsamStartServerBtn_->setStyleSheet(
+        QStringLiteral(
+            "QPushButton {"
+            "  background-color: #ffffff;"
+            "  color: %1;"
+            "  border: 1px solid %2;"
+            "  border-radius: 2px;"
+            "  padding: 4px 12px;"
+            "  min-width: 88px;"
+            "}"
+            "QPushButton:hover { background-color: #f8f8f8; }"
+            "QPushButton:pressed { background-color: #eeeeee; }"
+            "QPushButton:disabled { color: #999999; border-color: #cccccc; background-color: #f5f5f5; }")
+            .arg(textColor, borderColor));
 }
 
 void MainWindow::updateCaptureSessionUiLock()
@@ -4555,6 +4697,25 @@ void MainWindow::runCapturePostProcessingIfEnabled()
     hf::processing::CapturePostProcessOptions options;
     options.saveFfcImage =
         captureSaveFfcImageCheck_ != nullptr && captureSaveFfcImageCheck_->isChecked();
+    options.runGsamSegmentation =
+        captureRunGsamCheck_ != nullptr && captureRunGsamCheck_->isChecked();
+    if (captureGsamPromptEdit_ != nullptr)
+        options.gsamPrompt = captureGsamPromptEdit_->text().trimmed();
+    if (captureGsamSampleCountSpin_ != nullptr)
+        options.gsamSampleCount = captureGsamSampleCountSpin_->value();
+    if (gsam2ServerManager_ != nullptr)
+        options.gsamServerUrl = gsam2ServerManager_->serverUrl();
+
+    if (options.runGsamSegmentation && gsam2ServerManager_ != nullptr)
+    {
+        const auto state = gsam2ServerManager_->state();
+        if (state != hf::processing::Gsam2ServerManager::State::Running)
+        {
+            appendLog(QStringLiteral(
+                "Capture post-process: GSAM segmentation enabled but server is not running — "
+                "start the GSAM server or disable segmentation."));
+        }
+    }
 
     appendLog(QStringLiteral("Capture post-process: started in background…"));
 
@@ -5502,6 +5663,91 @@ void MainWindow::updateCaptureCamerasList()
     }
 
     updateCaptureCameraPositionRows();
+    updateCaptureStreamLayout();
+}
+
+LumoCameraUi *MainWindow::cameraUiForIndex(const std::size_t cameraIndex)
+{
+    if (cameraIndex == 0)
+        return &camera1Ui_;
+    if (cameraIndex == 1)
+        return &camera2Ui_;
+    return nullptr;
+}
+
+void MainWindow::updateCaptureStreamLayout()
+{
+    if (captureStreamGrid_ == nullptr)
+        return;
+
+    while (QLayoutItem *item = captureStreamGrid_->takeAt(0))
+        delete item;
+
+    for (QGroupBox *pane : captureWaterfallPanes_)
+    {
+        if (pane != nullptr)
+            pane->hide();
+    }
+
+    std::vector<std::size_t> selected;
+    if (!selectedCaptureCameraIndices(selected))
+    {
+        if (captureStreamEmptyLabel_ != nullptr)
+            captureStreamEmptyLabel_->show();
+        return;
+    }
+
+    if (captureStreamEmptyLabel_ != nullptr)
+        captureStreamEmptyLabel_->hide();
+
+    for (const std::size_t cameraIndex : selected)
+    {
+        if (cameraIndex >= 2 || captureWaterfallPanes_[cameraIndex] == nullptr)
+            continue;
+
+        LumoCameraUi *ui = cameraUiForIndex(cameraIndex);
+        if (ui != nullptr)
+        {
+            captureWaterfallPanes_[cameraIndex]->setTitle(
+                profileTabNameForUi(*ui) + QStringLiteral(" waterfall"));
+        }
+        captureWaterfallPanes_[cameraIndex]->show();
+    }
+
+    const int count = static_cast<int>(selected.size());
+    if (count == 1)
+    {
+        const std::size_t cameraIndex = selected.front();
+        if (cameraIndex < 2 && captureWaterfallPanes_[cameraIndex] != nullptr)
+            captureStreamGrid_->addWidget(captureWaterfallPanes_[cameraIndex], 0, 0, 2, 2);
+    }
+    else if (count == 2)
+    {
+        const std::size_t left = selected[0];
+        const std::size_t right = selected[1];
+        if (left < 2 && captureWaterfallPanes_[left] != nullptr)
+            captureStreamGrid_->addWidget(captureWaterfallPanes_[left], 0, 0, 2, 1);
+        if (right < 2 && captureWaterfallPanes_[right] != nullptr)
+            captureStreamGrid_->addWidget(captureWaterfallPanes_[right], 0, 1, 2, 1);
+    }
+    else if (count >= 3)
+    {
+        for (int slot = 0; slot < count && slot < 3; ++slot)
+        {
+            const std::size_t cameraIndex = selected[static_cast<std::size_t>(slot)];
+            if (cameraIndex >= 2 || captureWaterfallPanes_[cameraIndex] == nullptr)
+                continue;
+
+            const int row = slot < 2 ? 0 : 1;
+            const int col = slot < 2 ? slot : 0;
+            captureStreamGrid_->addWidget(captureWaterfallPanes_[cameraIndex], row, col);
+        }
+    }
+
+    captureStreamGrid_->setColumnStretch(0, 1);
+    captureStreamGrid_->setColumnStretch(1, 1);
+    captureStreamGrid_->setRowStretch(0, 1);
+    captureStreamGrid_->setRowStretch(1, 1);
 }
 
 void MainWindow::updateCaptureCameraPositionRows()
@@ -5635,6 +5881,9 @@ void MainWindow::performGracefulShutdown()
     if (profileProcessor2_)
         profileProcessor2_->stop();
 
+    if (gsam2ServerManager_ != nullptr)
+        gsam2ServerManager_->stopServer();
+
     savePersistedUiSettings();
     gracefulShutdownDone_ = true;
 }
@@ -5734,6 +5983,12 @@ void MainWindow::loadPersistedUiSettings()
         capturePreprocessAfterScanCheck_->setChecked(capturePosition.preprocessAfterScan);
     if (captureSaveFfcImageCheck_ != nullptr)
         captureSaveFfcImageCheck_->setChecked(capturePosition.saveFfcImage);
+    if (captureRunGsamCheck_ != nullptr)
+        captureRunGsamCheck_->setChecked(capturePosition.runGsamSegmentation);
+    if (captureGsamPromptEdit_ != nullptr)
+        captureGsamPromptEdit_->setText(capturePosition.gsamPrompt);
+    if (captureGsamSampleCountSpin_ != nullptr)
+        captureGsamSampleCountSpin_->setValue(std::max(1, capturePosition.gsamSampleCount));
     if (captureDualCameraAutoCheck_ != nullptr)
         captureDualCameraAutoCheck_->setChecked(capturePosition.dualCameraAutoSync);
     if (captureSaveFolderEdit_ != nullptr && !capturePosition.saveFolder.isEmpty())
@@ -5760,6 +6015,12 @@ void MainWindow::savePersistedUiSettings()
         capturePosition.preprocessAfterScan = capturePreprocessAfterScanCheck_->isChecked();
     if (captureSaveFfcImageCheck_ != nullptr)
         capturePosition.saveFfcImage = captureSaveFfcImageCheck_->isChecked();
+    if (captureRunGsamCheck_ != nullptr)
+        capturePosition.runGsamSegmentation = captureRunGsamCheck_->isChecked();
+    if (captureGsamPromptEdit_ != nullptr)
+        capturePosition.gsamPrompt = captureGsamPromptEdit_->text().trimmed();
+    if (captureGsamSampleCountSpin_ != nullptr)
+        capturePosition.gsamSampleCount = captureGsamSampleCountSpin_->value();
     if (captureDualCameraAutoCheck_ != nullptr)
         capturePosition.dualCameraAutoSync = captureDualCameraAutoCheck_->isChecked();
     if (captureSaveFolderEdit_ != nullptr)
@@ -5925,9 +6186,20 @@ void MainWindow::connectPersistedSettingsAutosave()
     if (captureUseStageForRecordingCheck_ != nullptr)
         connect(captureUseStageForRecordingCheck_, &QCheckBox::toggled, this, schedule);
     if (capturePreprocessAfterScanCheck_ != nullptr)
+    {
         connect(capturePreprocessAfterScanCheck_, &QCheckBox::toggled, this, schedule);
+        connect(capturePreprocessAfterScanCheck_, &QCheckBox::toggled, this, [this]() {
+            updateCaptureRecorderControls();
+        });
+    }
     if (captureSaveFfcImageCheck_ != nullptr)
         connect(captureSaveFfcImageCheck_, &QCheckBox::toggled, this, schedule);
+    if (captureRunGsamCheck_ != nullptr)
+        connect(captureRunGsamCheck_, &QCheckBox::toggled, this, schedule);
+    if (captureGsamPromptEdit_ != nullptr)
+        connect(captureGsamPromptEdit_, &QLineEdit::textChanged, this, schedule);
+    if (captureGsamSampleCountSpin_ != nullptr)
+        connect(captureGsamSampleCountSpin_, qOverload<int>(&QSpinBox::valueChanged), this, schedule);
     if (stagePortCombo_ != nullptr)
         connect(stagePortCombo_, &QComboBox::currentIndexChanged, this, schedule);
     if (stageBaudCombo_ != nullptr)
@@ -6525,10 +6797,15 @@ void MainWindow::updateProfilePlots(LumoCameraUi &ui, const ui::ProfileExtractio
 
 void MainWindow::updateWaterfallView(LumoCameraUi &ui, const QImage &image)
 {
-    if (ui.waterfallView == nullptr || image.isNull())
+    if (image.isNull())
         return;
 
-    ui.waterfallView->setPixmap(QPixmap::fromImage(image));
+    const QPixmap pixmap = QPixmap::fromImage(image);
+    if (ui.waterfallView != nullptr)
+        ui.waterfallView->setPixmap(pixmap);
+
+    if (ui.cameraIndex < 2 && captureWaterfallViews_[ui.cameraIndex] != nullptr)
+        captureWaterfallViews_[ui.cameraIndex]->setPixmap(pixmap);
 }
 
 void MainWindow::updateDetectorFrame(const FramePacket &frame)
@@ -6580,6 +6857,13 @@ void MainWindow::clearDetectorView(LumoCameraUi &ui)
     {
         ui.waterfallView->clear();
         setPreviewDisconnectedText(ui.waterfallView, QStringLiteral("waterfall"), cameraName);
+    }
+    if (ui.cameraIndex < 2 && captureWaterfallViews_[ui.cameraIndex] != nullptr)
+    {
+        captureWaterfallViews_[ui.cameraIndex]->clear();
+        setPreviewDisconnectedText(captureWaterfallViews_[ui.cameraIndex],
+                                   QStringLiteral("waterfall"),
+                                   profileTabNameForUi(ui));
     }
     if (ui.wavelengthView != nullptr)
         ui.wavelengthView->clearDisplay(cameraName + QStringLiteral(" wavelength (disconnected)"));

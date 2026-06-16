@@ -39,6 +39,24 @@ struct HardwareConfig
 
     PreprocessingConfig preprocessing;
 
+    struct SegmentationConfig
+    {
+        QString wslDistro = QStringLiteral("Ubuntu");
+        QString wslBashCommand = QStringLiteral("source ~/venvs/gsam2/bin/activate");
+        QString sam2RepoLinux;
+        int serverPort = 8765;
+        double boxThreshold = 0.30;
+        bool multimaskOutput = false;
+        bool warmupOnStart = true;
+        QString hfModelId = QStringLiteral("IDEA-Research/grounding-dino-base");
+        QString sam2Config = QStringLiteral("configs/sam2.1/sam2.1_hiera_l.yaml");
+        QString sam2Checkpoint = QStringLiteral("checkpoints/sam2.1_hiera_large.pt");
+        QString detectorDevice = QStringLiteral("cuda");
+        QString sam2Device = QStringLiteral("cuda");
+    };
+
+    SegmentationConfig segmentation;
+
     QString filePath;
     bool loadedFromFile = false;
     QStringList warnings;

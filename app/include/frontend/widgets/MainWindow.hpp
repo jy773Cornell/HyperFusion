@@ -22,6 +22,11 @@
 #include "frontend/processing/ProfileProcessor.hpp"
 #include "frontend/processing/WaterfallProcessor.hpp"
 
+namespace hf::processing
+{
+class Gsam2ServerManager;
+}
+
 class CaptureWriterWorker;
 class CapturePostProcessorWorker;
 class LumoCamera;
@@ -35,11 +40,13 @@ class StageWorker;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
+class QGridLayout;
 class QGroupBox;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
 class QPushButton;
+class QSpinBox;
 class QTabWidget;
 class QTimer;
 class QToolButton;
@@ -126,6 +133,7 @@ private:
     QWidget *createLightSettingsTab();
     QWidget *createUr3eSettingsTab();
     QWidget *createCaptureSettingsTab();
+    QWidget *createCaptureStreamTab();
     QWidget *createStreamTabPage(const QString &cameraName, LumoCameraUi &cameraUi);
     QWidget *createRgbUr3eStreamTab();
     QGroupBox *createPreviewPane(const QString &title, QLabel *&labelOut);
@@ -168,9 +176,12 @@ private:
     void updateStagePositionDisplay(double positionMm);
     void pollStagePosition();
     void updateCaptureCamerasList();
+    void updateCaptureStreamLayout();
+    LumoCameraUi *cameraUiForIndex(std::size_t cameraIndex);
     void updateCaptureCameraPositionRows();
     void updateCapturePositionControls(StageState state);
     void updateCaptureRecorderControls();
+    void updateCaptureGsamServerUi();
     void updateCaptureSessionUiLock();
     void updateCaptureRecorderStatus();
     void notifyCaptureRecordComplete();
@@ -346,6 +357,17 @@ private:
     static constexpr int kSettingsTabUr3e = 3;
     static constexpr int kSettingsTabCapture = 4;
 
+    static constexpr int kStreamTabCamera1 = 0;
+    static constexpr int kStreamTabCamera2 = 1;
+    static constexpr int kStreamTabUr3e = 2;
+    static constexpr int kStreamTabCapture = 3;
+
+    QWidget *captureStreamPage_ = nullptr;
+    QGridLayout *captureStreamGrid_ = nullptr;
+    QLabel *captureStreamEmptyLabel_ = nullptr;
+    QGroupBox *captureWaterfallPanes_[2] = {nullptr, nullptr};
+    QLabel *captureWaterfallViews_[2] = {nullptr, nullptr};
+
     QLabel *lightDaqStatusIndicator_ = nullptr;
     QLabel *lightDaqStatusLabel_ = nullptr;
     QPlainTextEdit *lightDaqInfoDisplay_ = nullptr;
@@ -470,6 +492,11 @@ private:
     QGroupBox *capturePreprocessingBox_ = nullptr;
     QCheckBox *capturePreprocessAfterScanCheck_ = nullptr;
     QCheckBox *captureSaveFfcImageCheck_ = nullptr;
+    QCheckBox *captureRunGsamCheck_ = nullptr;
+    QPushButton *captureGsamStartServerBtn_ = nullptr;
+    QLineEdit *captureGsamPromptEdit_ = nullptr;
+    QSpinBox *captureGsamSampleCountSpin_ = nullptr;
+    std::unique_ptr<hf::processing::Gsam2ServerManager> gsam2ServerManager_;
     QWidget *capturePositionContent_ = nullptr;
     QTimer *settingsSaveTimer_ = nullptr;
     QString persistedStagePort_;
@@ -485,7 +512,5 @@ private:
     bool performingGracefulShutdown_ = false;
 
 private slots:
-    void onCameraSettingsTabChanged(int index);
     void onSettingsTabChanged(int index);
-    void onStreamTabChanged(int index);
 };

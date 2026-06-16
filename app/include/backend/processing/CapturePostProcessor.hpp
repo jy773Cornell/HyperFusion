@@ -3,6 +3,7 @@
 
 #include "backend/CaptureWriterTypes.hpp"
 
+#include <QString>
 #include <QStringList>
 
 namespace hf::processing
@@ -16,6 +17,10 @@ struct CapturePostProcessResult
 struct CapturePostProcessOptions
 {
     bool saveFfcImage = true;
+    bool runGsamSegmentation = false;
+    QString gsamPrompt;
+    int gsamSampleCount = 5;
+    QString gsamServerUrl = QStringLiteral("http://127.0.0.1:8765");
 };
 
 CapturePostProcessResult processCaptureSession(const CaptureWriterSessionSummary &summary,

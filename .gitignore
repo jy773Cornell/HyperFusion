@@ -10,6 +10,11 @@ $RECYCLE.BIN/
 .idea/
 *.code-workspace
 
+# Cursor (keep shared agent rules under .cursor/rules/)
+.cursor/
+!.cursor/rules/
+!.cursor/rules/**
+
 # Visual Studio / MSVC (local machine files)
 *.vcxproj.user
 *.vcxproj.filters.user
@@ -32,6 +37,7 @@ $RECYCLE.BIN/
 CMakeLists.txt.user*
 
 # CMake / build trees (generated)
+**/.qt/
 **/CMakeFiles/
 **/CMakeCache.txt
 **/cmake_install.cmake
@@ -39,6 +45,7 @@ CMakeLists.txt.user*
 **/install_manifest.txt
 **/compile_commands.json
 **/Testing/
+**/app_autogen/
 
 # Common build output folder names
 **/build/
@@ -46,12 +53,20 @@ CMakeLists.txt.user*
 **/cmake-build-*/
 **/out/
 
+# MSVC / link artifacts (outside ignored build trees)
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.exe.manifest
+
 # Ninja / Makefile artifacts inside build trees
 **/*.ninja
 **/.ninja_deps
 **/.ninja_log
 
-# Python caches / venvs (if used locally)
+# --- Python (GSAM2 WSL sidecar, scripts) ---
 **/__pycache__/
 **/*.py[cod]
 **/.pytest_cache/
@@ -59,6 +74,18 @@ CMakeLists.txt.user*
 **/.ruff_cache/
 **/.venv/
 **/venv/
+*.egg-info/
+**/.cache/huggingface/
+**/.cache/torch/
+
+# SAM2 / GSAM2 model weights (large; see resources/sam2/envsetup.md)
+resources/sam2/checkpoints/*.pt
+resources/sam2/checkpoints/*.pth
+resources/sam2/checkpoints/*.ckpt
+resources/sam2/.cache/
+
+# --- HyperFusion local runtime / capture data ---
+/processing/
 
 # Logs / temp
 *.log
@@ -67,10 +94,5 @@ CMakeLists.txt.user*
 *.swp
 *.swo
 
-# Documentation
+# Documentation (local / generated; not versioned here)
 docs/
-
-# Example capture binaries (too large for GitHub; keep .hdr/.xml locally)
-examples/**/*.raw
-
-./processing/

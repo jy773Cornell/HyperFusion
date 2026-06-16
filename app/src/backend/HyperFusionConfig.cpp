@@ -187,7 +187,7 @@ bool parseKeyValue(const QString &line, QString &keyOut, QString &valueOut)
 
     keyOut = line.left(equals).trimmed().toLower();
     valueOut = stripInlineComment(line.mid(equals + 1));
-    return !keyOut.isEmpty() && !valueOut.isEmpty();
+    return !keyOut.isEmpty();
 }
 
 bool parseDouble(const QString &text, double &valueOut)
@@ -516,6 +516,57 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 warnings.push_back(QStringLiteral("Unknown key in [preprocessing]: %1").arg(key));
             }
         }
+        else if (section == QStringLiteral("segmentation"))
+        {
+            if (key == QStringLiteral("wsl_distro"))
+                config.segmentation.wslDistro = value;
+            else if (key == QStringLiteral("wsl_bash_command"))
+                config.segmentation.wslBashCommand = value;
+            else if (key == QStringLiteral("sam2_repo_linux"))
+                config.segmentation.sam2RepoLinux = value;
+            else if (key == QStringLiteral("server_port"))
+            {
+                bool ok = false;
+                const int port = value.toInt(&ok);
+                if (!ok || port <= 0 || port > 65535)
+                    warnings.push_back(QStringLiteral("Invalid segmentation server_port: %1").arg(value));
+                else
+                    config.segmentation.serverPort = port;
+            }
+            else if (key == QStringLiteral("box_threshold"))
+            {
+                if (!hasNumber || numericValue <= 0.0 || numericValue >= 1.0)
+                    warnings.push_back(QStringLiteral("Invalid segmentation box_threshold: %1").arg(value));
+                else
+                    config.segmentation.boxThreshold = numericValue;
+            }
+            else if (key == QStringLiteral("multimask_output"))
+            {
+                const QString lower = value.trimmed().toLower();
+                config.segmentation.multimaskOutput =
+                    lower == QStringLiteral("true") || lower == QStringLiteral("1")
+                    || lower == QStringLiteral("yes");
+            }
+            else if (key == QStringLiteral("warmup_on_start"))
+            {
+                const QString lower = value.trimmed().toLower();
+                config.segmentation.warmupOnStart =
+                    lower.isEmpty() || lower == QStringLiteral("true") || lower == QStringLiteral("1")
+                    || lower == QStringLiteral("yes");
+            }
+            else if (key == QStringLiteral("hf_model_id"))
+                config.segmentation.hfModelId = value;
+            else if (key == QStringLiteral("sam2_config"))
+                config.segmentation.sam2Config = value;
+            else if (key == QStringLiteral("sam2_checkpoint"))
+                config.segmentation.sam2Checkpoint = value;
+            else if (key == QStringLiteral("detector_device"))
+                config.segmentation.detectorDevice = value;
+            else if (key == QStringLiteral("sam2_device"))
+                config.segmentation.sam2Device = value;
+            else
+                warnings.push_back(QStringLiteral("Unknown key in [segmentation]: %1").arg(key));
+        }
         else if (section.isEmpty())
         {
             warnings.push_back(QStringLiteral("Key outside a section (ignored): %1").arg(key));
@@ -600,7 +651,22 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "ffc_epsilon = 1e-6\n"
         << "ffc_clamp_min = 0.0\n"
         << "ffc_clamp_max = 1.0\n"
-        << "truncate_nm = 780.0\n";
+        << "truncate_nm = 780.0\n"
+        << "\n"
+        << "[segmentation]\n"
+        << "# GSAM2 sidecar (WSL). sam2_repo_linux empty = auto from resources/sam2.\n"
+        << "wsl_distro = Ubuntu\n"
+        << "wsl_bash_command = source ./venv/bin/activate\n"
+        << "sam2_repo_linux = \n"
+        << "server_port = 8765\n"
+        << "box_threshold = 0.30\n"
+        << "multimask_output = false\n"
+        << "warmup_on_start = true\n"
+        << "hf_model_id = IDEA-Research/grounding-dino-base\n"
+        << "sam2_config = configs/sam2.1/sam2.1_hiera_l.yaml\n"
+        << "sam2_checkpoint = checkpoints/sam2.1_hiera_large.pt\n"
+        << "detector_device = cuda\n"
+        << "sam2_device = cuda\n";
 
     if (!file.commit())
     {

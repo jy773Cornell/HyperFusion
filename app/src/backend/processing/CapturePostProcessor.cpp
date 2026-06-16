@@ -2,6 +2,8 @@
 
 #include "backend/HyperFusionConfig.hpp"
 #include "backend/processing/FlatFieldCorrector.hpp"
+#include "backend/processing/Gsam2RoiAnalysis.hpp"
+#include "backend/processing/Gsam2SegmentationClient.hpp"
 #include "backend/processing/HsiToColor.hpp"
 #include "backend/processing/IlluminantTables.hpp"
 #include "backend/processing/ReferenceBuilder.hpp"
@@ -17,6 +19,8 @@
 #include <QJsonObject>
 #include <QSaveFile>
 
+#include <algorithm>
+
 namespace hf::processing
 {
 namespace
@@ -28,11 +32,15 @@ struct StreamProcessReport
     bool whitePlotOk = false;
     bool ffcOk = false;
     bool rgbOk = false;
+    bool segmentationOk = false;
     QString darkPlotPath;
     QString whitePlotPath;
     QString ffcHdrPath;
     QString ffcRawPath;
     QString rgbPath;
+    QString segmentationDir;
+    QString segmentationCsvPath;
+    QString segmentationPlotPath;
     QString errorMessage;
 };
 
@@ -87,6 +95,9 @@ bool writeManifest(const QString &preprocessedDir,
                 QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
     root.insert(QStringLiteral("sessionDirectory"), summary.sessionDirectory);
     root.insert(QStringLiteral("saveFfcImage"), options.saveFfcImage);
+    root.insert(QStringLiteral("runGsamSegmentation"), options.runGsamSegmentation);
+    root.insert(QStringLiteral("gsamPrompt"), options.gsamPrompt);
+    root.insert(QStringLiteral("gsamSampleCount"), options.gsamSampleCount);
 
     const hf::HardwareConfig::PreprocessingConfig &cfg = hf::hardwareConfig().preprocessing;
     QJsonObject configObject;
@@ -107,11 +118,15 @@ bool writeManifest(const QString &preprocessedDir,
         streamObject.insert(QStringLiteral("whitePlotOk"), report.whitePlotOk);
         streamObject.insert(QStringLiteral("ffcOk"), report.ffcOk);
         streamObject.insert(QStringLiteral("rgbOk"), report.rgbOk);
+        streamObject.insert(QStringLiteral("segmentationOk"), report.segmentationOk);
         streamObject.insert(QStringLiteral("darkPlotPath"), report.darkPlotPath);
         streamObject.insert(QStringLiteral("whitePlotPath"), report.whitePlotPath);
         streamObject.insert(QStringLiteral("ffcHdrPath"), report.ffcHdrPath);
         streamObject.insert(QStringLiteral("ffcRawPath"), report.ffcRawPath);
         streamObject.insert(QStringLiteral("rgbPath"), report.rgbPath);
+        streamObject.insert(QStringLiteral("segmentationDir"), report.segmentationDir);
+        streamObject.insert(QStringLiteral("segmentationCsvPath"), report.segmentationCsvPath);
+        streamObject.insert(QStringLiteral("segmentationPlotPath"), report.segmentationPlotPath);
         if (!report.errorMessage.isEmpty())
             streamObject.insert(QStringLiteral("error"), report.errorMessage);
         streamsArray.push_back(streamObject);
@@ -266,6 +281,7 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
     const FlatFieldParams ffcParams = flatFieldParamsFromConfig();
 
     QString ffcHdrForRgb = report.ffcHdrPath;
+    const bool keepFfcForSegmentation = options.runGsamSegmentation && !options.saveFfcImage;
     if (!options.saveFfcImage)
     {
         ffcHdrForRgb = QDir(preprocessedDir).filePath(ffcBaseName + QStringLiteral("_tmp.hdr"));
@@ -324,6 +340,76 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
     report.rgbOk = true;
     logLines.push_back(QStringLiteral("Capture post-process (%1): wrote %2")
                            .arg(streamLabel, QFileInfo(report.rgbPath).fileName()));
+
+    if (options.runGsamSegmentation)
+    {
+        const QString segDir = QDir(preprocessedDir).filePath(QStringLiteral("segmentation"));
+        if (!QDir().mkpath(segDir))
+        {
+            report.errorMessage = QStringLiteral("Could not create segmentation directory.");
+            logLines.push_back(QStringLiteral("Capture post-process (%1): %2").arg(streamLabel, report.errorMessage));
+            return report;
+        }
+        report.segmentationDir = segDir;
+
+        const hf::HardwareConfig::SegmentationConfig &segCfg = hf::hardwareConfig().segmentation;
+        Gsam2SegmentationRequest segRequest;
+        segRequest.inputRgbPath = report.rgbPath;
+        segRequest.outputDirectory = segDir;
+        segRequest.imageName = datasetStem + QStringLiteral("_rgb.png");
+        segRequest.prompt = options.gsamPrompt.trimmed().isEmpty() ? QStringLiteral("sample.")
+                                                                    : options.gsamPrompt.trimmed();
+        segRequest.maxDetections = std::max(1, options.gsamSampleCount);
+        segRequest.boxThreshold = segCfg.boxThreshold;
+        segRequest.serverUrl = options.gsamServerUrl;
+
+        QString segError;
+        const Gsam2SegmentationResponse segResponse = requestGsam2Segmentation(segRequest, &segError);
+        if (!segResponse.ok)
+        {
+            report.errorMessage =
+                segError.isEmpty() ? QStringLiteral("GSAM2 segmentation failed.") : segError;
+            logLines.push_back(QStringLiteral("Capture post-process (%1): %2").arg(streamLabel, report.errorMessage));
+            if (!options.saveFfcImage && keepFfcForSegmentation)
+            {
+                QFile::remove(ffcHdrForRgb);
+                QFile::remove(QDir(preprocessedDir).filePath(ffcBaseName + QStringLiteral("_tmp.raw")));
+            }
+            return report;
+        }
+
+        logLines.push_back(QStringLiteral("Capture post-process (%1): GSAM2 found %2 ROI(s)")
+                               .arg(streamLabel)
+                               .arg(segResponse.detectionCount));
+        logLines.push_back(QStringLiteral("Capture post-process (%1): per-ROI segmented RGB in preprocessed/segmentation/segmented_rgb/")
+                               .arg(streamLabel));
+
+        const Gsam2RoiAnalysisResult roiResult = analyzeGsam2SegmentationRois(
+            ffcHdrForRgb,
+            segDir,
+            datasetStem + QStringLiteral("_rgb.png"),
+            segResponse.manifestJsonPath,
+            &segError);
+        if (!roiResult.success)
+        {
+            report.errorMessage = roiResult.errorMessage.isEmpty()
+                                      ? QStringLiteral("GSAM2 ROI analysis failed.")
+                                      : roiResult.errorMessage;
+            logLines.push_back(QStringLiteral("Capture post-process (%1): %2").arg(streamLabel, report.errorMessage));
+            if (!options.saveFfcImage && keepFfcForSegmentation)
+            {
+                QFile::remove(ffcHdrForRgb);
+                QFile::remove(QDir(preprocessedDir).filePath(ffcBaseName + QStringLiteral("_tmp.raw")));
+            }
+            return report;
+        }
+
+        report.segmentationOk = true;
+        report.segmentationCsvPath = roiResult.csvPath;
+        report.segmentationPlotPath = roiResult.spectrumPlotPath;
+        logLines.push_back(QStringLiteral("Capture post-process (%1): wrote segmentation ROI CSV and spectrum plot")
+                               .arg(streamLabel));
+    }
 
     if (!options.saveFfcImage)
     {
