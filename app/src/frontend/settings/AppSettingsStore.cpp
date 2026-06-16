@@ -76,8 +76,6 @@ PersistedCameraSettings AppSettingsStore::loadCameraSettings(const std::size_t c
         settings.value(cameraKey(cameraIndex, "spectralBinning"), QStringLiteral("1")).toString();
     camera.spatialBinning =
         settings.value(cameraKey(cameraIndex, "spatialBinning"), QStringLiteral("1")).toString();
-    camera.trigger =
-        settings.value(cameraKey(cameraIndex, "trigger"), QStringLiteral("Internal")).toString();
     camera.calibrationPackPath = settings.value(cameraKey(cameraIndex, "calibrationPackPath")).toString();
     camera.redBandIndex = settings.value(cameraKey(cameraIndex, "redBandIndex"), -1).toInt();
     camera.greenBandIndex = settings.value(cameraKey(cameraIndex, "greenBandIndex"), -1).toInt();
@@ -113,7 +111,6 @@ void AppSettingsStore::saveCameraSettings(const std::size_t cameraIndex,
     settings.setValue(cameraKey(cameraIndex, "exposureMs"), camera.exposureMs);
     settings.setValue(cameraKey(cameraIndex, "spectralBinning"), camera.spectralBinning);
     settings.setValue(cameraKey(cameraIndex, "spatialBinning"), camera.spatialBinning);
-    settings.setValue(cameraKey(cameraIndex, "trigger"), camera.trigger);
     settings.setValue(cameraKey(cameraIndex, "calibrationPackPath"), camera.calibrationPackPath);
     settings.setValue(cameraKey(cameraIndex, "redBandIndex"), camera.redBandIndex);
     settings.setValue(cameraKey(cameraIndex, "greenBandIndex"), camera.greenBandIndex);

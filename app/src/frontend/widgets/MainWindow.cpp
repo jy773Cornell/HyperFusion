@@ -1107,9 +1107,6 @@ QWidget *MainWindow::createLumoCameraGroup(QWidget *parent,
                 [this, &ui](const int) { refreshBandCombos(ui); });
     }
 
-    ui.triggerCombo = new QComboBox(page);
-    ui.triggerCombo->addItems({"Internal", "External"});
-
     ui.redBandCombo = new QComboBox(page);
     ui.greenBandCombo = new QComboBox(page);
     ui.blueBandCombo = new QComboBox(page);
@@ -1128,7 +1125,6 @@ QWidget *MainWindow::createLumoCameraGroup(QWidget *parent,
     form->addRow("Exposure time (ms)", ui.exposureSpin);
     form->addRow("Spectral binning", ui.spectralBinningCombo);
     form->addRow("Spatial binning", ui.spatialBinningCombo);
-    form->addRow("Trigger mode", ui.triggerCombo);
     form->addRow("Red band", ui.redBandCombo);
     form->addRow("Green band", ui.greenBandCombo);
     form->addRow("Blue band", ui.blueBandCombo);
@@ -1260,7 +1256,7 @@ QWidget *MainWindow::createLumoCameraGroup(QWidget *parent,
             processor->reset();
 
         appendLog(QString("%1: apply settings (fps=%2 Hz, exposure=%3 ms, spectral=%4, spatial=%5, "
-                          "RGB=%6/%7/%8, trigger=%9)")
+                          "RGB=%6/%7/%8)")
                       .arg(cameraLabel)
                       .arg(settings.frameRateHz, 0, 'f', 2)
                       .arg(settings.exposureMs, 0, 'f', 2)
@@ -1268,8 +1264,7 @@ QWidget *MainWindow::createLumoCameraGroup(QWidget *parent,
                       .arg(settings.spatialBinning)
                       .arg(settings.redBandIndex)
                       .arg(settings.greenBandIndex)
-                      .arg(settings.blueBandIndex)
-                      .arg(ui.triggerCombo->currentText()));
+                      .arg(settings.blueBandIndex));
     });
 
     const auto onBandSelectionChanged = [this, &ui]() {
@@ -1303,7 +1298,7 @@ CameraSettings MainWindow::buildCameraSettings(const LumoCameraUi &ui) const
         settings.spectralBinning = ui.spectralBinningCombo->currentText().toInt();
     if (ui.spatialBinningCombo != nullptr)
         settings.spatialBinning = ui.spatialBinningCombo->currentText().toInt();
-    settings.externalTrigger = ui.triggerCombo->currentText() == QLatin1String("External");
+    settings.externalTrigger = false;
     settings.acquisitionTimeoutMs =
         ui.sensorKind == LumoSensorKind::Swir3Ni ? 30000U : 5000U;
     if (ui.sensorKind == LumoSensorKind::Swir3Ni)
@@ -1585,20 +1580,21 @@ void MainWindow::applyLighthouseSettingsToUi(const LighthouseSettings &settings)
     updateLighthouseLampUptimeDisplay();
 }
 
-void MainWindow::updateStageConnectionControls(const StageState state)
+void MainWindow::updateStageConnectionControls(const StageState state, const bool refreshCaptureControls)
 {
     const bool connected = state == StageState::Connected;
     const bool busy = state == StageState::Connecting || state == StageState::Homing;
     const bool motionActive = connected || busy;
+    const bool captureScanActive = captureRecorderMode_ != CaptureRecorderMode::Idle;
 
     if (stagePortCombo_ != nullptr)
-        stagePortCombo_->setEnabled(!connected && !busy);
+        stagePortCombo_->setEnabled(!connected && !busy && !captureScanActive);
     if (stageBaudCombo_ != nullptr)
-        stageBaudCombo_->setEnabled(!connected && !busy);
+        stageBaudCombo_->setEnabled(!connected && !busy && !captureScanActive);
     if (stageConnectBtn_ != nullptr)
-        stageConnectBtn_->setEnabled(!connected && !busy);
+        stageConnectBtn_->setEnabled(!connected && !busy && !captureScanActive);
     if (stageDisconnectBtn_ != nullptr)
-        stageDisconnectBtn_->setEnabled(motionActive);
+        stageDisconnectBtn_->setEnabled(motionActive && !captureScanActive);
     if (stageControlBox_ != nullptr)
         stageControlBox_->setEnabled(connected);
 
@@ -1615,7 +1611,8 @@ void MainWindow::updateStageConnectionControls(const StageState state)
     if (!connected)
         updateStagePositionDisplay(0.0);
 
-    updateCapturePositionControls(state);
+    if (refreshCaptureControls)
+        updateCapturePositionControls(state);
 }
 
 void MainWindow::updateStageMotionControls(const StageState state)
@@ -1654,9 +1651,13 @@ void MainWindow::updateStagePositionDisplay(const double positionMm)
 
         if (captureScanTimingActive_)
         {
+            if (captureScanPhase_ == CaptureScanPhase::SampleScan && captureSampleRecordingActive_)
+                updateSampleScanWindowProgress(positionMm);
+
             if (captureScanPhase_ == CaptureScanPhase::SampleScan
                 && isStageScanPositionTrustworthy(positionMm)
-                && allSelectedCamerasPastSampleWindow(positionMm))
+                && allSelectedCamerasPastSampleWindow(positionMm)
+                && canCompleteSampleScan())
             {
                 QMetaObject::invokeMethod(
                     this, [this]() { onCaptureSampleScanComplete(); }, Qt::QueuedConnection);
@@ -2514,6 +2515,7 @@ QWidget *MainWindow::createUr3eSettingsTab()
     layout->addWidget(tcpBox);
     layout->addWidget(rgbBox);
     layout->addStretch();
+    ur3eSettingsPage_ = page;
     return page;
 }
 
@@ -2633,7 +2635,8 @@ QWidget *MainWindow::createCaptureSettingsTab()
         schedulePersistedUiSettingsSave();
     });
 
-    auto *positionBox = new QGroupBox("Position", page);
+    auto *positionBox = new QGroupBox(QStringLiteral("Position"), page);
+    capturePositionBox_ = positionBox;
     auto *positionLayout = new QVBoxLayout(positionBox);
     positionLayout->setContentsMargins(6, 4, 6, 6);
     positionLayout->setSpacing(6);
@@ -2747,9 +2750,9 @@ QWidget *MainWindow::createCaptureSettingsTab()
     captureScanningSpeedAutoCheck_ = new QCheckBox(QStringLiteral("Auto"), capturePositionContent_);
     captureScanningSpeedAutoCheck_->setChecked(true);
     captureScanningSpeedAutoCheck_->setToolTip(
-        QStringLiteral("Record scan speed = frame rate (Hz) × spatial_mm_per_pixel from hyperfusion.cfg. "
-                       "With dual-camera sync, FX10e is the reference. Otherwise uses the slowest "
-                       "selected camera when multiple are active."));
+        QStringLiteral("Record scan speed = frame rate (Hz) × spatial_mm_per_pixel × spatial binning "
+                       "from hyperfusion.cfg. With dual-camera sync, FX10e is the reference. "
+                       "Otherwise uses the slowest selected camera when multiple are active."));
     connect(captureScanningSpeedAutoCheck_, &QCheckBox::toggled, this, [this]() {
         updateCaptureScanningSpeedControls();
     });
@@ -2787,7 +2790,8 @@ QWidget *MainWindow::createCaptureSettingsTab()
         tr("Write flat-field corrected sample data as ENVI under preprocessed/ when post-processing runs."));
     preprocessingLayout->addWidget(captureSaveFfcImageCheck_);
 
-    auto *metadataBox = new QGroupBox("Metadata", page);
+    auto *metadataBox = new QGroupBox(QStringLiteral("Metadata"), page);
+    captureMetadataBox_ = metadataBox;
     auto *metadataForm = new QFormLayout(metadataBox);
     metadataForm->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
     metadataForm->setRowWrapPolicy(QFormLayout::DontWrapRows);
@@ -2927,11 +2931,13 @@ double MainWindow::autoRecordScanSpeedMmPerSec() const
 
     if (dualCameraScanSyncActive())
     {
-        if (hw.spatialMmPerPixel[0] <= 0.0)
+        const CameraSettings fx10eSettings = buildCameraSettings(camera1Ui_);
+        const double spatial = hf::effectiveSpatialMmPerPixelForStageCamera(
+            hw, 0, fx10eSettings.spatialBinning);
+        if (spatial <= 0.0)
             return 0.0;
 
-        const CameraSettings fx10eSettings = buildCameraSettings(camera1Ui_);
-        return hf::recordScanSpeedMmPerSec(fx10eSettings.frameRateHz, hw.spatialMmPerPixel[0]);
+        return hf::recordScanSpeedMmPerSec(fx10eSettings.frameRateHz, spatial);
     }
 
     const LumoCameraUi *uis[] = {&camera1Ui_, &camera2Ui_};
@@ -2942,11 +2948,12 @@ double MainWindow::autoRecordScanSpeedMmPerSec() const
     const auto considerCamera = [&](const std::size_t cameraIndex) {
         const LumoCameraUi &ui = *uis[cameraIndex];
         const std::size_t stageCameraIndex = stageCameraIndexForUi(ui, cameraIndex);
-        const double spatial = hf::spatialMmPerPixelForStageCamera(hw, stageCameraIndex);
+        const CameraSettings settings = buildCameraSettings(ui);
+        const double spatial = hf::effectiveSpatialMmPerPixelForStageCamera(
+            hw, stageCameraIndex, settings.spatialBinning);
         if (spatial <= 0.0)
             return;
 
-        const CameraSettings settings = buildCameraSettings(ui);
         const double speed = hf::recordScanSpeedMmPerSec(settings.frameRateHz, spatial);
         if (speed > 0.0)
             minSpeed = std::min(minSpeed, speed);
@@ -3052,10 +3059,14 @@ void MainWindow::applyDualCameraScanSync(const bool applyToHardware)
     } guard(*this);
 
     const hf::HardwareConfig &hw = hf::hardwareConfig();
+    const CameraSettings fx10eSettings = buildCameraSettings(camera1Ui_);
+    const CameraSettings swir3Settings = buildCameraSettings(camera2Ui_);
     hf::DualCameraScanSyncInput input;
-    input.fx10eFrameRateHz = buildCameraSettings(camera1Ui_).frameRateHz;
-    input.fx10eSpatialMmPerPixel = hw.spatialMmPerPixel[0];
-    input.swir3SpatialMmPerPixel = hw.spatialMmPerPixel[1];
+    input.fx10eFrameRateHz = fx10eSettings.frameRateHz;
+    input.fx10eSpatialMmPerPixel =
+        hf::effectiveSpatialMmPerPixelForStageCamera(hw, 0, fx10eSettings.spatialBinning);
+    input.swir3SpatialMmPerPixel =
+        hf::effectiveSpatialMmPerPixelForStageCamera(hw, 1, swir3Settings.spatialBinning);
 
     const hf::DualCameraScanSyncResult sync = hf::computeDualCameraScanSync(input);
     if (!sync.valid)
@@ -3186,7 +3197,34 @@ void MainWindow::updateCaptureRecorderControls()
 
     updateLightConnectionDisplay();
     updateLightControlsEnabled();
+    updateCaptureSessionUiLock();
     updateCaptureRecorderStatus();
+}
+
+void MainWindow::updateCaptureSessionUiLock()
+{
+    const bool scanActive = captureRecorderMode_ != CaptureRecorderMode::Idle;
+
+    // Tabs stay switchable during preview/record; individual controls are locked below.
+    if (captureMetadataBox_ != nullptr)
+        captureMetadataBox_->setEnabled(!scanActive);
+    if (captureCamerasBox_ != nullptr)
+        captureCamerasBox_->setEnabled(!scanActive);
+    if (capturePositionBox_ != nullptr)
+        capturePositionBox_->setEnabled(!scanActive);
+    if (capturePreprocessingBox_ != nullptr && scanActive)
+        capturePreprocessingBox_->setEnabled(false);
+    if (ur3eSettingsPage_ != nullptr)
+        ur3eSettingsPage_->setEnabled(!scanActive);
+
+    if (scanActive && captureRecorderStopBtn_ != nullptr)
+        captureRecorderStopBtn_->setEnabled(true);
+
+    if (stageWorker_ != nullptr)
+        updateStageConnectionControls(stageWorker_->currentState(), false);
+
+    updateCameraControls(camera1Ui_, camera1Ui_.state);
+    updateCameraControls(camera2Ui_, camera2Ui_.state);
 }
 
 void MainWindow::updateCaptureRecorderStatus()
@@ -3551,6 +3589,7 @@ void MainWindow::resetCaptureSequenceState()
     captureMoveCompletePhase_ = CaptureScanPhase::Idle;
     captureBlackRefFramesCollected_ = {0, 0};
     captureWhiteRefFramesCollected_ = {0, 0};
+    captureSampleFramesCollected_ = {0, 0};
     captureWhiteRefWindowComplete_ = {false, false};
     captureSampleWindowComplete_ = {false, false};
     captureSampleWindowEntered_ = {false, false};
@@ -3558,6 +3597,10 @@ void MainWindow::resetCaptureSequenceState()
     captureStageSequenceActive_ = false;
     captureStagePositionKnown_ = false;
     captureScanTimingActive_ = false;
+    captureRelativeScanTimerActiveToken_ = 0;
+    captureSampleScanTimerExtendCount_ = 0;
+    if (captureScanTimer_ != nullptr)
+        captureScanTimer_->stop();
     updateCaptureRecorderStatus();
 }
 
@@ -3730,16 +3773,11 @@ void MainWindow::beginCaptureMoveToFirstRefPosition()
             : QStringLiteral("bright reference");
 
     captureScanPhase_ = CaptureScanPhase::MoveToFirstRefPosition;
-    const QString preamble =
-        captureRecorderMode_ == CaptureRecorderMode::Record
-            ? QStringLiteral("before black reference")
-            : QStringLiteral("before white reference scan");
-    appendLog(QStringLiteral("%1 (%2): moving to first %3 position %4 mm %5 @ %6 mm/s…")
+    appendLog(QStringLiteral("%1 (%2): moving to first %3 position %4 mm before black reference @ %5 mm/s…")
                   .arg(captureSequenceLogPrefix())
                   .arg(captureIlluminationFolderName(captureRecordingIlluminationMode_))
                   .arg(refLabel)
                   .arg(targetMm, 0, 'f', 2)
-                  .arg(preamble)
                   .arg(captureScanPlan_.operationSpeedMmPerSec, 0, 'f', 1));
     requestCaptureAbsoluteMove(targetMm, CaptureScanPhase::MoveToFirstRefPosition);
     updateCaptureRecorderStatus();
@@ -3825,10 +3863,7 @@ void MainWindow::onCaptureAbsoluteMoveComplete(const bool success)
 
     if (completedPhase == CaptureScanPhase::MoveToFirstRefPosition)
     {
-        if (captureRecorderMode_ == CaptureRecorderMode::Record)
-            beginCaptureBlackReference();
-        else
-            beginCaptureWhiteReferenceSequence();
+        beginCaptureBlackReference();
         return;
     }
 
@@ -3991,6 +4026,7 @@ void MainWindow::onCaptureWhiteReferenceSequenceComplete()
 
     if (captureScanTimer_ != nullptr)
         captureScanTimer_->stop();
+    captureRelativeScanTimerActiveToken_ = 0;
 
     if (stageWorker_ != nullptr)
         stageWorker_->requestStopMotion();
@@ -4103,7 +4139,7 @@ bool MainWindow::allSelectedCamerasPastWhiteReferenceWindow(const double stagePo
                                           stageCameraIndex)
             + captureScanPlan_.whiteRefScanDistanceMm[stageCameraIndex];
         constexpr double kPositionToleranceMm = 0.05;
-        if (stagePositionMm - kPositionToleranceMm <= windowEnd)
+        if (stagePositionMm + kPositionToleranceMm < windowEnd)
             return false;
     }
 
@@ -4135,7 +4171,13 @@ double MainWindow::whiteReferenceScanDistanceMmForCamera(const LumoCameraUi &ui,
 
 void MainWindow::beginCaptureSampleScan()
 {
+    if (captureScanTimer_ != nullptr)
+        captureScanTimer_->stop();
+    captureRelativeScanTimerActiveToken_ = 0;
+
     captureSampleRecordingActive_ = false;
+    captureSampleFramesCollected_ = {0, 0};
+    captureSampleScanTimerExtendCount_ = 0;
     captureStagePositionKnown_ = false;
     captureScanPhase_ = CaptureScanPhase::MoveToSampleScanOrigin;
     appendLog(QStringLiteral("%1 (%2): moving to sample scan origin %3 mm @ %4 mm/s…")
@@ -4192,6 +4234,67 @@ void MainWindow::verifySampleScanOriginAndStartScan()
     });
 }
 
+void MainWindow::scheduleRelativeScanTimer(const double distanceMm, const double speedMmPerSec)
+{
+    if (captureScanTimer_ == nullptr || speedMmPerSec <= 0.0 || distanceMm <= 0.0)
+        return;
+
+    captureScanTimer_->stop();
+    const int durationMs =
+        static_cast<int>(std::ceil((distanceMm / speedMmPerSec) * 1000.0)) + 750;
+    captureRelativeScanTimerActiveToken_ = ++captureRelativeScanTimerToken_;
+    captureScanTimer_->start(std::max(durationMs, 500));
+}
+
+void MainWindow::extendSampleScanTimer()
+{
+    if (captureScanTimer_ == nullptr || captureScanPlan_.recordScanSpeedMmPerSec <= 0.0)
+        return;
+
+    const double elapsedSec = static_cast<double>(captureScanElapsed_.elapsed()) / 1000.0;
+    const double totalSec =
+        captureScanPlan_.sampleScanTotalDistanceMm / captureScanPlan_.recordScanSpeedMmPerSec;
+    constexpr double kGraceSec = 2.0;
+
+    if (elapsedSec >= totalSec + kGraceSec)
+    {
+        if (canCompleteSampleScan())
+        {
+            onCaptureSampleScanComplete();
+            return;
+        }
+
+        const std::optional<double> stagePositionMm = knownStageScanPositionMm();
+        failCaptureSequence(
+            QStringLiteral("%1: sample scan timed out (entered=%2, frames=%3/%4, stage=%5 mm).")
+                .arg(captureSequenceLogPrefix())
+                .arg(selectedCamerasEnteredSampleWindow() ? QStringLiteral("yes")
+                                                          : QStringLiteral("no"))
+                .arg(captureSampleFramesCollected_[0])
+                .arg(captureSampleFramesCollected_[1])
+                .arg(stagePositionMm ? QString::number(*stagePositionMm, 'f', 2)
+                                     : QStringLiteral("unknown")));
+        return;
+    }
+
+    const double remainingSec = std::max(1.0, totalSec - elapsedSec + 0.75);
+    captureScanTimer_->stop();
+    captureRelativeScanTimerActiveToken_ = ++captureRelativeScanTimerToken_;
+    captureScanTimer_->start(static_cast<int>(std::ceil(remainingSec * 1000.0)));
+
+    ++captureSampleScanTimerExtendCount_;
+    if (captureSampleScanTimerExtendCount_ == 1 || captureSampleScanTimerExtendCount_ % 5 == 0)
+    {
+        appendLog(QStringLiteral("%1: sample scan still in progress (entered=%2, frames=%3/%4) — "
+                                  "extending scan timer.")
+                      .arg(captureSequenceLogPrefix())
+                      .arg(selectedCamerasEnteredSampleWindow() ? QStringLiteral("yes")
+                                                                : QStringLiteral("no"))
+                      .arg(captureSampleFramesCollected_[0])
+                      .arg(captureSampleFramesCollected_[1]));
+    }
+}
+
 void MainWindow::startCaptureRelativeScan(const double distanceMm,
                                           const double speedMmPerSec,
                                           const CaptureScanPhase capturePhaseOnMoveStart)
@@ -4244,6 +4347,7 @@ void MainWindow::startCaptureRelativeScan(const double distanceMm,
                     captureSampleWindowComplete_ = {false, false};
                     captureSampleWindowEntered_ = {false, false};
                     captureSampleRecordingActive_ = true;
+                    captureSampleScanTimerExtendCount_ = 0;
                 }
                 else
                 {
@@ -4261,10 +4365,7 @@ void MainWindow::startCaptureRelativeScan(const double distanceMm,
 
                 updateCaptureRecorderStatus();
 
-                const int durationMs =
-                    static_cast<int>(std::ceil((distanceMm / speedMmPerSec) * 1000.0)) + 750;
-                if (captureScanTimer_ != nullptr)
-                    captureScanTimer_->start(std::max(durationMs, 500));
+                scheduleRelativeScanTimer(distanceMm, speedMmPerSec);
             },
             Qt::QueuedConnection);
     });
@@ -4274,6 +4375,21 @@ void MainWindow::onCaptureRelativeScanComplete()
 {
     if (captureRecorderMode_ == CaptureRecorderMode::Idle)
         return;
+
+    if (captureRelativeScanTimerActiveToken_ != captureRelativeScanTimerToken_)
+        return;
+
+    if (captureScanPhase_ == CaptureScanPhase::SampleScan)
+    {
+        if (!canCompleteSampleScan())
+        {
+            extendSampleScanTimer();
+            return;
+        }
+
+        onCaptureSampleScanComplete();
+        return;
+    }
 
     if (stageWorker_ != nullptr)
         stageWorker_->requestStopMotion();
@@ -4294,12 +4410,6 @@ void MainWindow::onCaptureRelativeScanComplete()
                                 .arg(captureScanPlan_.whiteReferenceFrameCount));
         return;
     }
-
-    if (captureScanPhase_ == CaptureScanPhase::SampleScan)
-    {
-        onCaptureSampleScanComplete();
-        return;
-    }
 }
 
 void MainWindow::onCaptureSampleScanComplete()
@@ -4309,12 +4419,38 @@ void MainWindow::onCaptureSampleScanComplete()
 
     if (captureScanTimer_ != nullptr)
         captureScanTimer_->stop();
+    captureRelativeScanTimerActiveToken_ = 0;
 
     if (stageWorker_ != nullptr)
         stageWorker_->requestStopMotion();
 
     captureScanTimingActive_ = false;
     captureStagePositionKnown_ = false;
+
+    if (captureRecorderMode_ == CaptureRecorderMode::Record && !selectedCamerasHaveSampleFrames())
+    {
+        failCaptureSequence(
+            QStringLiteral("%1: sample scan finished with no sample frames — check stage position, "
+                           "scan speed, and camera streaming.")
+                .arg(captureSequenceLogPrefix()));
+        return;
+    }
+
+    if (captureRecorderMode_ == CaptureRecorderMode::Record)
+    {
+        std::vector<std::size_t> selectedCameras;
+        if (selectedCaptureCameraIndices(selectedCameras))
+        {
+            for (const std::size_t cameraIndex : selectedCameras)
+            {
+                const LumoCameraUi &ui = cameraIndex == 0 ? camera1Ui_ : camera2Ui_;
+                appendLog(QStringLiteral("%1: sample capture complete for %2 (%3 frames).")
+                              .arg(captureSequenceLogPrefix())
+                              .arg(profileTabNameForUi(ui))
+                              .arg(captureSampleFramesCollected_[cameraIndex]));
+            }
+        }
+    }
 
     completeCaptureModeSequence();
 }
@@ -4368,11 +4504,15 @@ void MainWindow::completeCaptureModeSequence()
 
 void MainWindow::completeCaptureSequence()
 {
+    if (captureScanTimer_ != nullptr)
+        captureScanTimer_->stop();
+    captureRelativeScanTimerActiveToken_ = 0;
+
     resetCaptureSequenceState();
     capturePendingIlluminationModes_.clear();
     captureCurrentModeIndex_ = 0;
 
-    if (stageWorker_ != nullptr)
+    if (isStageRecordingEnabledInUi() && stageWorker_ != nullptr)
         stageWorker_->requestStopMotion();
 
     const bool wasRecord = captureRecorderMode_ == CaptureRecorderMode::Record;
@@ -4656,11 +4796,104 @@ bool MainWindow::allSelectedCamerasPastSampleWindow(const double stagePositionMm
         const double windowEnd =
             captureScanPlan_.sampleScanStartMm[stageCameraIndex] + captureScanPlan_.sampleScanLengthMm;
         constexpr double kPositionToleranceMm = 0.05;
-        if (stagePositionMm - kPositionToleranceMm <= windowEnd)
+        if (stagePositionMm + kPositionToleranceMm < windowEnd)
             return false;
     }
 
     return true;
+}
+
+bool MainWindow::selectedCamerasEnteredSampleWindow() const
+{
+    std::vector<std::size_t> selectedCameras;
+    if (!selectedCaptureCameraIndices(selectedCameras))
+        return false;
+
+    for (const std::size_t cameraIndex : selectedCameras)
+    {
+        const LumoCameraUi &ui = cameraIndex == 0 ? camera1Ui_ : camera2Ui_;
+        const std::size_t stageCameraIndex = stageCameraIndexForUi(ui, cameraIndex);
+        if (stageCameraIndex >= captureSampleWindowEntered_.size()
+            || !captureSampleWindowEntered_[stageCameraIndex])
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool MainWindow::selectedCamerasHaveSampleFrames() const
+{
+    std::vector<std::size_t> selectedCameras;
+    if (!selectedCaptureCameraIndices(selectedCameras))
+        return false;
+
+    for (const std::size_t cameraIndex : selectedCameras)
+    {
+        if (captureSampleFramesCollected_[cameraIndex] <= 0)
+            return false;
+    }
+
+    return true;
+}
+
+bool MainWindow::canCompleteSampleScan() const
+{
+    if (captureScanPhase_ != CaptureScanPhase::SampleScan || !captureSampleRecordingActive_)
+        return false;
+
+    if (!selectedCamerasEnteredSampleWindow())
+        return false;
+
+    if (captureRecorderMode_ == CaptureRecorderMode::Record && !selectedCamerasHaveSampleFrames())
+        return false;
+
+    if (captureScanPlan_.recordScanSpeedMmPerSec <= 0.0)
+        return false;
+
+    const double elapsedSec = static_cast<double>(captureScanElapsed_.elapsed()) / 1000.0;
+    const double expectedSec =
+        captureScanPlan_.sampleScanTotalDistanceMm / captureScanPlan_.recordScanSpeedMmPerSec;
+    constexpr double kMinimumElapsedFraction = 0.85;
+    if (elapsedSec + 0.05 < expectedSec * kMinimumElapsedFraction)
+        return false;
+
+    const std::optional<double> stagePositionMm = knownStageScanPositionMm();
+    if (!stagePositionMm)
+        return false;
+
+    return allSelectedCamerasPastSampleWindow(*stagePositionMm);
+}
+
+void MainWindow::updateSampleScanWindowProgress(const double stagePositionMm)
+{
+    if (captureScanPhase_ != CaptureScanPhase::SampleScan || !captureSampleRecordingActive_)
+        return;
+
+    if (!isStageScanPositionTrustworthy(stagePositionMm))
+        return;
+
+    std::vector<std::size_t> selectedCameras;
+    if (!selectedCaptureCameraIndices(selectedCameras))
+        return;
+
+    for (const std::size_t cameraIndex : selectedCameras)
+    {
+        const LumoCameraUi &ui = cameraIndex == 0 ? camera1Ui_ : camera2Ui_;
+        const std::size_t stageCameraIndex = stageCameraIndexForUi(ui, cameraIndex);
+        if (stageCameraIndex >= captureSampleWindowEntered_.size())
+            continue;
+
+        const double windowStart = captureScanPlan_.sampleScanStartMm[stageCameraIndex];
+        const double windowLength = captureScanPlan_.sampleScanLengthMm;
+        if (isStagePositionWithinSampleWindow(stagePositionMm, windowStart, windowLength))
+            captureSampleWindowEntered_[stageCameraIndex] = true;
+
+        const double windowEnd = windowStart + windowLength;
+        if (stagePositionMm + 0.05 >= windowEnd)
+            captureSampleWindowComplete_[stageCameraIndex] = true;
+    }
 }
 
 bool MainWindow::shouldRecordSampleFrameForCamera(const std::size_t stageCameraIndex,
@@ -4789,6 +5022,12 @@ bool MainWindow::selectedCaptureIlluminationModes(std::vector<CaptureIlluminatio
 bool MainWindow::isCaptureStageConnected() const
 {
     return stageWorker_ != nullptr && stageWorker_->currentState() == StageState::Connected;
+}
+
+bool MainWindow::isStageRecordingEnabledInUi() const
+{
+    return captureUseStageForRecordingCheck_ != nullptr
+           && captureUseStageForRecordingCheck_->isChecked();
 }
 
 bool MainWindow::useStageForCapture() const
@@ -5039,8 +5278,12 @@ void MainWindow::appendCaptureRecordFrame(const FramePacket &frame)
 
         const std::size_t stageCameraIndex = stageCameraIndexForUi(cameraUi, cameraIndex);
         const std::optional<double> stagePositionMm = knownStageScanPositionMm();
-        if (!stagePositionMm
-            || !shouldRecordSampleFrameForCamera(stageCameraIndex, *stagePositionMm))
+        if (!stagePositionMm)
+            return;
+
+        updateSampleScanWindowProgress(*stagePositionMm);
+
+        if (!shouldRecordSampleFrameForCamera(stageCameraIndex, *stagePositionMm))
         {
             return;
         }
@@ -5049,13 +5292,14 @@ void MainWindow::appendCaptureRecordFrame(const FramePacket &frame)
 
         routed.captureDestination = CaptureFrameDestination::Sample;
         captureWriterWorker_->submitFrame(std::move(routed));
+        ++captureSampleFramesCollected_[cameraIndex];
 
         const double windowEnd =
             captureScanPlan_.sampleScanStartMm[stageCameraIndex] + captureScanPlan_.sampleScanLengthMm;
         if (*stagePositionMm + 0.05 >= windowEnd)
             captureSampleWindowComplete_[stageCameraIndex] = true;
 
-        if (allSelectedCamerasPastSampleWindow(*stagePositionMm))
+        if (allSelectedCamerasPastSampleWindow(*stagePositionMm) && canCompleteSampleScan())
             onCaptureSampleScanComplete();
         return;
     }
@@ -5167,8 +5411,9 @@ void MainWindow::stopCaptureRecorder()
 
     if (captureScanTimer_ != nullptr)
         captureScanTimer_->stop();
+    captureRelativeScanTimerActiveToken_ = 0;
 
-    if (stageWorker_ != nullptr)
+    if (isStageRecordingEnabledInUi() && stageWorker_ != nullptr)
         stageWorker_->requestStopMotion();
 
     if (stageHomingKind_ == StageHomingKind::BeforeCapture)
@@ -5204,6 +5449,9 @@ void MainWindow::stopCaptureRecorder()
 void MainWindow::homeStageAfterCapture()
 {
     if (performingGracefulShutdown_)
+        return;
+
+    if (!isStageRecordingEnabledInUi())
         return;
 
     if (stageWorker_ == nullptr || stageWorker_->currentState() != StageState::Connected)
@@ -5393,6 +5641,15 @@ void MainWindow::performGracefulShutdown()
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
+    if (captureRecorderMode_ != CaptureRecorderMode::Idle)
+    {
+        event->ignore();
+        QMessageBox::warning(this,
+                             tr("Capture in progress"),
+                             tr("Stop preview or recording before closing the application."));
+        return;
+    }
+
     event->ignore();
     performGracefulShutdown();
     event->accept();
@@ -5551,12 +5808,6 @@ void MainWindow::applyPersistedCameraUiValues(LumoCameraUi &ui)
         if (index >= 0)
             ui.spatialBinningCombo->setCurrentIndex(index);
     }
-    if (ui.triggerCombo != nullptr)
-    {
-        const int index = ui.triggerCombo->findText(saved.trigger);
-        if (index >= 0)
-            ui.triggerCombo->setCurrentIndex(index);
-    }
 
     if (ui.calibrationPackEdit != nullptr && !saved.calibrationPackPath.isEmpty()
         && QFileInfo::exists(saved.calibrationPackPath))
@@ -5576,8 +5827,6 @@ void MainWindow::savePersistedCameraSettings(const LumoCameraUi &ui)
         saved.spectralBinning = ui.spectralBinningCombo->currentText();
     if (ui.spatialBinningCombo != nullptr)
         saved.spatialBinning = ui.spatialBinningCombo->currentText();
-    if (ui.triggerCombo != nullptr)
-        saved.trigger = ui.triggerCombo->currentText();
 
     const QString calpackPath = calibrationPackPath(ui);
     if (!calpackPath.isEmpty())
@@ -5716,9 +5965,17 @@ void MainWindow::connectPersistedSettingsAutosave()
         if (ui.spectralBinningCombo != nullptr)
             connect(ui.spectralBinningCombo, &QComboBox::currentIndexChanged, this, schedule);
         if (ui.spatialBinningCombo != nullptr)
+        {
             connect(ui.spatialBinningCombo, &QComboBox::currentIndexChanged, this, schedule);
-        if (ui.triggerCombo != nullptr)
-            connect(ui.triggerCombo, &QComboBox::currentIndexChanged, this, schedule);
+            connect(ui.spatialBinningCombo,
+                    &QComboBox::currentIndexChanged,
+                    this,
+                    [this]() {
+                        updateCaptureScanningSpeedControls();
+                        if (!applyingDualCameraScanSync_)
+                            applyDualCameraScanSync();
+                    });
+        }
         if (ui.redBandCombo != nullptr)
             connect(ui.redBandCombo, &QComboBox::currentIndexChanged, this, schedule);
         if (ui.greenBandCombo != nullptr)
@@ -6076,12 +6333,28 @@ void MainWindow::syncWaterfallBands(LumoCameraUi &ui)
 
 void MainWindow::onStreamFrame(const FramePacket &frame)
 {
-    if (captureRecorderMode_ == CaptureRecorderMode::Preview
-        && captureScanPhase_ == CaptureScanPhase::WhiteReferenceScan)
+    if (captureRecorderMode_ == CaptureRecorderMode::Preview)
     {
         const std::size_t cameraIndex = frame.source == CameraBackendId::Camera1 ? 0 : 1;
-        if (shouldAcceptWhiteReferenceFrame(cameraIndex))
-            onWhiteReferenceFrameCollected(cameraIndex);
+
+        if (captureScanPhase_ == CaptureScanPhase::BlackReference)
+        {
+            std::vector<std::size_t> selected;
+            if (selectedCaptureCameraIndices(selected)
+                && std::find(selected.begin(), selected.end(), cameraIndex) != selected.end())
+            {
+                ++captureBlackRefFramesCollected_[cameraIndex];
+                if (selectedCamerasReachedBlackReferenceTarget())
+                    onCaptureBlackReferenceComplete();
+                else
+                    updateCaptureRecorderStatus();
+            }
+        }
+        else if (captureScanPhase_ == CaptureScanPhase::WhiteReferenceScan)
+        {
+            if (shouldAcceptWhiteReferenceFrame(cameraIndex))
+                onWhiteReferenceFrameCollected(cameraIndex);
+        }
     }
 
     appendCaptureRecordFrame(frame);
@@ -6319,6 +6592,42 @@ void MainWindow::updateCameraControls(LumoCameraUi &ui, const CameraState state)
     ui.state = state;
 
     const bool connected = state != CameraState::Disconnected && state != CameraState::Fault;
+    const bool captureActive = captureRecorderMode_ != CaptureRecorderMode::Idle;
+
+    if (captureActive)
+    {
+        if (ui.connectBtn != nullptr)
+        {
+            ui.connectBtn->setEnabled(false);
+            ui.connectBtn->setText(connected ? QStringLiteral("Disconnect camera")
+                                             : QStringLiteral("Connect camera"));
+        }
+        if (ui.deviceCombo != nullptr)
+            ui.deviceCombo->setEnabled(false);
+        if (ui.calibrationPackEdit != nullptr)
+            ui.calibrationPackEdit->setEnabled(false);
+        if (ui.calibrationPackBrowseBtn != nullptr)
+            ui.calibrationPackBrowseBtn->setEnabled(false);
+        if (ui.shutterToggleBtn != nullptr)
+            ui.shutterToggleBtn->setEnabled(false);
+        if (ui.spectralBinningCombo != nullptr)
+            ui.spectralBinningCombo->setEnabled(false);
+        if (ui.spatialBinningCombo != nullptr)
+            ui.spatialBinningCombo->setEnabled(false);
+        if (ui.exposureSpin != nullptr)
+            ui.exposureSpin->setEnabled(false);
+        if (ui.frameRateSpin != nullptr)
+            ui.frameRateSpin->setEnabled(false);
+        if (ui.redBandCombo != nullptr)
+            ui.redBandCombo->setEnabled(false);
+        if (ui.greenBandCombo != nullptr)
+            ui.greenBandCombo->setEnabled(false);
+        if (ui.blueBandCombo != nullptr)
+            ui.blueBandCombo->setEnabled(false);
+        if (ui.applyBtn != nullptr)
+            ui.applyBtn->setEnabled(false);
+        return;
+    }
 
     if (ui.connectBtn != nullptr)
     {
@@ -6353,8 +6662,6 @@ void MainWindow::updateCameraControls(LumoCameraUi &ui, const CameraState state)
             frameRateEnabled = false;
         ui.frameRateSpin->setEnabled(frameRateEnabled);
     }
-    if (ui.triggerCombo != nullptr)
-        ui.triggerCombo->setEnabled(readyForCameraFeatures);
     if (ui.redBandCombo != nullptr)
         ui.redBandCombo->setEnabled(readyForCameraFeatures);
     if (ui.greenBandCombo != nullptr)

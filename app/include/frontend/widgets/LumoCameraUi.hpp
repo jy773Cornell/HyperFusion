@@ -41,7 +41,6 @@ struct LumoCameraUi
     QLabel *shutterIndicator = nullptr;
     QLabel *shutterStatusLabel = nullptr;
     QPushButton *shutterToggleBtn = nullptr;
-    QComboBox *triggerCombo = nullptr;
     QComboBox *redBandCombo = nullptr;
     QComboBox *greenBandCombo = nullptr;
     QComboBox *blueBandCombo = nullptr;

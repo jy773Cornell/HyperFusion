@@ -51,5 +51,10 @@ void setHardwareConfig(HardwareConfig config);
 /// Stage speed (mm/s) matching one line per frame: frame rate × spatial scale along scan axis.
 double recordScanSpeedMmPerSec(double frameRateHz, double spatialMmPerPixel);
 double spatialMmPerPixelForStageCamera(const HardwareConfig &config, std::size_t stageCameraIndex);
+/// cfg spatial_mm_per_pixel is at binning 1; multiply by spatial binning for along-scan line spacing.
+double effectiveSpatialMmPerPixel(double baseSpatialMmPerPixel, int spatialBinning);
+double effectiveSpatialMmPerPixelForStageCamera(const HardwareConfig &config,
+                                                std::size_t stageCameraIndex,
+                                                int spatialBinning);
 bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage = nullptr);
 } // namespace hf

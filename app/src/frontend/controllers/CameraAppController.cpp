@@ -161,7 +161,7 @@ CameraSettings CameraAppController::settingsFromUi(const LumoCameraUi &ui)
         settings.spectralBinning = ui.spectralBinningCombo->currentText().toInt();
     if (ui.spatialBinningCombo != nullptr)
         settings.spatialBinning = ui.spatialBinningCombo->currentText().toInt();
-    settings.externalTrigger = ui.triggerCombo->currentText() == QLatin1String("External");
+    settings.externalTrigger = false;
     settings.acquisitionTimeoutMs =
         ui.camera != nullptr && ui.camera->sensorKind() == LumoSensorKind::Swir3Ni ? 30000U : 5000U;
     settings.deviceIndex = ui.deviceCombo->currentData().toInt();
@@ -266,11 +266,10 @@ void CameraAppController::applySettings(LumoCameraUi &ui, const QString &panelTi
 
     const CameraSettings settings = settingsFromUi(ui);
     coordinator_->applySettings(ui.cameraIndex, settings);
-    emit logMessage(QStringLiteral("%1: apply settings (exposure=%2 ms, fps=%3, trigger=%4)")
+    emit logMessage(QStringLiteral("%1: apply settings (exposure=%2 ms, fps=%3)")
                         .arg(panelTitle)
                         .arg(settings.exposureMs, 0, 'f', 3)
-                        .arg(settings.frameRateHz, 0, 'f', 1)
-                        .arg(ui.triggerCombo->currentText()));
+                        .arg(settings.frameRateHz, 0, 'f', 1));
 }
 
 LumoCameraUi *CameraAppController::cameraUi(const std::size_t cameraIndex)

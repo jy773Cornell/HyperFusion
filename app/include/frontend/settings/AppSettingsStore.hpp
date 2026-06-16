@@ -30,7 +30,6 @@ struct PersistedCameraSettings
     double exposureMs = 18.0;
     QString spectralBinning = QStringLiteral("1");
     QString spatialBinning = QStringLiteral("1");
-    QString trigger = QStringLiteral("Internal");
     QString calibrationPackPath;
     int redBandIndex = -1;
     int greenBandIndex = -1;

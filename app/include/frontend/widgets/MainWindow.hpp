@@ -86,7 +86,6 @@ struct LumoCameraUi
     QLabel *shutterIndicator = nullptr;
     QLabel *shutterStatusLabel = nullptr;
     QPushButton *shutterToggleBtn = nullptr;
-    QComboBox *triggerCombo = nullptr;
     QComboBox *redBandCombo = nullptr;
     QComboBox *greenBandCombo = nullptr;
     QComboBox *blueBandCombo = nullptr;
@@ -154,7 +153,7 @@ private:
     QString selectedStagePortName() const;
     void setupStageWorker();
     void setupLighthouseWorker();
-    void updateStageConnectionControls(StageState state);
+    void updateStageConnectionControls(StageState state, bool refreshCaptureControls = true);
     void updateStageDeviceDisplay(const StageTopology &topology);
     void clearStageDeviceDisplay();
     void onStageStateChanged(StageState state);
@@ -172,6 +171,7 @@ private:
     void updateCaptureCameraPositionRows();
     void updateCapturePositionControls(StageState state);
     void updateCaptureRecorderControls();
+    void updateCaptureSessionUiLock();
     void updateCaptureRecorderStatus();
     void notifyCaptureRecordComplete();
     void beginCaptureRecordCompleteNotify();
@@ -272,10 +272,17 @@ private:
                                            double windowStartMm,
                                            double windowLengthMm) const;
     bool allSelectedCamerasPastSampleWindow(double stagePositionMm) const;
+    bool selectedCamerasEnteredSampleWindow() const;
+    bool selectedCamerasHaveSampleFrames() const;
+    bool canCompleteSampleScan() const;
+    void updateSampleScanWindowProgress(double stagePositionMm);
+    void scheduleRelativeScanTimer(double distanceMm, double speedMmPerSec);
+    void extendSampleScanTimer();
     bool shouldRecordSampleFrameForCamera(std::size_t stageCameraIndex,
                                           double stagePositionMm) const;
     bool selectedCaptureIlluminationModes(std::vector<CaptureIlluminationMode> &modes) const;
     bool isCaptureStageConnected() const;
+    bool isStageRecordingEnabledInUi() const;
     bool useStageForCapture() const;
     bool effectiveCaptureIlluminationModes(std::vector<CaptureIlluminationMode> &modes) const;
     QString captureIlluminationFolderName(CaptureIlluminationMode mode) const;
@@ -426,6 +433,10 @@ private:
     std::size_t captureCurrentModeIndex_ = 0;
     std::array<int, 2> captureBlackRefFramesCollected_ = {0, 0};
     std::array<int, 2> captureWhiteRefFramesCollected_ = {0, 0};
+    std::array<int, 2> captureSampleFramesCollected_ = {0, 0};
+    quint64 captureRelativeScanTimerToken_ = 0;
+    quint64 captureRelativeScanTimerActiveToken_ = 0;
+    int captureSampleScanTimerExtendCount_ = 0;
     bool pendingCaptureRecordCompleteNotify_ = false;
     bool captureRecordCompleteHomingPending_ = false;
     bool captureRecordCompletePostProcessPending_ = false;
@@ -441,7 +452,10 @@ private:
     QTimer *captureRecorderStatusTimer_ = nullptr;
     QCheckBox *captureReflectanceCheck_ = nullptr;
     QCheckBox *captureTransmittanceCheck_ = nullptr;
+    QGroupBox *captureMetadataBox_ = nullptr;
+    QGroupBox *capturePositionBox_ = nullptr;
     QGroupBox *captureCamerasBox_ = nullptr;
+    QWidget *ur3eSettingsPage_ = nullptr;
     QLabel *captureCamerasEmptyLabel_ = nullptr;
     QCheckBox *captureCamera1Check_ = nullptr;
     QCheckBox *captureCamera2Check_ = nullptr;

@@ -344,6 +344,16 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 else
                     config.sampleWindowMaxLengthMm = numericValue;
             }
+            else if (key == QStringLiteral("acceleration_mm_per_sec2"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(
+                        QStringLiteral("Invalid acceleration_mm_per_sec2: %1").arg(value));
+                else if (numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral("acceleration_mm_per_sec2 must be > 0"));
+                else
+                    config.stageMotionAccelerationMmPerSec2 = numericValue;
+            }
             else
             {
                 warnings.push_back(QStringLiteral("Unknown key in [scanning_settings]: %1").arg(key));
@@ -683,6 +693,30 @@ double spatialMmPerPixelForStageCamera(const HardwareConfig &config, const std::
         return 0.0;
 
     return config.spatialMmPerPixel[stageCameraIndex];
+}
+
+int normalizedSpatialBinning(const int spatialBinning)
+{
+    if (spatialBinning == 1 || spatialBinning == 2 || spatialBinning == 4 || spatialBinning == 8)
+        return spatialBinning;
+
+    return 1;
+}
+
+double effectiveSpatialMmPerPixel(const double baseSpatialMmPerPixel, const int spatialBinning)
+{
+    if (baseSpatialMmPerPixel <= 0.0)
+        return 0.0;
+
+    return baseSpatialMmPerPixel * static_cast<double>(normalizedSpatialBinning(spatialBinning));
+}
+
+double effectiveSpatialMmPerPixelForStageCamera(const HardwareConfig &config,
+                                                const std::size_t stageCameraIndex,
+                                                const int spatialBinning)
+{
+    return effectiveSpatialMmPerPixel(spatialMmPerPixelForStageCamera(config, stageCameraIndex),
+                                      spatialBinning);
 }
 
 void setHardwareConfig(HardwareConfig config)
