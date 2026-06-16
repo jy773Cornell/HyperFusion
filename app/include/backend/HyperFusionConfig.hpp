@@ -21,7 +21,8 @@ struct HardwareConfig
     double operationScanningSpeedMmPerSec = 100.0;
     int whiteReferenceFrames = 100;
     int blackReferenceFrames = 100;
-    double spatialMmPerPixel = 0.050;
+    /// Spatial scale along the scan axis (mm per detector pixel). Index 0 = FX10e, 1 = SWIR3.
+    double spatialMmPerPixel[2] = {0.205, 0.4};
     int lighthouseIdleIntensityPercent = 0;
     int lighthouseReflectancePercent = 100;
     int lighthouseTransmittancePercent = 40;
@@ -49,5 +50,6 @@ const HardwareConfig &hardwareConfig();
 void setHardwareConfig(HardwareConfig config);
 /// Stage speed (mm/s) matching one line per frame: frame rate × spatial scale along scan axis.
 double recordScanSpeedMmPerSec(double frameRateHz, double spatialMmPerPixel);
+double spatialMmPerPixelForStageCamera(const HardwareConfig &config, std::size_t stageCameraIndex);
 bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage = nullptr);
 } // namespace hf

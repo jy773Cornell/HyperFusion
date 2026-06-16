@@ -81,6 +81,7 @@ qt_add_executable(app
     src/backend/LumoDatasetWriter.cpp
     src/backend/CaptureWriterWorker.cpp
     src/backend/HyperFusionConfig.cpp
+    src/backend/DualCameraScanOrchestrator.cpp
     src/backend/ICameraController.cpp
     src/backend/CameraCoordinator.cpp
     src/backend/processing/EnviBilReader.cpp
@@ -106,6 +107,7 @@ qt_add_executable(app
     include/backend/LumoDatasetWriter.hpp
     include/backend/CaptureWriterWorker.hpp
     include/backend/HyperFusionConfig.hpp
+    include/backend/DualCameraScanOrchestrator.hpp
     include/backend/CameraCoordinator.hpp
     # adapters — vendor SDK / hardware
     src/adapters/zaber/ZaberStageController.cpp

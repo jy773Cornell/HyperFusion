@@ -9,6 +9,7 @@
 #include "adapters/lumo/CalpackBandCatalog.hpp"
 #include "backend/StageWorker.hpp"
 #include "backend/HyperFusionConfig.hpp"
+#include "backend/DualCameraScanOrchestrator.hpp"
 #include "backend/LighthouseWorker.hpp"
 #include "backend/CameraCoordinator.hpp"
 #include "adapters/mcc/Mcc1208LighthouseController.hpp"
@@ -791,6 +792,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     loadHardwareConfig();
     loadPersistedUiSettings();
     applyHardwareConfigToUi();
+    applyDualCameraScanSync(false);
     refreshStageComPortList();
 
     settingsSaveTimer_ = new QTimer(this);
@@ -2598,6 +2600,8 @@ QWidget *MainWindow::createCaptureSettingsTab()
     captureCamera1Check_->hide();
     captureCamera2Check_->hide();
     const auto refreshRecorder = [this]() {
+        applyDualCameraScanSync();
+        updateCaptureDualCameraSyncControls();
         updateCaptureRecorderControls();
         updateCaptureScanningSpeedControls();
     };
@@ -2608,6 +2612,26 @@ QWidget *MainWindow::createCaptureSettingsTab()
     camerasLayout->addWidget(captureCamerasEmptyLabel_);
     camerasLayout->addWidget(captureCamera1Check_);
     camerasLayout->addWidget(captureCamera2Check_);
+    captureDualCameraAutoCheck_ = new QCheckBox(
+        QStringLiteral("Auto-sync FX10e and SWIR3 scan rate"), captureCamerasBox_);
+    captureDualCameraAutoCheck_->setChecked(true);
+    captureDualCameraAutoCheck_->setToolTip(
+        tr("When both cameras are selected, use FX10e frame rate and spatial scale to set "
+           "scanning speed, then match SWIR3 frame rate so both cover the same physical distance "
+           "per line. Also enables Auto scanning speed."));
+    captureDualCameraAutoCheck_->hide();
+    camerasLayout->addWidget(captureDualCameraAutoCheck_);
+    connect(captureDualCameraAutoCheck_, &QCheckBox::toggled, this, [this](const bool checked) {
+        if (checked && captureScanningSpeedAutoCheck_ != nullptr)
+        {
+            QSignalBlocker blocker(captureScanningSpeedAutoCheck_);
+            captureScanningSpeedAutoCheck_->setChecked(true);
+        }
+        applyDualCameraScanSync();
+        updateCaptureDualCameraSyncControls();
+        updateCaptureRecorderControls();
+        schedulePersistedUiSettingsSave();
+    });
 
     auto *positionBox = new QGroupBox("Position", page);
     auto *positionLayout = new QVBoxLayout(positionBox);
@@ -2724,7 +2748,8 @@ QWidget *MainWindow::createCaptureSettingsTab()
     captureScanningSpeedAutoCheck_->setChecked(true);
     captureScanningSpeedAutoCheck_->setToolTip(
         QStringLiteral("Record scan speed = frame rate (Hz) × spatial_mm_per_pixel from hyperfusion.cfg. "
-                       "Uses the slowest selected camera when multiple are active."));
+                       "With dual-camera sync, FX10e is the reference. Otherwise uses the slowest "
+                       "selected camera when multiple are active."));
     connect(captureScanningSpeedAutoCheck_, &QCheckBox::toggled, this, [this]() {
         updateCaptureScanningSpeedControls();
     });
@@ -2788,8 +2813,13 @@ QWidget *MainWindow::createCaptureSettingsTab()
     captureDescriptionEdit_ = new QPlainTextEdit(metadataBox);
     captureDescriptionEdit_->setPlaceholderText("Sample description, notes, or experiment details");
     captureDescriptionEdit_->setTabChangesFocus(true);
-    captureDescriptionEdit_->setMinimumHeight(72);
-    captureDescriptionEdit_->setMaximumHeight(120);
+    captureDescriptionEdit_->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    {
+        const QFontMetrics fm(captureDescriptionEdit_->fontMetrics());
+        const int framePadding = captureDescriptionEdit_->frameWidth() * 2 + 6;
+        captureDescriptionEdit_->setFixedHeight(fm.lineSpacing() * 2 + framePadding);
+    }
+    captureDescriptionEdit_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     metadataForm->addRow("Dataset", captureDatasetEdit_);
     metadataForm->addRow("Save folder", saveFolderRow);
     metadataForm->addRow("Operator", captureOperatorEdit_);
@@ -2866,6 +2896,8 @@ void MainWindow::updateCapturePositionControls(const StageState state)
 
 void MainWindow::updateCaptureScanningSpeedControls()
 {
+    updateCaptureDualCameraSyncControls();
+
     const bool scanActive = captureRecorderMode_ != CaptureRecorderMode::Idle;
     const bool useAuto =
         captureScanningSpeedAutoCheck_ != nullptr && captureScanningSpeedAutoCheck_->isChecked();
@@ -2892,8 +2924,15 @@ void MainWindow::updateCaptureScanningSpeedControls()
 double MainWindow::autoRecordScanSpeedMmPerSec() const
 {
     const hf::HardwareConfig &hw = hf::hardwareConfig();
-    if (hw.spatialMmPerPixel <= 0.0)
-        return 0.0;
+
+    if (dualCameraScanSyncActive())
+    {
+        if (hw.spatialMmPerPixel[0] <= 0.0)
+            return 0.0;
+
+        const CameraSettings fx10eSettings = buildCameraSettings(camera1Ui_);
+        return hf::recordScanSpeedMmPerSec(fx10eSettings.frameRateHz, hw.spatialMmPerPixel[0]);
+    }
 
     const LumoCameraUi *uis[] = {&camera1Ui_, &camera2Ui_};
     std::vector<std::size_t> selectedCameras;
@@ -2902,9 +2941,13 @@ double MainWindow::autoRecordScanSpeedMmPerSec() const
     double minSpeed = std::numeric_limits<double>::max();
     const auto considerCamera = [&](const std::size_t cameraIndex) {
         const LumoCameraUi &ui = *uis[cameraIndex];
+        const std::size_t stageCameraIndex = stageCameraIndexForUi(ui, cameraIndex);
+        const double spatial = hf::spatialMmPerPixelForStageCamera(hw, stageCameraIndex);
+        if (spatial <= 0.0)
+            return;
+
         const CameraSettings settings = buildCameraSettings(ui);
-        const double speed =
-            hf::recordScanSpeedMmPerSec(settings.frameRateHz, hw.spatialMmPerPixel);
+        const double speed = hf::recordScanSpeedMmPerSec(settings.frameRateHz, spatial);
         if (speed > 0.0)
             minSpeed = std::min(minSpeed, speed);
     };
@@ -2924,6 +2967,117 @@ double MainWindow::autoRecordScanSpeedMmPerSec() const
         return 0.0;
 
     return minSpeed;
+}
+
+bool MainWindow::bothFx10eAndSwir3CaptureCamerasConnected() const
+{
+    const auto isConnected = [](const LumoCameraUi &ui) {
+        return ui.state != CameraState::Disconnected && ui.state != CameraState::Fault;
+    };
+
+    return camera1Ui_.sensorKind == LumoSensorKind::Fx10ePleora && isConnected(camera1Ui_)
+           && camera2Ui_.sensorKind == LumoSensorKind::Swir3Ni && isConnected(camera2Ui_);
+}
+
+bool MainWindow::dualCameraScanSyncActive() const
+{
+    if (captureDualCameraAutoCheck_ == nullptr || !captureDualCameraAutoCheck_->isChecked())
+        return false;
+
+    if (!bothFx10eAndSwir3CaptureCamerasConnected())
+        return false;
+
+    std::vector<std::size_t> selectedCameras;
+    if (!selectedCaptureCameraIndices(selectedCameras))
+        return false;
+
+    bool fx10eSelected = false;
+    bool swir3Selected = false;
+    for (const std::size_t cameraIndex : selectedCameras)
+    {
+        if (cameraIndex == 0 && camera1Ui_.sensorKind == LumoSensorKind::Fx10ePleora)
+            fx10eSelected = true;
+        if (cameraIndex == 1 && camera2Ui_.sensorKind == LumoSensorKind::Swir3Ni)
+            swir3Selected = true;
+    }
+
+    return fx10eSelected && swir3Selected;
+}
+
+void MainWindow::updateCaptureDualCameraSyncControls()
+{
+    const bool bothConnected = bothFx10eAndSwir3CaptureCamerasConnected();
+    if (captureDualCameraAutoCheck_ != nullptr)
+        captureDualCameraAutoCheck_->setVisible(bothConnected);
+
+    const bool syncActive = dualCameraScanSyncActive();
+    const bool scanActive = captureRecorderMode_ != CaptureRecorderMode::Idle;
+
+    if (captureDualCameraAutoCheck_ != nullptr)
+        captureDualCameraAutoCheck_->setEnabled(bothConnected && !scanActive);
+
+    if (syncActive && captureScanningSpeedAutoCheck_ != nullptr)
+    {
+        QSignalBlocker blocker(captureScanningSpeedAutoCheck_);
+        captureScanningSpeedAutoCheck_->setChecked(true);
+        captureScanningSpeedAutoCheck_->setEnabled(false);
+    }
+    else if (captureScanningSpeedAutoCheck_ != nullptr)
+    {
+        captureScanningSpeedAutoCheck_->setEnabled(!scanActive);
+    }
+
+    const bool lockSwirFrameRate = syncActive && !scanActive;
+    if (camera2Ui_.frameRateSpin != nullptr)
+    {
+        const bool readyForCameraFeatures =
+            camera2Ui_.state == CameraState::Initialized || camera2Ui_.state == CameraState::Configured
+            || camera2Ui_.state == CameraState::Armed || camera2Ui_.state == CameraState::Streaming
+            || camera2Ui_.state == CameraState::SafeStopped;
+        camera2Ui_.frameRateSpin->setEnabled(readyForCameraFeatures && !lockSwirFrameRate);
+    }
+}
+
+void MainWindow::applyDualCameraScanSync(const bool applyToHardware)
+{
+    if (!dualCameraScanSyncActive() || applyingDualCameraScanSync_)
+        return;
+
+    applyingDualCameraScanSync_ = true;
+    struct ApplyingDualCameraScanSyncGuard
+    {
+        MainWindow &window;
+        explicit ApplyingDualCameraScanSyncGuard(MainWindow &mainWindow) : window(mainWindow) {}
+        ~ApplyingDualCameraScanSyncGuard() { window.applyingDualCameraScanSync_ = false; }
+    } guard(*this);
+
+    const hf::HardwareConfig &hw = hf::hardwareConfig();
+    hf::DualCameraScanSyncInput input;
+    input.fx10eFrameRateHz = buildCameraSettings(camera1Ui_).frameRateHz;
+    input.fx10eSpatialMmPerPixel = hw.spatialMmPerPixel[0];
+    input.swir3SpatialMmPerPixel = hw.spatialMmPerPixel[1];
+
+    const hf::DualCameraScanSyncResult sync = hf::computeDualCameraScanSync(input);
+    if (!sync.valid)
+        return;
+
+    if (camera2Ui_.frameRateSpin != nullptr)
+    {
+        const double minHz = camera2Ui_.frameRateSpin->minimum();
+        const double maxHz = camera2Ui_.frameRateSpin->maximum();
+        const double clampedRate = qBound(minHz, sync.syncedSwir3FrameRateHz, maxHz);
+
+        QSignalBlocker blocker(camera2Ui_.frameRateSpin);
+        camera2Ui_.frameRateSpin->setValue(clampedRate);
+    }
+
+    if (applyToHardware && coordinator_ != nullptr && isCameraSessionActive(camera2Ui_.state))
+    {
+        const CameraSettings settings = buildCameraSettings(camera2Ui_);
+        coordinator_->applySettings(camera2Ui_.cameraIndex, settings);
+    }
+
+    updateCaptureScanningSpeedControls();
 }
 
 void MainWindow::updateCaptureRecorderControls()
@@ -4283,6 +4437,8 @@ void MainWindow::runCapturePostProcessingIfEnabled()
 
 void MainWindow::startCaptureSequence()
 {
+    applyDualCameraScanSync();
+
     QString errorMessage;
     if (!buildCaptureScanPlan(captureScanPlan_, errorMessage))
     {
@@ -4317,6 +4473,8 @@ void MainWindow::startCapturePreview()
 {
     if (captureRecorderMode_ != CaptureRecorderMode::Idle)
         return;
+
+    applyDualCameraScanSync();
 
     QString errorMessage;
     CaptureScanPlan plan;
@@ -4967,6 +5125,8 @@ void MainWindow::startCaptureRecord()
                               "transmittance when both selected)")
                   .arg(modeFolders.join(QStringLiteral(", "))));
 
+    applyDualCameraScanSync();
+
     CaptureScanPlan plan;
     if (!buildCaptureScanPlan(plan, errorMessage))
     {
@@ -5083,6 +5243,9 @@ void MainWindow::updateCaptureCamerasList()
 
     updateCheckbox(camera1Ui_, captureCamera1Check_);
     updateCheckbox(camera2Ui_, captureCamera2Check_);
+
+    updateCaptureDualCameraSyncControls();
+    applyDualCameraScanSync();
 
     if (captureCamerasEmptyLabel_ != nullptr)
     {
@@ -5259,9 +5422,11 @@ void MainWindow::loadHardwareConfig()
                   .arg(config.sampleScanStartMm[0], 0, 'f', 2)
                   .arg(config.sampleScanStartMm[1], 0, 'f', 2)
                   .arg(config.sampleWindowMaxLengthMm, 0, 'f', 2));
-    appendLog(QStringLiteral("  operation_speed=%1 mm/s, spatial=%2 mm/px, white_ref_frames=%3, black_ref_frames=%4")
+    appendLog(QStringLiteral("  operation_speed=%1 mm/s, fx10e_spatial=%2 mm/px, swir3_spatial=%3 mm/px, "
+                              "white_ref_frames=%4, black_ref_frames=%5")
                   .arg(config.operationScanningSpeedMmPerSec, 0, 'f', 1)
-                  .arg(config.spatialMmPerPixel, 0, 'f', 4)
+                  .arg(config.spatialMmPerPixel[0], 0, 'f', 4)
+                  .arg(config.spatialMmPerPixel[1], 0, 'f', 4)
                   .arg(config.whiteReferenceFrames)
                   .arg(config.blackReferenceFrames));
     appendLog(QStringLiteral("  lighthouse idle=%1%%, reflectance=%2%%, transmittance=%3%%")
@@ -5312,6 +5477,8 @@ void MainWindow::loadPersistedUiSettings()
         capturePreprocessAfterScanCheck_->setChecked(capturePosition.preprocessAfterScan);
     if (captureSaveFfcImageCheck_ != nullptr)
         captureSaveFfcImageCheck_->setChecked(capturePosition.saveFfcImage);
+    if (captureDualCameraAutoCheck_ != nullptr)
+        captureDualCameraAutoCheck_->setChecked(capturePosition.dualCameraAutoSync);
     if (captureSaveFolderEdit_ != nullptr && !capturePosition.saveFolder.isEmpty())
         captureSaveFolderEdit_->setText(QDir::toNativeSeparators(capturePosition.saveFolder));
 
@@ -5336,6 +5503,8 @@ void MainWindow::savePersistedUiSettings()
         capturePosition.preprocessAfterScan = capturePreprocessAfterScanCheck_->isChecked();
     if (captureSaveFfcImageCheck_ != nullptr)
         capturePosition.saveFfcImage = captureSaveFfcImageCheck_->isChecked();
+    if (captureDualCameraAutoCheck_ != nullptr)
+        capturePosition.dualCameraAutoSync = captureDualCameraAutoCheck_->isChecked();
     if (captureSaveFolderEdit_ != nullptr)
         capturePosition.saveFolder = captureSaveFolderEdit_->text().trimmed();
     AppSettingsStore::saveCapturePosition(capturePosition);
@@ -5531,6 +5700,16 @@ void MainWindow::connectPersistedSettingsAutosave()
                     qOverload<double>(&QDoubleSpinBox::valueChanged),
                     this,
                     [this]() { updateCaptureScanningSpeedControls(); });
+            if (ui.sensorKind == LumoSensorKind::Fx10ePleora)
+            {
+                connect(ui.frameRateSpin,
+                        qOverload<double>(&QDoubleSpinBox::valueChanged),
+                        this,
+                        [this]() {
+                            if (!applyingDualCameraScanSync_)
+                                applyDualCameraScanSync();
+                        });
+            }
         }
         if (ui.exposureSpin != nullptr)
             connect(ui.exposureSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, schedule);
@@ -6168,7 +6347,12 @@ void MainWindow::updateCameraControls(LumoCameraUi &ui, const CameraState state)
     if (ui.exposureSpin != nullptr)
         ui.exposureSpin->setEnabled(readyForCameraFeatures);
     if (ui.frameRateSpin != nullptr)
-        ui.frameRateSpin->setEnabled(readyForCameraFeatures);
+    {
+        bool frameRateEnabled = readyForCameraFeatures;
+        if (ui.sensorKind == LumoSensorKind::Swir3Ni && dualCameraScanSyncActive())
+            frameRateEnabled = false;
+        ui.frameRateSpin->setEnabled(frameRateEnabled);
+    }
     if (ui.triggerCombo != nullptr)
         ui.triggerCombo->setEnabled(readyForCameraFeatures);
     if (ui.redBandCombo != nullptr)

@@ -170,6 +170,15 @@ bool parseSectionName(const QString &line, QString &sectionOut)
     return !sectionOut.isEmpty();
 }
 
+QString stripInlineComment(QString value)
+{
+    const int hashIndex = value.indexOf(QLatin1Char('#'));
+    if (hashIndex >= 0)
+        value = value.left(hashIndex);
+
+    return value.trimmed();
+}
+
 bool parseKeyValue(const QString &line, QString &keyOut, QString &valueOut)
 {
     const int equals = line.indexOf(QLatin1Char('='));
@@ -177,7 +186,7 @@ bool parseKeyValue(const QString &line, QString &keyOut, QString &valueOut)
         return false;
 
     keyOut = line.left(equals).trimmed().toLower();
-    valueOut = line.mid(equals + 1).trimmed();
+    valueOut = stripInlineComment(line.mid(equals + 1));
     return !keyOut.isEmpty() && !valueOut.isEmpty();
 }
 
@@ -354,14 +363,38 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
         }
         else if (section == QStringLiteral("calibration"))
         {
-            if (key == QStringLiteral("spatial_mm_per_pixel") || key == QStringLiteral("spatial_distance_per_pixel_mm"))
+            if (key == QStringLiteral("fx10e_spatial_mm_per_pixel")
+                || key == QStringLiteral("fx10e_spatial_distance_per_pixel_mm"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid fx10e_spatial_mm_per_pixel: %1").arg(value));
+                else if (numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral("fx10e_spatial_mm_per_pixel must be > 0"));
+                else
+                    config.spatialMmPerPixel[0] = numericValue;
+            }
+            else if (key == QStringLiteral("swir3_spatial_mm_per_pixel")
+                     || key == QStringLiteral("swir3_spatial_distance_per_pixel_mm"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid swir3_spatial_mm_per_pixel: %1").arg(value));
+                else if (numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral("swir3_spatial_mm_per_pixel must be > 0"));
+                else
+                    config.spatialMmPerPixel[1] = numericValue;
+            }
+            else if (key == QStringLiteral("spatial_mm_per_pixel")
+                     || key == QStringLiteral("spatial_distance_per_pixel_mm"))
             {
                 if (!hasNumber)
                     warnings.push_back(QStringLiteral("Invalid spatial_mm_per_pixel: %1").arg(value));
                 else if (numericValue <= 0.0)
                     warnings.push_back(QStringLiteral("spatial_mm_per_pixel must be > 0"));
                 else
-                    config.spatialMmPerPixel = numericValue;
+                {
+                    config.spatialMmPerPixel[0] = numericValue;
+                    config.spatialMmPerPixel[1] = numericValue;
+                }
             }
             else
             {
@@ -540,7 +573,8 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "\n"
         << "[calibration]\n"
         << "# Spatial scale along the scan axis (mm per detector pixel).\n"
-        << "spatial_mm_per_pixel = 0.050\n"
+        << "fx10e_spatial_mm_per_pixel = 0.205\n"
+        << "swir3_spatial_mm_per_pixel = 0.4\n"
         << "\n"
         << "[lighthouse]\n"
         << "idle_intensity_percent = 0\n"
@@ -641,6 +675,14 @@ double recordScanSpeedMmPerSec(const double frameRateHz, const double spatialMmP
         return 0.0;
 
     return frameRateHz * spatialMmPerPixel;
+}
+
+double spatialMmPerPixelForStageCamera(const HardwareConfig &config, const std::size_t stageCameraIndex)
+{
+    if (stageCameraIndex >= 2)
+        return 0.0;
+
+    return config.spatialMmPerPixel[stageCameraIndex];
 }
 
 void setHardwareConfig(HardwareConfig config)

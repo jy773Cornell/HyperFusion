@@ -13,6 +13,7 @@ struct PersistedCapturePosition
     bool useStageForRecording = true;
     bool preprocessAfterScan = true;
     bool saveFfcImage = true;
+    bool dualCameraAutoSync = true;
     QString saveFolder;
 };
 

@@ -178,6 +178,10 @@ private:
     void tryNotifyCaptureRecordComplete();
     double autoRecordScanSpeedMmPerSec() const;
     void updateCaptureScanningSpeedControls();
+    bool bothFx10eAndSwir3CaptureCamerasConnected() const;
+    bool dualCameraScanSyncActive() const;
+    void updateCaptureDualCameraSyncControls();
+    void applyDualCameraScanSync(bool applyToHardware = true);
     struct CaptureScanPlan
     {
         double whiteRefStartMm[2] = {0.0, 0.0};
@@ -441,6 +445,8 @@ private:
     QLabel *captureCamerasEmptyLabel_ = nullptr;
     QCheckBox *captureCamera1Check_ = nullptr;
     QCheckBox *captureCamera2Check_ = nullptr;
+    QCheckBox *captureDualCameraAutoCheck_ = nullptr;
+    bool applyingDualCameraScanSync_ = false;
     QWidget *captureCameraPositionRows_[2] = {nullptr, nullptr};
     QDoubleSpinBox *captureCameraPositionSpins_[2] = {nullptr, nullptr};
     QDoubleSpinBox *captureTargetLengthSpin_ = nullptr;

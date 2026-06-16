@@ -31,6 +31,8 @@ PersistedCapturePosition AppSettingsStore::loadCapturePosition()
     position.preprocessAfterScan =
         settings.value(QStringLiteral("capture/preprocess/afterScan"), true).toBool();
     position.saveFfcImage = settings.value(QStringLiteral("capture/preprocess/saveFfcImage"), true).toBool();
+    position.dualCameraAutoSync =
+        settings.value(QStringLiteral("capture/dualCameraAutoSync"), true).toBool();
     position.saveFolder = settings.value(QStringLiteral("capture/metadata/saveFolder")).toString();
     return position;
 }
@@ -43,6 +45,7 @@ void AppSettingsStore::saveCapturePosition(const PersistedCapturePosition &posit
     settings.setValue(QStringLiteral("capture/position/useStageForRecording"), position.useStageForRecording);
     settings.setValue(QStringLiteral("capture/preprocess/afterScan"), position.preprocessAfterScan);
     settings.setValue(QStringLiteral("capture/preprocess/saveFfcImage"), position.saveFfcImage);
+    settings.setValue(QStringLiteral("capture/dualCameraAutoSync"), position.dualCameraAutoSync);
     settings.setValue(QStringLiteral("capture/metadata/saveFolder"), position.saveFolder);
 }
 
