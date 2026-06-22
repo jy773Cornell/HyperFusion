@@ -32,19 +32,19 @@ public:
     void setCursor(const ProfileCursor &cursor);
     void setProfilesReadyCallback(ProfilesReadyCallback callback);
 
-    void submitFrame(FramePacket frame);
+    void submitFrame(SharedFramePacket frame);
     void requestRefresh();
 
 private:
     struct PendingJob
     {
-        FramePacket frame;
+        SharedFramePacket frame;
         ProfileCursor cursor;
         bool hasFrame = false;
     };
 
     void threadLoop();
-    void enqueueJob(bool withFrame, FramePacket frame);
+    void enqueueJob(bool withFrame, SharedFramePacket frame);
 
     ProfilesReadyCallback profilesReadyCallback_;
     std::mutex callbackMutex_;
@@ -54,7 +54,7 @@ private:
     std::deque<PendingJob> queue_;
 
     std::mutex stateMutex_;
-    FramePacket latestFrame_;
+    SharedFramePacket latestFrame_;
     ProfileCursor cursor_;
     bool hasLatestFrame_ = false;
 

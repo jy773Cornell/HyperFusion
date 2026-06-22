@@ -307,8 +307,8 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                      || key == QStringLiteral("scanning_speed_mm_per_sec"))
             {
                 warnings.push_back(
-                    QStringLiteral("Deprecated record_scanning_speed_mm_per_sec — record scan speed is "
-                                   "frame rate × spatial_mm_per_pixel"));
+                    QStringLiteral("Deprecated record_scanning_speed_mm_per_sec \u2014 record scan speed is "
+                                   "frame rate \u00D7 spatial_mm_per_pixel"));
             }
             else if (key == QStringLiteral("white_reference_frames"))
             {
@@ -322,7 +322,7 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
             else if (key == QStringLiteral("white_reference_scanning_length_mm"))
             {
                 warnings.push_back(
-                    QStringLiteral("Deprecated white_reference_scanning_length_mm — use white_reference_frames instead"));
+                    QStringLiteral("Deprecated white_reference_scanning_length_mm \u2014 use white_reference_frames instead"));
             }
             else if (key == QStringLiteral("black_reference_frames"))
             {
@@ -364,12 +364,17 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
             if (key == QStringLiteral("position_mm"))
             {
                 warnings.push_back(
-                    QStringLiteral("Deprecated [white_reference] section — use [camera_positions] instead"));
+                    QStringLiteral("Deprecated [white_reference] section \u2014 use [camera_positions] instead"));
             }
             else
             {
                 warnings.push_back(QStringLiteral("Unknown key in [white_reference]: %1").arg(key));
             }
+        }
+        else if (section == QStringLiteral("swir3"))
+        {
+            warnings.push_back(
+                QStringLiteral("[swir3] section is deprecated \u2014 SWIR3 always uses SDK serial autoconnect"));
         }
         else if (section == QStringLiteral("calibration"))
         {
@@ -643,7 +648,7 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "transmittance_intensity_percent = 40\n"
         << "\n"
         << "[stage_motion]\n"
-        << "# Trapezoidal accel for lockstep moves and stop deceleration (mm/s²). Lower = gentler.\n"
+        << "# Trapezoidal accel for lockstep moves and stop deceleration (mm/s\u00B2). Lower = gentler.\n"
         << "acceleration_mm_per_sec2 = 30\n"
         << "\n"
         << "[preprocessing]\n"
@@ -712,7 +717,7 @@ HardwareConfig loadHardwareConfig()
     if (resolvedPath.isEmpty())
     {
         config.warnings = warnings;
-        config.warnings.push_back(QStringLiteral("hyperfusion.cfg not found — using built-in defaults"));
+        config.warnings.push_back(QStringLiteral("hyperfusion.cfg not found \u2014 using built-in defaults"));
         setHardwareConfig(config);
         return config;
     }

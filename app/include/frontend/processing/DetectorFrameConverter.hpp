@@ -8,4 +8,6 @@ class QImage;
 namespace ui
 {
 QImage framePacketToQImage(const FramePacket &frame);
+/// Reuses `reuse` when geometry matches; otherwise allocates a new buffer.
+QImage framePacketToQImage(const FramePacket &frame, QImage &reuse);
 } // namespace ui

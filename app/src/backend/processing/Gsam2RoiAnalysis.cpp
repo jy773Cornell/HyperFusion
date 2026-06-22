@@ -199,7 +199,7 @@ Gsam2RoiAnalysisResult analyzeGsam2SegmentationRois(const QString &ffcHdrPath,
     if (metadata.samples != rois.front().width || metadata.lines != rois.front().height)
     {
         result.errorMessage =
-            QStringLiteral("Mask size (%1×%2) does not match FFC cube (%3×%4).")
+            QStringLiteral("Mask size (%1\u00D7%2) does not match FFC cube (%3\u00D7%4).")
                 .arg(rois.front().width)
                 .arg(rois.front().height)
                 .arg(metadata.samples)

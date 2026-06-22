@@ -39,7 +39,7 @@ void ProfileProcessor::stop()
 void ProfileProcessor::reset()
 {
     std::lock_guard<std::mutex> stateLock(stateMutex_);
-    latestFrame_ = FramePacket{};
+    latestFrame_.reset();
     hasLatestFrame_ = false;
     cursor_ = ProfileCursor{};
 }
@@ -56,17 +56,17 @@ void ProfileProcessor::setProfilesReadyCallback(ProfilesReadyCallback callback)
     profilesReadyCallback_ = std::move(callback);
 }
 
-void ProfileProcessor::enqueueJob(const bool withFrame, FramePacket frame)
+void ProfileProcessor::enqueueJob(const bool withFrame, SharedFramePacket frame)
 {
     PendingJob job;
     {
         std::lock_guard<std::mutex> stateLock(stateMutex_);
-        if (withFrame)
+        if (withFrame && frame)
         {
-            latestFrame_ = frame;
+            latestFrame_ = std::move(frame);
             hasLatestFrame_ = true;
         }
-        if (!hasLatestFrame_)
+        if (!hasLatestFrame_ || !latestFrame_)
             return;
 
         job.frame = latestFrame_;
@@ -84,9 +84,9 @@ void ProfileProcessor::enqueueJob(const bool withFrame, FramePacket frame)
     queueCv_.notify_one();
 }
 
-void ProfileProcessor::submitFrame(FramePacket frame)
+void ProfileProcessor::submitFrame(SharedFramePacket frame)
 {
-    if (!running_.load())
+    if (!running_.load() || !frame)
         return;
 
     enqueueJob(true, std::move(frame));
@@ -97,7 +97,7 @@ void ProfileProcessor::requestRefresh()
     if (!running_.load())
         return;
 
-    enqueueJob(false, FramePacket{});
+    enqueueJob(false, {});
 }
 
 void ProfileProcessor::threadLoop()
@@ -117,8 +117,11 @@ void ProfileProcessor::threadLoop()
             queue_.pop_front();
         }
 
+        if (!job.frame)
+            continue;
+
         ProfileExtraction profiles;
-        if (!extractProfilesFromBilFrame(job.frame, job.cursor, profiles))
+        if (!extractProfilesFromBilFrame(*job.frame, job.cursor, profiles))
             continue;
 
         ProfilesReadyCallback callback;

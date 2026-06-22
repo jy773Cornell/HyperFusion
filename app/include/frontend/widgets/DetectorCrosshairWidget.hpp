@@ -1,7 +1,7 @@
 // Detector preview with draggable vertical (spatial) and horizontal (band) profile cursors.
 #pragma once
 
-#include <QElapsedTimer>
+#include <QImage>
 #include <QPixmap>
 #include <QString>
 #include <QWidget>
@@ -18,7 +18,9 @@ public:
     explicit DetectorCrosshairWidget(QWidget *parent = nullptr);
 
     void setFrameSize(int width, int height);
+    void setDetectorImage(const QImage &image);
     void setDetectorImage(const QPixmap &pixmap);
+    void setAcquisitionFps(double fps);
     void clearDisplay(const QString &message = QString());
 
     int spatialIndex() const { return spatialIndex_; }
@@ -46,9 +48,10 @@ private:
     bool mapWidgetToImage(const QPoint &widgetPoint, int &outX, int &outY) const;
     void clampIndices();
     void emitLinesIfChanged();
-    void recordIncomingFrame();
     void drawFpsOverlay(QPainter &painter) const;
+    void rebuildScaledPixmap();
 
+    QImage sourceImage_;
     QPixmap pixmap_;
     QString disconnectedMessage_;
     bool hasImage_ = false;
@@ -59,8 +62,6 @@ private:
 
     DragMode dragMode_ = DragMode::None;
 
-    int fpsFrameCount_ = 0;
-    double displayedFps_ = 0.0;
-    QElapsedTimer fpsWindowTimer_;
+    double acquisitionFps_ = 0.0;
 };
 } // namespace ui

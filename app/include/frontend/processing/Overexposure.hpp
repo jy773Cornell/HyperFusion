@@ -1,4 +1,6 @@
-// Shared Mono12 saturation detection and RGB marking for detector and waterfall views.
+// Saturation detection and DN→display scaling for detector and waterfall views.
+// FX10e (Camera1): Mono12 in 16-bit containers. SWIR3 (Camera2): native 16-bit DN.
+// Red saturation overlay is applied on the detector view only (not waterfall).
 #pragma once
 
 #include "backend/CameraTypes.hpp"
@@ -8,16 +10,33 @@
 
 namespace ui
 {
-/// Mono12 full-scale DN stored in 16-bit containers (FX10e / SWIR3).
+/// Mono12 full-scale DN (FX10e and similar).
 constexpr std::uint16_t kMono12FullScaleDn = 4095;
-constexpr double kDnAxisMax = 4096.0;
+constexpr double kMono12DnAxisMax = 4096.0;
 
-inline bool isOverexposedDn(const std::uint16_t dn) noexcept
+/// Native 16-bit DN full scale (SWIR3).
+constexpr std::uint16_t kMono16FullScaleDn = 65535;
+constexpr double kMono16DnAxisMax = 65536.0;
+
+/// Default profile/detector scaling axis (Mono12).
+constexpr double kDnAxisMax = kMono12DnAxisMax;
+
+inline std::uint16_t dnFullScaleForSource(const CameraBackendId source) noexcept
 {
-    return dn >= kMono12FullScaleDn;
+    return source == CameraBackendId::Camera2 ? kMono16FullScaleDn : kMono12FullScaleDn;
 }
 
-std::uint8_t dnToDisplayGray(const std::uint16_t dn);
+inline double dnAxisMaxForSource(const CameraBackendId source) noexcept
+{
+    return source == CameraBackendId::Camera2 ? kMono16DnAxisMax : kMono12DnAxisMax;
+}
+
+inline bool isOverexposedDn(const std::uint16_t dn, const CameraBackendId source) noexcept
+{
+    return dn >= dnFullScaleForSource(source);
+}
+
+std::uint8_t dnToDisplayGray(std::uint16_t dn, CameraBackendId source);
 
 /// Per spatial column: true when any band at that column is saturated.
 std::vector<bool> overexposedSpatialColumns(const FramePacket &frame);

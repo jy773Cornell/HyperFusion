@@ -1,5 +1,5 @@
 // Dual-camera scan timing sync calculations (FX10e reference, SWIR3 follower).
-// backend layer — used by MainWindow before preview/record and on FX10e frame-rate changes.
+// backend layer \u2014 used by MainWindow before preview/record and on FX10e frame-rate changes.
 #include "backend/DualCameraScanOrchestrator.hpp"
 
 #include "backend/HyperFusionConfig.hpp"

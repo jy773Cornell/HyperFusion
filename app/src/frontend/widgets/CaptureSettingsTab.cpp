@@ -1,0 +1,446 @@
+// Capture / recorder settings tab (scan parameters, metadata, preprocessing).
+// MainWindow method definitions extracted from MainWindow.cpp for clarity.
+#include "frontend/controllers/CapturePanelController.hpp"
+#include "frontend/controllers/CameraPanelController.hpp"
+#include "frontend/controllers/UiSettingsController.hpp"
+#include "frontend/widgets/MainWindow.hpp"
+#include "adapters/zaber/ZaberStageProfile.hpp"
+#include "backend/HyperFusionConfig.hpp"
+#include "backend/processing/Gsam2ServerManager.hpp"
+#include "backend/StageWorker.hpp"
+#include "frontend/widgets/MainWindowTabHelpers.hpp"
+
+#include <QCheckBox>
+#include <QDir>
+#include <QDoubleSpinBox>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QFontMetrics>
+#include <QFormLayout>
+#include <QFrame>
+#include <QGroupBox>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QLineEdit>
+#include <QPlainTextEdit>
+#include <QPushButton>
+#include <QScrollArea>
+#include <QSignalBlocker>
+#include <QSpinBox>
+#include <QTimer>
+#include <QVBoxLayout>
+QWidget *MainWindow::createCaptureSettingsTab()
+{
+    auto *scrollArea = new QScrollArea(this);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    scrollArea->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+
+    auto *page = new QWidget();
+    scrollArea->setWidget(page);
+
+    auto *layout = new QVBoxLayout(page);
+    layout->setContentsMargins(0, 0, 0, 0);
+
+    auto *recorderBox = new QGroupBox("Recorder", page);
+    auto *recorderLayout = new QVBoxLayout(recorderBox);
+    recorderLayout->setContentsMargins(6, 4, 6, 6);
+
+    auto *recorderButtonLayout = new QHBoxLayout();
+    recorderButtonLayout->setContentsMargins(0, 0, 0, 0);
+    recorderButtonLayout->setSpacing(8);
+
+    captureRecorderStopBtn_ =
+        ui::makeRecorderButton(recorderBox, ui::makeRecorderStopIcon(), QStringLiteral("Stop"));
+    captureRecorderPreviewBtn_ =
+        ui::makeRecorderButton(recorderBox, ui::makeRecorderPreviewIcon(), QStringLiteral("Preview"));
+    captureRecorderRecordBtn_ =
+        ui::makeRecorderButton(recorderBox, ui::makeRecorderRecordIcon(), QStringLiteral("Record"));
+    captureRecorderStopBtn_->setToolTip(tr("Stop preview or recording"));
+    captureRecorderPreviewBtn_->setToolTip(tr("Preview scan without saving"));
+    captureRecorderRecordBtn_->setToolTip(tr("Record scan to SSD"));
+
+    recorderButtonLayout->addWidget(captureRecorderStopBtn_, 1);
+    recorderButtonLayout->addWidget(captureRecorderPreviewBtn_, 1);
+    recorderButtonLayout->addWidget(captureRecorderRecordBtn_, 1);
+    recorderLayout->addLayout(recorderButtonLayout);
+
+    auto *recorderModeLayout = new QHBoxLayout();
+    recorderModeLayout->setContentsMargins(0, 6, 0, 0);
+    recorderModeLayout->setSpacing(16);
+    captureReflectanceCheck_ = new QCheckBox(QStringLiteral("Reflectance"), recorderBox);
+    captureTransmittanceCheck_ = new QCheckBox(QStringLiteral("Transmittance"), recorderBox);
+    captureReflectanceCheck_->setChecked(true);
+    captureTransmittanceCheck_->setChecked(true);
+    captureReflectanceCheck_->setEnabled(false);
+    captureTransmittanceCheck_->setEnabled(false);
+    captureReflectanceCheck_->setToolTip(
+        tr("Include reflectance scan (requires linear stage)"));
+    captureTransmittanceCheck_->setToolTip(
+        tr("Include transmittance scan (requires linear stage)"));
+    recorderModeLayout->addWidget(captureReflectanceCheck_);
+    recorderModeLayout->addWidget(captureTransmittanceCheck_);
+    recorderModeLayout->addStretch(1);
+    recorderLayout->addLayout(recorderModeLayout);
+
+    auto *recorderStatusLayout = new QHBoxLayout();
+    recorderStatusLayout->setContentsMargins(0, 4, 0, 0);
+    recorderStatusLayout->setSpacing(8);
+    captureRecorderStatusIndicator_ = new QLabel(recorderBox);
+    captureRecorderStatusIndicator_->setFixedSize(14, 14);
+    captureRecorderStatusIndicator_->setToolTip(tr("Recorder activity"));
+    captureRecorderStatusLabel_ = new QLabel(recorderBox);
+    captureRecorderStatusLabel_->setWordWrap(true);
+    captureRecorderStatusLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    recorderStatusLayout->addWidget(captureRecorderStatusIndicator_);
+    recorderStatusLayout->addWidget(captureRecorderStatusLabel_, 1);
+    recorderLayout->addLayout(recorderStatusLayout);
+
+    captureCamerasBox_ = new QGroupBox("Cameras", page);
+    auto *camerasLayout = new QVBoxLayout(captureCamerasBox_);
+    camerasLayout->setContentsMargins(6, 4, 6, 6);
+    camerasLayout->setSpacing(4);
+    captureCamerasEmptyLabel_ =
+        new QLabel(QStringLiteral("No cameras connected."), captureCamerasBox_);
+    captureCamerasEmptyLabel_->setWordWrap(true);
+    captureCamera1Check_ = new QCheckBox(captureCamerasBox_);
+    captureCamera2Check_ = new QCheckBox(captureCamerasBox_);
+    captureCamera1Check_->hide();
+    captureCamera2Check_->hide();
+    const auto refreshRecorder = [this]() {
+        if (capturePanel() == nullptr)
+            return;
+        capturePanel()->updateDualCameraSyncControls();
+        capturePanel()->updateRecorderControls();
+        capturePanel()->updateScanningSpeedControls();
+        capturePanel()->updateCaptureStreamLayout();
+    };
+    connect(captureCamera1Check_, &QCheckBox::toggled, this, refreshRecorder);
+    connect(captureCamera2Check_, &QCheckBox::toggled, this, refreshRecorder);
+    connect(captureReflectanceCheck_, &QCheckBox::toggled, this, refreshRecorder);
+    connect(captureTransmittanceCheck_, &QCheckBox::toggled, this, refreshRecorder);
+    camerasLayout->addWidget(captureCamerasEmptyLabel_);
+    camerasLayout->addWidget(captureCamera1Check_);
+    camerasLayout->addWidget(captureCamera2Check_);
+    captureDualCameraAutoCheck_ = new QCheckBox(
+        QStringLiteral("Auto-sync FX10e and SWIR3 scan rate"), captureCamerasBox_);
+    captureDualCameraAutoCheck_->setChecked(true);
+    captureDualCameraAutoCheck_->setToolTip(
+        tr("When both cameras are selected, use FX10e frame rate and spatial scale to set "
+           "scanning speed, then match SWIR3 frame rate so both cover the same physical distance "
+           "per line. Also enables Auto scanning speed."));
+    captureDualCameraAutoCheck_->hide();
+    camerasLayout->addWidget(captureDualCameraAutoCheck_);
+    connect(captureDualCameraAutoCheck_, &QCheckBox::toggled, this, [this](const bool checked) {
+        if (capturePanel() == nullptr)
+            return;
+
+        if (checked && captureScanningSpeedAutoCheck_ != nullptr)
+        {
+            QSignalBlocker blocker(captureScanningSpeedAutoCheck_);
+            captureScanningSpeedAutoCheck_->setChecked(true);
+        }
+
+        if (checked)
+        {
+            capturePanel()->resetDualCameraScanSyncHardwareState();
+            capturePanel()->applyDualCameraScanSync(true);
+        }
+        else
+        {
+            capturePanel()->resetDualCameraScanSyncHardwareState();
+        }
+
+        capturePanel()->updateDualCameraSyncControls();
+        capturePanel()->updateRecorderControls();
+        settingsPanel()->schedulePersistedUiSettingsSave();
+    });
+
+    auto *positionBox = new QGroupBox(QStringLiteral("Position"), page);
+    capturePositionBox_ = positionBox;
+    auto *positionLayout = new QVBoxLayout(positionBox);
+    positionLayout->setContentsMargins(6, 4, 6, 6);
+    positionLayout->setSpacing(6);
+
+    captureUseStageForRecordingCheck_ =
+        new QCheckBox(QStringLiteral("Use HyperFusion Stage for recording"), positionBox);
+    captureUseStageForRecordingCheck_->setChecked(true);
+    captureUseStageForRecordingCheck_->setToolTip(
+        tr("When enabled, Preview and Record follow the stage scanning procedure "
+           "(black ref, white ref, sample scan). When disabled, Record saves reflectance "
+           "frames only and Preview is unavailable."));
+    positionLayout->addWidget(captureUseStageForRecordingCheck_);
+    connect(captureUseStageForRecordingCheck_, &QCheckBox::toggled, this, [this](const bool checked) {
+        if (checked && !capturePanel()->isSessionActive())
+        {
+            const QSignalBlocker reflectanceBlocker(captureReflectanceCheck_);
+            const QSignalBlocker transmittanceBlocker(captureTransmittanceCheck_);
+            if (captureReflectanceCheck_ != nullptr)
+                captureReflectanceCheck_->setChecked(true);
+            if (captureTransmittanceCheck_ != nullptr)
+                captureTransmittanceCheck_->setChecked(true);
+        }
+        capturePanel()->updateRecorderControls();
+    });
+
+    capturePositionContent_ = new QWidget(positionBox);
+    auto *positionContentLayout = new QVBoxLayout(capturePositionContent_);
+    positionContentLayout->setContentsMargins(0, 0, 0, 0);
+    positionContentLayout->setSpacing(6);
+
+    for (std::size_t cameraIndex = 0; cameraIndex < 2; ++cameraIndex)
+    {
+        auto *rowWidget = new QWidget(capturePositionContent_);
+        auto *rowLayout = new QHBoxLayout(rowWidget);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->setSpacing(6);
+
+        auto *rowLabel = new QLabel(rowWidget);
+        rowLabel->setMinimumWidth(120);
+        captureCameraPositionSpins_[cameraIndex] = new QDoubleSpinBox(rowWidget);
+        captureCameraPositionSpins_[cameraIndex]->setRange(zaber_stage::kTravelMinimumMm,
+                                                            zaber_stage::kTravelLengthMm);
+        captureCameraPositionSpins_[cameraIndex]->setDecimals(2);
+        captureCameraPositionSpins_[cameraIndex]->setSingleStep(1.0);
+        captureCameraPositionSpins_[cameraIndex]->setSuffix(QStringLiteral(" mm"));
+        captureCameraPositionSpins_[cameraIndex]->setValue(0.0);
+
+        auto *goBtn = ui::makeCaptureCompactWhiteButton(rowWidget, QStringLiteral("Go"));
+        rowLayout->addWidget(rowLabel);
+        rowLayout->addWidget(captureCameraPositionSpins_[cameraIndex], 1);
+        rowLayout->addWidget(goBtn);
+        positionContentLayout->addWidget(rowWidget);
+        captureCameraPositionRows_[cameraIndex] = rowWidget;
+        rowWidget->hide();
+
+        connect(goBtn, &QPushButton::clicked, this, [this, cameraIndex]() {
+            LumoCameraUi &cameraUi = cameraIndex == 0 ? camera1Ui_ : camera2Ui_;
+            if (stageWorker() == nullptr || captureCameraPositionSpins_[cameraIndex] == nullptr)
+                return;
+            if (stageWorker()->currentState() != StageState::Connected)
+            {
+                appendLog(QString("Capture: stage not connected \u2014 cannot go to %1 position")
+                              .arg(cameraPanel()->profileTabNameForUi(cameraUi)));
+                return;
+            }
+
+            const QString label = QStringLiteral("%1 position").arg(cameraPanel()->profileTabNameForUi(cameraUi));
+            const double targetMm = captureCameraPositionSpins_[cameraIndex]->value();
+            const double speedMmPerSec = hf::hardwareConfig().operationScanningSpeedMmPerSec;
+            appendLog(QString("Capture: go to %1 (%2 mm @ %3 mm/s)")
+                              .arg(label)
+                              .arg(targetMm, 0, 'f', 2)
+                              .arg(speedMmPerSec, 0, 'f', 1));
+            stageWorker()->requestMoveAbsoluteMm(targetMm, speedMmPerSec);
+        });
+    }
+
+    auto *targetLengthRowLayout = new QHBoxLayout();
+    targetLengthRowLayout->setSpacing(6);
+    auto *targetLengthLabel = new QLabel(QStringLiteral("Target length"), capturePositionContent_);
+    targetLengthLabel->setMinimumWidth(120);
+    captureTargetLengthSpin_ = new QDoubleSpinBox(capturePositionContent_);
+    captureTargetLengthSpin_->setRange(0.0, zaber_stage::kTravelLengthMm);
+    captureTargetLengthSpin_->setDecimals(2);
+    captureTargetLengthSpin_->setSingleStep(1.0);
+    captureTargetLengthSpin_->setSuffix(QStringLiteral(" mm"));
+    captureTargetLengthSpin_->setValue(125.0);
+    targetLengthRowLayout->addWidget(targetLengthLabel);
+    targetLengthRowLayout->addWidget(captureTargetLengthSpin_, 1);
+    targetLengthRowLayout->addSpacing(40);
+    positionContentLayout->addLayout(targetLengthRowLayout);
+
+    const auto configureEditableSpeedSpin = [](QDoubleSpinBox *spin, const QString &tooltip) {
+        spin->setRange(0.0, zaber_stage::kMaxSpeedMmPerSec);
+        spin->setDecimals(1);
+        spin->setSingleStep(1.0);
+        spin->setSuffix(QStringLiteral(" mm/s"));
+        spin->setToolTip(tooltip);
+    };
+
+    auto *scanningSpeedRowLayout = new QHBoxLayout();
+    scanningSpeedRowLayout->setSpacing(6);
+    auto *scanningSpeedLabel =
+        new QLabel(QStringLiteral("Scanning speed"), capturePositionContent_);
+    scanningSpeedLabel->setMinimumWidth(120);
+    captureScanningSpeedSpin_ = new QDoubleSpinBox(capturePositionContent_);
+    configureEditableSpeedSpin(
+        captureScanningSpeedSpin_,
+        QStringLiteral("White-reference and sample scan speed. Uncheck Auto to override for this session."));
+    captureScanningSpeedSpin_->setValue(15.0);
+    captureScanningSpeedAutoCheck_ = new QCheckBox(QStringLiteral("Auto"), capturePositionContent_);
+    captureScanningSpeedAutoCheck_->setChecked(true);
+    captureScanningSpeedAutoCheck_->setToolTip(
+        QStringLiteral("Record scan speed = frame rate (Hz) \u00D7 spatial_mm_per_pixel \u00D7 spatial binning "
+                       "from hyperfusion.cfg. With dual-camera sync, FX10e is the reference. "
+                       "Otherwise uses the slowest selected camera when multiple are active."));
+    connect(captureScanningSpeedAutoCheck_, &QCheckBox::toggled, this, [this]() {
+        capturePanel()->updateScanningSpeedControls();
+    });
+    scanningSpeedRowLayout->addWidget(scanningSpeedLabel);
+    scanningSpeedRowLayout->addWidget(captureScanningSpeedSpin_, 1);
+    scanningSpeedRowLayout->addWidget(captureScanningSpeedAutoCheck_);
+    scanningSpeedRowLayout->addSpacing(40);
+    positionContentLayout->addLayout(scanningSpeedRowLayout);
+
+    positionLayout->addWidget(capturePositionContent_);
+    if (capturePanel() != nullptr)
+    {
+        capturePanel()->updatePositionControls(stageWorker() != nullptr ? stageWorker()->currentState()
+                                                                       : StageState::Disconnected);
+    }
+
+    auto *preprocessingBox = new QGroupBox(QStringLiteral("Preprocessing"), page);
+    capturePreprocessingBox_ = preprocessingBox;
+    preprocessingBox->setToolTip(
+        tr("Post-processing requires a stage scan with dark and white references. "
+           "Enable \"Use HyperFusion Stage for recording\" to use these options."));
+    auto *preprocessingLayout = new QVBoxLayout(preprocessingBox);
+    preprocessingLayout->setContentsMargins(6, 4, 6, 6);
+    preprocessingLayout->setSpacing(6);
+
+    capturePreprocessAfterScanCheck_ = new QCheckBox(
+        QStringLiteral("Preprocess the image when the scanning is done"), preprocessingBox);
+    capturePreprocessAfterScanCheck_->setChecked(true);
+    capturePreprocessAfterScanCheck_->setToolTip(
+        tr("Run post-processing on captured data after a stage scan sequence completes. "
+           "Requires a connected stage."));
+    preprocessingLayout->addWidget(capturePreprocessAfterScanCheck_);
+
+    captureSaveFfcImageCheck_ =
+        new QCheckBox(QStringLiteral("Save FFC image"), preprocessingBox);
+    captureSaveFfcImageCheck_->setChecked(true);
+    captureSaveFfcImageCheck_->setToolTip(
+        tr("Write flat-field corrected sample data as ENVI under preprocessed/ when post-processing runs."));
+    preprocessingLayout->addWidget(captureSaveFfcImageCheck_);
+
+    captureRunGsamCheck_ =
+        new QCheckBox(QStringLiteral("Run GSAM segmentation"), preprocessingBox);
+    captureRunGsamCheck_->setChecked(false);
+    captureRunGsamCheck_->setToolTip(
+        tr("After preprocessing, send the RGB preview to the GSAM2 WSL server and write masks "
+           "and ROI spectra under preprocessed/segmentation/"));
+
+    auto *gsamServerRow = new QWidget(preprocessingBox);
+    auto *gsamServerLayout = new QHBoxLayout(gsamServerRow);
+    gsamServerLayout->setContentsMargins(0, 0, 0, 0);
+    gsamServerLayout->setSpacing(8);
+    captureGsamStartServerBtn_ = new QPushButton(QStringLiteral("Start server"), gsamServerRow);
+    captureGsamStartServerBtn_->setToolTip(
+        tr("Cold-start the GSAM2 HTTP server in WSL. Keep it running for segmentation requests."));
+    gsamServerLayout->addWidget(captureRunGsamCheck_);
+    gsamServerLayout->addWidget(captureGsamStartServerBtn_);
+    gsamServerLayout->addStretch(1);
+    preprocessingLayout->addWidget(gsamServerRow);
+
+    auto *gsamPromptRow = new QWidget(preprocessingBox);
+    auto *gsamPromptLayout = new QFormLayout(gsamPromptRow);
+    gsamPromptLayout->setContentsMargins(0, 0, 0, 0);
+    gsamPromptLayout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+    gsamPromptLayout->setRowWrapPolicy(QFormLayout::DontWrapRows);
+    captureGsamPromptEdit_ = new QLineEdit(gsamPromptRow);
+    captureGsamPromptEdit_->setPlaceholderText(QStringLiteral("sample."));
+    captureGsamPromptEdit_->setToolTip(tr("GroundingDINO text prompt (e.g. \"grape. leaf.\")."));
+    captureGsamSampleCountSpin_ = new QSpinBox(gsamPromptRow);
+    captureGsamSampleCountSpin_->setRange(1, 100);
+    captureGsamSampleCountSpin_->setValue(5);
+    captureGsamSampleCountSpin_->setToolTip(tr("Maximum number of detections (intended sample count)."));
+    gsamPromptLayout->addRow(QStringLiteral("GSAM prompt"), captureGsamPromptEdit_);
+    gsamPromptLayout->addRow(QStringLiteral("Max samples"), captureGsamSampleCountSpin_);
+    preprocessingLayout->addWidget(gsamPromptRow);
+
+    auto *metadataBox = new QGroupBox(QStringLiteral("Metadata"), page);
+    captureMetadataBox_ = metadataBox;
+    auto *metadataForm = new QFormLayout(metadataBox);
+    metadataForm->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+    metadataForm->setRowWrapPolicy(QFormLayout::DontWrapRows);
+    captureDatasetEdit_ = new QLineEdit(metadataBox);
+    captureDatasetEdit_->setPlaceholderText("Dataset name");
+
+    auto *saveFolderRow = new QWidget(metadataBox);
+    saveFolderRow->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    auto *saveFolderLayout = new QHBoxLayout(saveFolderRow);
+    saveFolderLayout->setContentsMargins(0, 0, 0, 0);
+    saveFolderLayout->setSpacing(6);
+    captureSaveFolderEdit_ = new QLineEdit(saveFolderRow);
+    captureSaveFolderEdit_->setPlaceholderText("Output location");
+    captureSaveFolderEdit_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    captureSaveFolderBrowseBtn_ = new QPushButton(QStringLiteral("Browse\u2026"), saveFolderRow);
+    captureSaveFolderBrowseBtn_->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    captureSaveFolderBrowseBtn_->setFixedWidth(72);
+    saveFolderLayout->addWidget(captureSaveFolderEdit_, 1);
+    saveFolderLayout->addWidget(captureSaveFolderBrowseBtn_, 0);
+
+    captureOperatorEdit_ = new QLineEdit(metadataBox);
+    captureOperatorEdit_->setPlaceholderText("Operator name");
+    captureDescriptionEdit_ = new QPlainTextEdit(metadataBox);
+    captureDescriptionEdit_->setPlaceholderText("Sample description, notes, or experiment details");
+    captureDescriptionEdit_->setTabChangesFocus(true);
+    captureDescriptionEdit_->setLineWrapMode(QPlainTextEdit::WidgetWidth);
+    {
+        const QFontMetrics fm(captureDescriptionEdit_->fontMetrics());
+        const int framePadding = captureDescriptionEdit_->frameWidth() * 2 + 6;
+        captureDescriptionEdit_->setFixedHeight(fm.lineSpacing() * 2 + framePadding);
+    }
+    captureDescriptionEdit_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+    metadataForm->addRow("Dataset", captureDatasetEdit_);
+    metadataForm->addRow("Save folder", saveFolderRow);
+    metadataForm->addRow("Operator", captureOperatorEdit_);
+    metadataForm->addRow("Description", captureDescriptionEdit_);
+
+    connect(captureSaveFolderBrowseBtn_, &QPushButton::clicked, this, [this]() {
+        QString startDir = captureSaveFolderEdit_->text().trimmed();
+        if (startDir.isEmpty())
+        {
+            startDir = QDir::homePath();
+        }
+        else
+        {
+            const QFileInfo startInfo(startDir);
+            if (!startInfo.exists() || !startInfo.isDir())
+                startDir = QDir::homePath();
+        }
+
+        const QString path = QFileDialog::getExistingDirectory(
+            this, tr("Select output location"), startDir);
+        if (path.isEmpty())
+            return;
+
+        const QFileInfo picked(path);
+        if (!picked.exists() || !picked.isDir())
+        {
+            appendLog(QStringLiteral("Capture: save folder does not exist: %1").arg(path));
+            return;
+        }
+
+        captureSaveFolderEdit_->setText(QDir::toNativeSeparators(path));
+        settingsPanel()->schedulePersistedUiSettingsSave();
+        capturePanel()->updateRecorderControls();
+    });
+    if (captureDatasetEdit_ != nullptr)
+    {
+        connect(captureDatasetEdit_, &QLineEdit::textChanged, this, [this]() {
+            capturePanel()->updateRecorderControls();
+        });
+    }
+    if (captureSaveFolderEdit_ != nullptr)
+    {
+        connect(captureSaveFolderEdit_, &QLineEdit::textChanged, this, [this]() {
+            capturePanel()->updateRecorderControls();
+            settingsPanel()->schedulePersistedUiSettingsSave();
+        });
+    }
+
+    layout->addWidget(recorderBox);
+    layout->addWidget(metadataBox);
+    layout->addWidget(captureCamerasBox_);
+    layout->addWidget(positionBox);
+    layout->addWidget(preprocessingBox);
+    if (capturePanel() != nullptr)
+    {
+        capturePanel()->wireSettingsTabConnections();
+        capturePanel()->updateCamerasList();
+        capturePanel()->updateRecorderControls();
+    }
+    return scrollArea;
+}

@@ -15,7 +15,7 @@ OperationWaitDialog::OperationWaitDialog(QWidget *parent)
     setMinimumWidth(360);
 
     auto *layout = new QVBoxLayout(this);
-    statusLabel_ = new QLabel(tr("Working…"), this);
+    statusLabel_ = new QLabel(tr("Working\u2026"), this);
     statusLabel_->setWordWrap(true);
     progressBar_ = new QProgressBar(this);
     progressBar_->setRange(0, 0);
@@ -30,7 +30,16 @@ void OperationWaitDialog::setStatusText(const QString &text)
         statusLabel_->setText(text);
 }
 
+void OperationWaitDialog::finish()
+{
+    allowClose_ = true;
+    accept();
+}
+
 void OperationWaitDialog::closeEvent(QCloseEvent *event)
 {
-    event->ignore();
+    if (allowClose_)
+        event->accept();
+    else
+        event->ignore();
 }

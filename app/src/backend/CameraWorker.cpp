@@ -1,13 +1,16 @@
 // Threaded camera worker implementation for command/control and streaming loops.
 // Both FX10e (Pleora) and SWIR3 (NI grabber) use LumoCamera / Swir3NiCamera behind this worker.
-// Per camera: control thread (commands) + stream thread (pollFrame). Connect/init/disconnect run on
-// the Qt GUI thread via GuiTaskRunner; SpecSensor SI_* is globally serialized in LumoCamera.
+// Per camera: control thread (commands) + stream thread (pollFrame). Connect/init/disconnect and
+// applySettings/arm/start run on a dedicated SdkLifecycleRunner Qt thread when
+// requiresGuiThreadForSdkLifecycle() (SWIR3 cam007 serial during Initialize must not run on the
+// camera control thread; main GUI thread must stay free for Windows responsiveness).
 #include "backend/CameraWorker.hpp"
 
 #include <QCoreApplication>
 #include <QThread>
 
 #include <chrono>
+#include <functional>
 
 namespace
 {
@@ -97,14 +100,7 @@ void CameraWorker::requestConnectAndInitializeOnGuiThread()
         CameraError error;
         bool success = false;
 
-        const auto runOnGui = [this](const std::function<void()> &task) {
-            if (controller_->requiresGuiThreadForSdkLifecycle() && guiTaskRunner_)
-                guiTaskRunner_(task);
-            else
-                task();
-        };
-
-        runOnGui([this, &success, &error]() {
+        runSdkLifecycleTask([this, &success, &error]() {
             const CameraState stateBefore = controller_->state();
             if (stateBefore == CameraState::Disconnected || stateBefore == CameraState::Fault)
             {
@@ -148,10 +144,27 @@ void CameraWorker::waitForStreamIdle()
     }
 }
 
+void CameraWorker::runSdkLifecycleTask(const std::function<void()> &task)
+{
+    GuiTaskRunner runner;
+    {
+        std::lock_guard<std::mutex> lock(callbackMutex_);
+        runner = guiTaskRunner_;
+    }
+
+    if (controller_->requiresGuiThreadForSdkLifecycle() && runner)
+        runner(task);
+    else
+        task();
+}
+
 void CameraWorker::requestApplySettings(const CameraSettings &settings)
 {
     enqueueCommand([this, settings]() {
         CameraError error;
+        CameraTimingApplyResult timing;
+        CameraSettingsApplyReport report;
+        report.requested = settings;
 
         const bool resumeStreaming = streamEnabled_.load()
                                      || controller_->state() == CameraState::Streaming;
@@ -159,43 +172,43 @@ void CameraWorker::requestApplySettings(const CameraSettings &settings)
         {
             streamEnabled_ = false;
             waitForStreamIdle();
-            controller_->stop();
         }
 
-        CameraTimingApplyResult timing;
-        if (!controller_->applySettings(settings, error, &timing))
+        bool ok = false;
+        runSdkLifecycleTask([this, &settings, &error, &timing, &report, resumeStreaming, &ok]() {
+            if (resumeStreaming)
+                controller_->stop();
+
+            if (!controller_->applySettings(settings, error, &timing))
+                return;
+
+            report.timing = timing;
+            notifySettingsApplied(report);
+
+            if (!resumeStreaming)
+            {
+                ok = true;
+                return;
+            }
+
+            if (!controller_->arm(error))
+                return;
+
+            if (!controller_->start(error))
+                return;
+
+            ok = true;
+        });
+
+        if (ok)
         {
-            notifyError(error);
+            if (resumeStreaming)
+                streamEnabled_ = true;
             notifyState(controller_->state());
             return;
         }
 
-        CameraSettingsApplyReport report;
-        report.requested = settings;
-        report.timing = timing;
-        notifySettingsApplied(report);
-
-        if (!resumeStreaming)
-        {
-            notifyState(controller_->state());
-            return;
-        }
-
-        if (!controller_->arm(error))
-        {
-            notifyError(error);
-            notifyState(controller_->state());
-            return;
-        }
-
-        if (!controller_->start(error))
-        {
-            notifyError(error);
-            notifyState(controller_->state());
-            return;
-        }
-
-        streamEnabled_ = true;
+        notifyError(error);
         notifyState(controller_->state());
     });
 }
@@ -204,35 +217,35 @@ void CameraWorker::requestBeginStreaming(const CameraSettings &settings)
 {
     enqueueCommand([this, settings]() {
         CameraError error;
-
         CameraTimingApplyResult timing;
-        if (!controller_->applySettings(settings, error, &timing))
-        {
-            notifyError(error);
-            notifyState(controller_->state());
-            return;
-        }
-
         CameraSettingsApplyReport report;
         report.requested = settings;
-        report.timing = timing;
-        notifySettingsApplied(report);
 
-        if (!controller_->arm(error))
+        bool ok = false;
+        runSdkLifecycleTask([this, &settings, &error, &timing, &report, &ok]() {
+            if (!controller_->applySettings(settings, error, &timing))
+                return;
+
+            report.timing = timing;
+            notifySettingsApplied(report);
+
+            if (!controller_->arm(error))
+                return;
+
+            if (!controller_->start(error))
+                return;
+
+            ok = true;
+        });
+
+        if (ok)
         {
-            notifyError(error);
+            streamEnabled_ = true;
             notifyState(controller_->state());
             return;
         }
 
-        if (!controller_->start(error))
-        {
-            notifyError(error);
-            notifyState(controller_->state());
-            return;
-        }
-
-        streamEnabled_ = true;
+        notifyError(error);
         notifyState(controller_->state());
     });
 }

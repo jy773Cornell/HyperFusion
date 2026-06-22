@@ -1,7 +1,6 @@
 // Detector crosshair widget implementation.
 #include "frontend/widgets/DetectorCrosshairWidget.hpp"
 
-#include <QElapsedTimer>
 #include <QFont>
 #include <QMouseEvent>
 #include <QPainter>
@@ -9,13 +8,13 @@
 #include <QResizeEvent>
 
 #include <algorithm>
+#include <cmath>
 
 namespace ui
 {
 namespace
 {
 constexpr int kHitTolerancePx = 6;
-constexpr int kFpsWindowMs = 500;
 constexpr int kFpsOverlayMarginPx = 6;
 } // namespace
 
@@ -48,51 +47,71 @@ void DetectorCrosshairWidget::setFrameSize(const int width, const int height)
     update();
 }
 
+void DetectorCrosshairWidget::setDetectorImage(const QImage &image)
+{
+    sourceImage_ = image;
+    hasImage_ = !sourceImage_.isNull();
+    disconnectedMessage_.clear();
+    rebuildScaledPixmap();
+    update();
+}
+
+void DetectorCrosshairWidget::setAcquisitionFps(const double fps)
+{
+    const double clamped = std::max(0.0, fps);
+    if (std::abs(clamped - acquisitionFps_) < 0.05)
+        return;
+
+    acquisitionFps_ = clamped;
+    update();
+}
+
 void DetectorCrosshairWidget::setDetectorImage(const QPixmap &pixmap)
 {
+    sourceImage_ = pixmap.toImage();
     pixmap_ = pixmap;
     hasImage_ = !pixmap_.isNull();
     disconnectedMessage_.clear();
-    if (hasImage_)
-        recordIncomingFrame();
     update();
+}
+
+void DetectorCrosshairWidget::rebuildScaledPixmap()
+{
+    if (sourceImage_.isNull() || width() <= 0 || height() <= 0)
+    {
+        pixmap_ = QPixmap();
+        return;
+    }
+
+    const QSize target = sourceImage_.size().scaled(size(), Qt::KeepAspectRatio);
+    if (target.isEmpty())
+    {
+        pixmap_ = QPixmap();
+        return;
+    }
+
+    pixmap_ = QPixmap::fromImage(
+        sourceImage_.scaled(target, Qt::KeepAspectRatio, Qt::FastTransformation));
 }
 
 void DetectorCrosshairWidget::clearDisplay(const QString &message)
 {
+    sourceImage_ = QImage();
     pixmap_ = QPixmap();
     hasImage_ = false;
     disconnectedMessage_ = message;
     frameWidth_ = 0;
     frameHeight_ = 0;
-    fpsFrameCount_ = 0;
-    displayedFps_ = 0.0;
-    fpsWindowTimer_.invalidate();
+    acquisitionFps_ = 0.0;
     update();
-}
-
-void DetectorCrosshairWidget::recordIncomingFrame()
-{
-    if (!fpsWindowTimer_.isValid())
-        fpsWindowTimer_.start();
-
-    ++fpsFrameCount_;
-
-    const qint64 elapsedMs = fpsWindowTimer_.elapsed();
-    if (elapsedMs >= kFpsWindowMs)
-    {
-        displayedFps_ = static_cast<double>(fpsFrameCount_) * 1000.0 / static_cast<double>(elapsedMs);
-        fpsFrameCount_ = 0;
-        fpsWindowTimer_.restart();
-    }
 }
 
 void DetectorCrosshairWidget::drawFpsOverlay(QPainter &painter) const
 {
-    if (displayedFps_ <= 0.0)
+    if (acquisitionFps_ <= 0.0)
         return;
 
-    const QString fpsText = QStringLiteral("%1 fps").arg(displayedFps_, 0, 'f', 1);
+    const QString fpsText = QStringLiteral("%1 fps").arg(acquisitionFps_, 0, 'f', 1);
 
     QFont font = painter.font();
     font.setBold(true);
@@ -190,6 +209,7 @@ void DetectorCrosshairWidget::paintEvent(QPaintEvent *event)
 void DetectorCrosshairWidget::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
+    rebuildScaledPixmap();
     update();
 }
 

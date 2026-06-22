@@ -6,6 +6,7 @@
 #include "adapters/lumo/Swir3NiCamera.hpp"
 #include "frontend/widgets/LumoCameraUi.hpp"
 #include "backend/CameraCoordinator.hpp"
+#include "backend/HyperFusionConfig.hpp"
 #include "frontend/processing/DetectorFrameConverter.hpp"
 
 #include <QCoreApplication>
@@ -14,11 +15,26 @@
 #include <QFileInfo>
 #include <QImage>
 
+#include <functional>
 #include <vector>
 
 namespace
 {
 constexpr auto kFx10eCalibrationFileName = "3210441_20211027_calpack.scp";
+
+bool lumoProfileMatchesFx10eSlot(const QString &name)
+{
+    if (name.contains(QStringLiteral("SWIR"), Qt::CaseInsensitive))
+        return false;
+    return name.contains(QStringLiteral("FX10"), Qt::CaseInsensitive)
+           || name.contains(QStringLiteral("Pleora"), Qt::CaseInsensitive);
+}
+
+bool lumoProfileMatchesSwir3Slot(const QString &name)
+{
+    return name.contains(QStringLiteral("SWIR"), Qt::CaseInsensitive)
+           || name.contains(QStringLiteral("NI"), Qt::CaseInsensitive);
+}
 } // namespace
 
 CameraAppController::CameraAppController(QObject *parent) : QObject(parent) {}
@@ -164,6 +180,12 @@ CameraSettings CameraAppController::settingsFromUi(const LumoCameraUi &ui)
     settings.externalTrigger = false;
     settings.acquisitionTimeoutMs =
         ui.camera != nullptr && ui.camera->sensorKind() == LumoSensorKind::Swir3Ni ? 30000U : 5000U;
+    if (ui.camera != nullptr && ui.camera->sensorKind() == LumoSensorKind::Swir3Ni)
+    {
+        settings.niGrabberChannel = "img0";
+        settings.niImaqCameraFile = "Specim_SWIR3.icd";
+        settings.niCameraSerialPort.clear();
+    }
     settings.deviceIndex = ui.deviceCombo->currentData().toInt();
     if (ui.deviceCombo != nullptr)
         settings.profileName = ui.deviceCombo->currentText().toStdString();
@@ -183,18 +205,22 @@ void CameraAppController::refreshDeviceProfiles()
     CameraError error;
     if (!LumoCamera::enumerateDevices(prep, devices, error))
     {
-        emit logMessage(QStringLiteral("Lumo: profile refresh failed — %1")
+        emit logMessage(QStringLiteral("Lumo: profile refresh failed \u2014 %1")
                             .arg(QString::fromStdString(error.message)));
         return;
     }
 
-    auto populateCombo = [&devices](QComboBox *combo) {
+    auto populateCombo = [&devices](QComboBox *combo,
+                                    const std::function<bool(const LumoDeviceEntry &)> &include) {
         if (combo == nullptr)
             return;
 
         combo->clear();
         for (const LumoDeviceEntry &device : devices)
         {
+            if (!include(device))
+                continue;
+
             const QString label = QString::fromStdString(device.name);
             combo->addItem(label, device.index);
         }
@@ -214,8 +240,12 @@ void CameraAppController::refreshDeviceProfiles()
         return false;
     };
 
-    populateCombo(camera1_->deviceCombo);
-    populateCombo(camera2_->deviceCombo);
+    populateCombo(camera1_->deviceCombo, [](const LumoDeviceEntry &device) {
+        return lumoProfileMatchesFx10eSlot(QString::fromStdString(device.name));
+    });
+    populateCombo(camera2_->deviceCombo, [](const LumoDeviceEntry &device) {
+        return lumoProfileMatchesSwir3Slot(QString::fromStdString(device.name));
+    });
 
     if (!selectProfileHint(camera1_->deviceCombo, QStringLiteral("FX10e with Pleora")))
         selectProfileHint(camera1_->deviceCombo, QStringLiteral("FX10"));
@@ -253,7 +283,7 @@ void CameraAppController::connectOrDisconnect(LumoCameraUi &ui, const QString &p
     const CameraSettings connectionSettings = settingsFromUi(ui);
     ui.camera->prepareConnection(connectionSettings);
     session.connectAttemptActive = true;
-    emit logMessage(QStringLiteral("%1: connect camera — profile %2 (eBUS picker may appear; not ready until Initialized).")
+    emit logMessage(QStringLiteral("%1: connect camera \u2014 profile %2 (eBUS picker may appear; not ready until Initialized).")
                         .arg(panelTitle, ui.deviceCombo->currentText()));
 
     coordinator_->connectAndInitializeOnGuiThread(ui.cameraIndex);

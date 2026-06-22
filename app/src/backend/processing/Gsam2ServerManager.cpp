@@ -52,7 +52,7 @@ QString Gsam2ServerManager::statusText() const
     case State::Stopped:
         return QStringLiteral("Stopped");
     case State::Starting:
-        return QStringLiteral("Starting…");
+        return QStringLiteral("Starting\u2026");
     case State::Running:
         return lastDetail_.isEmpty() ? QStringLiteral("Running") : lastDetail_;
     case State::Failed:
@@ -129,7 +129,7 @@ void Gsam2ServerManager::startServer()
     }
     arguments << QStringLiteral("--") << QStringLiteral("bash") << QStringLiteral("-lc") << inner;
 
-    setState(State::Starting, QStringLiteral("Launching WSL GSAM2 server…"));
+    setState(State::Starting, QStringLiteral("Launching WSL GSAM2 server\u2026"));
     healthPollAttempts_ = 0;
     process_.setProgram(QStringLiteral("wsl.exe"));
     process_.setArguments(arguments);

@@ -1,6 +1,8 @@
 // Profile plot widget implementation.
 #include "frontend/widgets/ProfilePlotWidget.hpp"
 
+#include "frontend/processing/Overexposure.hpp"
+
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
@@ -12,7 +14,6 @@ namespace ui
 {
 namespace
 {
-constexpr double kDnAxisMax = 4096.0;
 constexpr int kTickCount = 9;
 constexpr int kLeftMargin = 46;
 constexpr int kBottomMargin = 28;
@@ -21,10 +22,16 @@ constexpr int kRightMargin = 10;
 } // namespace
 
 ProfilePlotWidget::ProfilePlotWidget(const Mode mode, QWidget *parent)
-    : mode_(mode), QWidget(parent)
+    : QWidget(parent), mode_(mode), dnAxisMax_(kMono12DnAxisMax)
 {
     setMinimumSize(280, 180);
     setStyleSheet(QStringLiteral("background-color: #2a2a2a;"));
+}
+
+void ProfilePlotWidget::setDnAxisMax(const double maxDn)
+{
+    dnAxisMax_ = std::max(1.0, maxDn);
+    update();
 }
 
 void ProfilePlotWidget::setProfile(const std::vector<std::uint16_t> &dnValues,
@@ -83,7 +90,7 @@ std::vector<double> ProfilePlotWidget::nineTickValues(const double minValue, con
 
 void ProfilePlotWidget::drawGridAndAxes(QPainter &painter, const QRect &plotRect) const
 {
-    const auto yTicks = nineTickValues(0.0, kDnAxisMax);
+    const auto yTicks = nineTickValues(0.0, dnAxisMax_);
 
     double xDomainMin = 0.0;
     double xDomainMax = std::max(1.0, static_cast<double>(xMaxInclusive_));
@@ -105,7 +112,7 @@ void ProfilePlotWidget::drawGridAndAxes(QPainter &painter, const QRect &plotRect
     for (const double yTick : yTicks)
     {
         const int y = plotRect.bottom()
-                      - static_cast<int>((yTick / kDnAxisMax) * static_cast<double>(plotRect.height()));
+                      - static_cast<int>((yTick / dnAxisMax_) * static_cast<double>(plotRect.height()));
         painter.drawLine(plotRect.left(), y, plotRect.right(), y);
     }
 
@@ -125,7 +132,7 @@ void ProfilePlotWidget::drawGridAndAxes(QPainter &painter, const QRect &plotRect
     for (const double yTick : yTicks)
     {
         const int y = plotRect.bottom()
-                      - static_cast<int>((yTick / kDnAxisMax) * static_cast<double>(plotRect.height()));
+                      - static_cast<int>((yTick / dnAxisMax_) * static_cast<double>(plotRect.height()));
         painter.drawText(2, y + 4, QString::number(static_cast<int>(yTick)));
     }
 
@@ -209,7 +216,7 @@ void ProfilePlotWidget::drawProfile(QPainter &painter, const QRect &plotRect) co
         const int x = plotRect.left() + static_cast<int>(xNorm * static_cast<double>(plotRect.width()));
         const double dn = static_cast<double>(dnValues_[static_cast<std::size_t>(i)]);
         const int y = plotRect.bottom()
-                      - static_cast<int>((std::min(dn, kDnAxisMax) / kDnAxisMax)
+                      - static_cast<int>((std::min(dn, dnAxisMax_) / dnAxisMax_)
                                          * static_cast<double>(plotRect.height()));
         const QPoint point(x, y);
         if (i == 0)

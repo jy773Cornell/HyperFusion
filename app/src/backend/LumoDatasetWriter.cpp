@@ -206,7 +206,7 @@ bool LumoDatasetWriter::begin(const CaptureWriterSessionConfig &config, QString 
         if (errorMessage != nullptr)
         {
             *errorMessage =
-                QStringLiteral("Dataset folder already exists — choose a different dataset name: %1")
+                QStringLiteral("Dataset folder already exists \u2014 choose a different dataset name: %1")
                     .arg(sessionDirectory_);
         }
         sessionDirectory_.clear();
@@ -363,7 +363,7 @@ bool LumoDatasetWriter::ensureStream(const FramePacket &frame, StreamState *&sta
     if (frame.pixels.size() < required)
     {
         if (errorMessage != nullptr)
-            *errorMessage = QStringLiteral("Frame buffer is smaller than %1 × %2.")
+            *errorMessage = QStringLiteral("Frame buffer is smaller than %1 \u00D7 %2.")
                                  .arg(frame.width)
                                  .arg(frame.height);
         return false;
@@ -380,7 +380,7 @@ bool LumoDatasetWriter::ensureStream(const FramePacket &frame, StreamState *&sta
         if (errorMessage != nullptr)
         {
             *errorMessage =
-                QStringLiteral("%1 frame size changed (%2×%3 → %4×%5).")
+                QStringLiteral("%1 frame size changed (%2\u00D7%3 → %4\u00D7%5).")
                     .arg(state.config.streamName)
                     .arg(state.summary.width)
                     .arg(state.summary.bands)
@@ -430,7 +430,7 @@ bool LumoDatasetWriter::appendReferenceFrame(ReferenceCaptureState &reference,
     if (frame.pixels.size() < required)
     {
         if (errorMessage != nullptr)
-            *errorMessage = QStringLiteral("Frame buffer is smaller than %1 × %2.")
+            *errorMessage = QStringLiteral("Frame buffer is smaller than %1 \u00D7 %2.")
                                  .arg(frame.width)
                                  .arg(frame.height);
         return false;
@@ -460,7 +460,7 @@ bool LumoDatasetWriter::appendReferenceFrame(ReferenceCaptureState &reference,
         if (errorMessage != nullptr)
         {
             *errorMessage =
-                QStringLiteral("%1 frame size changed (%2×%3 → %4×%5).")
+                QStringLiteral("%1 frame size changed (%2\u00D7%3 → %4\u00D7%5).")
                     .arg(fileBaseName)
                     .arg(reference.width)
                     .arg(reference.bands)

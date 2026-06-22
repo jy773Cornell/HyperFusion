@@ -72,17 +72,8 @@ bool saveRoiSpectrumMeanStdPlotPng(const std::vector<double> &wavelengthsNm,
     const double wavelengthMin = wavelengthsNm.front();
     const double wavelengthMax = wavelengthsNm.back();
 
-    double yMax = 0.0;
-    for (const RoiSpectrumSeries &entry : series)
-    {
-        for (std::size_t band = 0; band < entry.mean.size(); ++band)
-        {
-            const double stdValue = band < entry.std.size() ? entry.std[band] : 0.0;
-            yMax = std::max(yMax, entry.mean[band] + stdValue);
-        }
-    }
-    yMax = std::max(0.05, yMax * 1.1);
-    const double yMin = 0.0;
+    constexpr double yMin = 0.0;
+    constexpr double yMax = 1.0;
 
     QImage image(kPlotWidth, kPlotHeight, QImage::Format_RGB32);
     image.fill(Qt::white);
@@ -102,10 +93,16 @@ bool saveRoiSpectrumMeanStdPlotPng(const std::vector<double> &wavelengthsNm,
                           kPlotWidth - kMarginLeft - kMarginRight,
                           kPlotHeight - kMarginTop - kMarginBottom);
 
+    QFont tickFont = painter.font();
+    tickFont.setPointSize(8);
+    painter.setFont(tickFont);
+
+    constexpr int kYTickCount = 6;
     painter.setPen(QPen(QColor(220, 220, 220)));
-    for (int grid = 0; grid <= 4; ++grid)
+    for (int tick = 0; tick < kYTickCount; ++tick)
     {
-        const double yValue = yMin + (static_cast<double>(grid) / 4.0) * (yMax - yMin);
+        const double yValue =
+            yMin + (static_cast<double>(tick) / static_cast<double>(kYTickCount - 1)) * (yMax - yMin);
         const QPointF left =
             mapDataToPlot(plotRect, wavelengthMin, wavelengthMax, yMin, yMax, wavelengthMin, yValue);
         const QPointF right =
@@ -115,6 +112,42 @@ bool saveRoiSpectrumMeanStdPlotPng(const std::vector<double> &wavelengthsNm,
 
     painter.setPen(QPen(Qt::black, 1.2));
     painter.drawRect(plotRect);
+
+    painter.setPen(Qt::black);
+    for (int tick = 0; tick < kYTickCount; ++tick)
+    {
+        const double yValue =
+            yMin + (static_cast<double>(tick) / static_cast<double>(kYTickCount - 1)) * (yMax - yMin);
+        const QPointF plotPoint =
+            mapDataToPlot(plotRect, wavelengthMin, wavelengthMax, yMin, yMax, wavelengthMin, yValue);
+        painter.drawLine(QPointF(plotRect.left() - 5.0, plotPoint.y()),
+                         QPointF(plotRect.left(), plotPoint.y()));
+        painter.drawText(QRect(4,
+                               static_cast<int>(std::lround(plotPoint.y())) - 8,
+                               kMarginLeft - 12,
+                               16),
+                         Qt::AlignRight | Qt::AlignVCenter,
+                         QString::number(yValue, 'f', 1));
+    }
+
+    constexpr int kXTickCount = 6;
+    for (int tick = 0; tick < kXTickCount; ++tick)
+    {
+        const double wavelength =
+            wavelengthMin
+            + (static_cast<double>(tick) / static_cast<double>(kXTickCount - 1))
+                  * (wavelengthMax - wavelengthMin);
+        const QPointF plotPoint =
+            mapDataToPlot(plotRect, wavelengthMin, wavelengthMax, yMin, yMax, wavelength, yMin);
+        painter.drawLine(QPointF(plotPoint.x(), plotRect.bottom()),
+                         QPointF(plotPoint.x(), plotRect.bottom() + 5.0));
+        painter.drawText(QRect(static_cast<int>(std::lround(plotPoint.x())) - 28,
+                               kPlotHeight - kMarginBottom + 6,
+                               56,
+                               20),
+                         Qt::AlignHCenter | Qt::AlignTop,
+                         QString::number(static_cast<int>(std::lround(wavelength))));
+    }
 
     const std::size_t bandCount = wavelengthsNm.size();
     for (std::size_t seriesIndex = 0; seriesIndex < series.size(); ++seriesIndex)

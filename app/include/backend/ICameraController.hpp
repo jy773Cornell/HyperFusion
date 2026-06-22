@@ -15,7 +15,7 @@ public:
     virtual CameraBackendId backendId() const = 0;
     virtual LumoSensorKind sensorKind() const { return LumoSensorKind::Fx10ePleora; }
 
-    /// Pleora (FX10e) init/teardown must run on the Qt GUI thread; NI (SWIR3) uses the same path today.
+    /// Pleora (FX10e) and SWIR3 SDK lifecycle must not run on the camera control thread.
     virtual bool requiresGuiThreadForSdkLifecycle() const { return true; }
 
     virtual bool connect(CameraError &error) = 0;

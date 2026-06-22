@@ -201,15 +201,13 @@ bool applySwirNiSetupBeforeInitialize(const SI_H handle,
                                 true))
         return false;
 
-    // Camera.Channel is the cam007 serial port (OpenSerialPort / AIM SWIR), not the IMAQdx name — do not set to img0.
+    // Camera.Channel is cam007 serial (AIM SWIR head), not the IMAQdx grabber name. Scb.Channel is
+    // left to the SDK \u2014 HyperFusion does not set it (wrong COM causes Initialize SCB Read / -1301).
     if (!setHandleStringFeature(handle,
                                 L"Camera.Channel",
                                 toWide(settings.niCameraSerialPort),
                                 error,
                                 false))
-        return false;
-
-    if (!setHandleStringFeature(handle, L"Scb.Channel", toWide(settings.niScbSerialPort), error, false))
         return false;
 
     return true;
@@ -287,6 +285,66 @@ std::string LumoCamera::resolveNiImaqCameraFilePath(const std::string &fileName)
     return sdkPath.string();
 }
 
+std::string LumoCamera::swirNiConnectionSummary() const
+{
+#if defined(HF_HAVE_LUMO_SDK)
+    LumoGlobalLock lumoApi;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (sensorKind_ != LumoSensorKind::Swir3Ni || handle_ == nullptr)
+        return {};
+
+    const SI_H handle = static_cast<SI_H>(handle_);
+    const auto readFeature = [handle](const wchar_t *feature) -> std::string {
+        const std::string value = getHandleStringFeature(handle, feature);
+        return value.empty() ? std::string("(none)") : value;
+    };
+
+    return "Grabber.Channel=" + readFeature(L"Grabber.Channel") + ", Camera.Channel="
+           + readFeature(L"Camera.Channel") + ", Scb.Channel=" + readFeature(L"Scb.Channel");
+#else
+    return {};
+#endif
+}
+
+bool LumoCamera::readAppliedFrameRateHz(double &outHz, CameraError &error)
+{
+#if defined(HF_HAVE_LUMO_SDK)
+    LumoGlobalLock lumoApi;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (handle_ == nullptr)
+    {
+        error.code = CameraErrorCode::InvalidState;
+        error.message = tag() + " sensor handle not open.";
+        error.fatal = false;
+        return false;
+    }
+
+    if (state_ != CameraState::Initialized && state_ != CameraState::Configured
+        && state_ != CameraState::Armed && state_ != CameraState::Streaming
+        && state_ != CameraState::SafeStopped)
+    {
+        error.code = CameraErrorCode::InvalidState;
+        error.message = tag() + " sensor not initialized.";
+        error.fatal = false;
+        return false;
+    }
+
+    const SI_H handle = static_cast<SI_H>(handle_);
+    double hz = settings_.frameRateHz;
+    if (!checkSi(SI_GetFloat(handle, L"Camera.FrameRate", &hz),
+                 "SI_GetFloat(Camera.FrameRate)",
+                 error))
+        return false;
+
+    outHz = hz;
+    return true;
+#else
+    (void)error;
+    outHz = settings_.frameRateHz;
+    return handle_ != nullptr;
+#endif
+}
+
 LumoCamera::LumoCamera(const CameraBackendId backendId,
                        std::string instanceLabel,
                        const LumoSensorKind sensorKind)
@@ -317,7 +375,6 @@ void LumoCamera::prepareConnection(const CameraSettings &settings)
     settings_.niGrabberChannel = settings.niGrabberChannel;
     settings_.niImaqCameraFile = settings.niImaqCameraFile;
     settings_.niCameraSerialPort = settings.niCameraSerialPort;
-    settings_.niScbSerialPort = settings.niScbSerialPort;
 }
 
 std::string LumoCamera::name() const
@@ -731,7 +788,7 @@ bool LumoCamera::initialize(CameraError &error)
                  || error.message.find("IMAQdx") != std::string::npos)
         {
             error.message +=
-                " NI IMAQdx could not open the camera — fix in NI MAX first (Snap/Grab on the IMAQdx device): "
+                " NI IMAQdx could not open the camera \u2014 fix in NI MAX first (Snap/Grab on the IMAQdx device): "
                 "GigE: camera and NIC on same subnet, use NI GigE Vision driver; "
                 "Camera Link: power (PoCL), Base/Medium cable orientation, frame grabber in MAX. "
                 "Close other apps using the camera, then retry.";
@@ -759,15 +816,20 @@ bool LumoCamera::initialize(CameraError &error)
                 error.message += ", Camera.Channel=" + settings_.niCameraSerialPort;
             else
                 error.message += ", Camera.Channel=(not set)";
-            if (!settings_.niScbSerialPort.empty())
-                error.message += ", Scb=" + settings_.niScbSerialPort;
-            else
-                error.message += ", Scb=(not set)";
             error.message += ". Match working bench: img0 + Specim_SWIR3.icd (SWIR3 with NI SSP default).";
             if (!grabberOptions.empty())
                 error.message += " SDK Grabber.Channel options: " + grabberOptions + ".";
             if (!deviceNameUtf8.empty())
                 error.message += " SSP profile: " + deviceNameUtf8 + ".";
+        }
+        else if (sensorKind_ == LumoSensorKind::Swir3Ni
+                 && (error.message.find("SCB Read failed") != std::string::npos
+                     || error.message.find("-1301") != std::string::npos))
+        {
+            error.message +=
+                " Specim -1301: SCB serial init failed. HyperFusion does not set Scb.Channel \u2014 remove "
+                "scb_serial_port from hyperfusion.cfg if present, ensure PCU USB1 is connected (Lumo "
+                "autoconnects SCB), and verify Camera.Channel/COM6 is the camera head only.";
         }
         rollbackOpenConnection();
         return false;

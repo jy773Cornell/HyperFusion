@@ -72,6 +72,8 @@ private:
     void notifySettingsApplied(const CameraSettingsApplyReport &report);
     void publishShutterState();
     void waitForStreamIdle();
+    /// SpecSensor / cam007 serial handles may be thread-affined; match Lumo by running on GUI thread.
+    void runSdkLifecycleTask(const std::function<void()> &task);
 
     std::shared_ptr<ICameraController> controller_;
 

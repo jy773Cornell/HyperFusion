@@ -11,7 +11,7 @@ namespace ui
 namespace
 {
 constexpr int kDefaultMaxLines = 512;
-constexpr std::size_t kMaxQueueDepth = 2;
+constexpr std::size_t kMaxQueueDepth = 256;
 } // namespace
 
 WaterfallProcessor::WaterfallProcessor() = default;
@@ -48,7 +48,10 @@ void WaterfallProcessor::reset()
 {
     std::lock_guard<std::mutex> stateLock(stateMutex_);
     waterfallImage_ = QImage();
+    publishSnapshot_ = QImage();
     lineCount_ = 0;
+    displayDirty_ = false;
+    lastPublishAt_ = {};
 }
 
 void WaterfallProcessor::setMaxLines(const int maxLines)
@@ -71,9 +74,19 @@ void WaterfallProcessor::setImageReadyCallback(ImageReadyCallback callback)
     imageReadyCallback_ = std::move(callback);
 }
 
-void WaterfallProcessor::submitFrame(FramePacket frame)
+void WaterfallProcessor::setPublishIntervalMs(const int intervalMs)
 {
-    if (!running_.load())
+    {
+        std::lock_guard<std::mutex> stateLock(stateMutex_);
+        publishInterval_ = std::chrono::milliseconds(std::max(16, intervalMs));
+    }
+    forcePublish_.store(true, std::memory_order_release);
+    queueCv_.notify_one();
+}
+
+void WaterfallProcessor::submitFrame(SharedFramePacket frame)
+{
+    if (!running_.load() || !frame)
         return;
 
     PendingFrame pending;
@@ -85,7 +98,7 @@ void WaterfallProcessor::submitFrame(FramePacket frame)
 
     {
         std::lock_guard<std::mutex> queueLock(queueMutex_);
-        while (queue_.size() >= kMaxQueueDepth)
+        if (queue_.size() >= kMaxQueueDepth)
             queue_.pop_front();
         queue_.push_back(std::move(pending));
     }
@@ -123,19 +136,35 @@ void WaterfallProcessor::appendRgbLine(const std::vector<std::uint8_t> &rgbRow, 
     const int targetRow = lineCount_ - 1;
     auto *scanLine = waterfallImage_.scanLine(targetRow);
     std::memcpy(scanLine, rgbRow.data(), static_cast<std::size_t>(width) * 3);
+    displayDirty_ = true;
 }
 
 void WaterfallProcessor::publishImage()
 {
-    QImage snapshot;
     int activeLines = 0;
+    int width = 0;
     {
         std::lock_guard<std::mutex> stateLock(stateMutex_);
         if (waterfallImage_.isNull() || lineCount_ <= 0)
             return;
 
         activeLines = lineCount_;
-        snapshot = waterfallImage_.copy(0, 0, waterfallImage_.width(), activeLines);
+        width = waterfallImage_.width();
+        if (publishSnapshot_.width() != width || publishSnapshot_.height() != activeLines
+            || publishSnapshot_.format() != QImage::Format_RGB888)
+        {
+            publishSnapshot_ = QImage(width, activeLines, QImage::Format_RGB888);
+        }
+
+        for (int y = 0; y < activeLines; ++y)
+        {
+            std::memcpy(publishSnapshot_.scanLine(y),
+                        waterfallImage_.scanLine(y),
+                        static_cast<std::size_t>(width) * 3);
+        }
+
+        displayDirty_ = false;
+        lastPublishAt_ = std::chrono::steady_clock::now();
     }
 
     ImageReadyCallback callback;
@@ -145,7 +174,35 @@ void WaterfallProcessor::publishImage()
     }
 
     if (callback)
-        callback(std::move(snapshot));
+        callback(publishSnapshot_);
+}
+
+void WaterfallProcessor::maybePublishImage()
+{
+    const bool force = forcePublish_.exchange(false, std::memory_order_acq_rel);
+    bool shouldPublish = false;
+    {
+        std::lock_guard<std::mutex> stateLock(stateMutex_);
+        if (!displayDirty_)
+            return;
+
+        if (force)
+        {
+            shouldPublish = true;
+        }
+        else
+        {
+            const auto now = std::chrono::steady_clock::now();
+            if (lastPublishAt_ == std::chrono::steady_clock::time_point{}
+                || now - lastPublishAt_ >= publishInterval_)
+            {
+                shouldPublish = true;
+            }
+        }
+    }
+
+    if (shouldPublish)
+        publishImage();
 }
 
 void WaterfallProcessor::threadLoop()
@@ -153,28 +210,41 @@ void WaterfallProcessor::threadLoop()
     while (running_.load())
     {
         PendingFrame pending;
+        bool hasFrame = false;
         {
             std::unique_lock<std::mutex> queueLock(queueMutex_);
-            queueCv_.wait(queueLock, [this]() { return !running_.load() || !queue_.empty(); });
-            if (!running_.load() && queue_.empty())
+            queueCv_.wait(queueLock, [this]() {
+                return !running_.load() || !queue_.empty()
+                       || forcePublish_.load(std::memory_order_acquire);
+            });
+            if (!running_.load() && queue_.empty()
+                && !forcePublish_.load(std::memory_order_acquire))
                 break;
-            if (queue_.empty())
-                continue;
 
-            pending = std::move(queue_.front());
-            queue_.pop_front();
+            if (!queue_.empty())
+            {
+                pending = std::move(queue_.front());
+                queue_.pop_front();
+                hasFrame = true;
+            }
+        }
+
+        if (!hasFrame)
+        {
+            maybePublishImage();
+            continue;
         }
 
         std::vector<std::uint8_t> rgbRow;
-        if (!extractRgbLineFromBilFrame(pending.packet, pending.bands, rgbRow))
+        if (!extractRgbLineFromBilFrame(*pending.packet, pending.bands, rgbRow))
             continue;
 
         {
             std::lock_guard<std::mutex> stateLock(stateMutex_);
-            appendRgbLine(rgbRow, pending.packet.width);
+            appendRgbLine(rgbRow, pending.packet->width);
         }
 
-        publishImage();
+        maybePublishImage();
     }
 }
 } // namespace ui

@@ -28,6 +28,12 @@ public:
     /// Full path to NI IMAQ .icd under Lumo SDK or external/NI beside app.exe.
     static std::string resolveNiImaqCameraFilePath(const std::string &fileName);
 
+    /// After Initialize: Grabber/Camera/Scb channel readback (SWIR3+NI only).
+    std::string swirNiConnectionSummary() const;
+
+    /// Read Camera.FrameRate from the SDK (GUI thread; valid while sensor handle is open).
+    bool readAppliedFrameRateHz(double &outHz, CameraError &error);
+
     std::string name() const override;
     CameraBackendId backendId() const override;
     LumoSensorKind sensorKind() const override;

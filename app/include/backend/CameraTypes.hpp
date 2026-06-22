@@ -2,6 +2,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -63,10 +64,8 @@ struct CameraSettings
     std::string niGrabberChannel;
     /// NI IMAQdx (SWIR3): NiImaq.CameraFile ICD in SDK external/NI, default Specim_SWIR3.icd per SSP.
     std::string niImaqCameraFile;
-    /// cam007 AIM SWIR serial (Camera.Channel). Lumo OpenSerialPort; empty = SDK default. Not img0 / not Zaber.
+    /// cam007 AIM SWIR serial (Camera.Channel). Lumo OpenSerialPort; empty = SDK autoconnect. Not img0 / not Zaber.
     std::string niCameraSerialPort;
-    /// SCB module serial (Scb.Channel). Empty = SDK default. Not the Zaber COM port.
-    std::string niScbSerialPort;
     /// False-color RGB band indices (from calibration pack wavelength table).
     int redBandIndex = 193;
     int greenBandIndex = 112;
@@ -110,3 +109,5 @@ struct FramePacket
     int height = 0;
     std::vector<std::uint16_t> pixels;
 };
+
+using SharedFramePacket = std::shared_ptr<FramePacket>;

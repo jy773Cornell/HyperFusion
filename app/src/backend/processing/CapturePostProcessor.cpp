@@ -219,7 +219,7 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
             {
                 report.errorMessage = error;
                 logLines.push_back(
-                    QStringLiteral("Capture post-process (%1): dark reference plot failed — %2")
+                    QStringLiteral("Capture post-process (%1): dark reference plot failed \u2014 %2")
                         .arg(streamLabel, error));
             }
         }
@@ -237,7 +237,7 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
         {
             if (report.errorMessage.isEmpty())
                 report.errorMessage = QStringLiteral("White row reference failed: %1").arg(error);
-            logLines.push_back(QStringLiteral("Capture post-process (%1): white row reference failed — %2")
+            logLines.push_back(QStringLiteral("Capture post-process (%1): white row reference failed \u2014 %2")
                                    .arg(streamLabel, error));
         }
         else
@@ -260,7 +260,7 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
                 if (report.errorMessage.isEmpty())
                     report.errorMessage = error;
                 logLines.push_back(
-                    QStringLiteral("Capture post-process (%1): white reference plot failed — %2")
+                    QStringLiteral("Capture post-process (%1): white reference plot failed \u2014 %2")
                         .arg(streamLabel, error));
             }
         }

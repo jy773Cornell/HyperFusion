@@ -1,4 +1,4 @@
-// DN profile plot (wavelength or spatial) with fixed 12-bit Y axis and nine ticks.
+// DN profile plot (wavelength or spatial) with configurable fixed Y axis (Mono12 or Mono16).
 #pragma once
 
 #include <QString>
@@ -21,6 +21,10 @@ public:
     };
 
     explicit ProfilePlotWidget(Mode mode, QWidget *parent = nullptr);
+
+    /// Fixed DN axis maximum for Y grid and profile scaling (default Mono12 / 4096).
+    void setDnAxisMax(double maxDn);
+    double dnAxisMax() const { return dnAxisMax_; }
 
     void setProfile(const std::vector<std::uint16_t> &dnValues, int xMaxInclusive);
     /// Wavelength mode: optional nm lookup per band index for X tick labels (size >= band count).
@@ -46,5 +50,6 @@ private:
     int greenBandMarker_ = -1;
     int blueBandMarker_ = -1;
     std::vector<double> wavelengthNmByBand_;
+    double dnAxisMax_ = 4096.0;
 };
 } // namespace ui

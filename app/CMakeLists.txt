@@ -55,6 +55,26 @@ qt_add_executable(app
     src/frontend/widgets/StageAxisWidget.cpp
     src/frontend/widgets/IntensityBarWidget.cpp
     src/frontend/widgets/OperationWaitDialog.cpp
+    src/frontend/widgets/WaterfallDisplayWidget.cpp
+    src/frontend/widgets/StreamPaneHelpers.cpp
+    src/frontend/widgets/CameraStreamTabBuilder.cpp
+    # frontend/controllers — tab orchestration
+    src/frontend/controllers/StagePanelController.cpp
+    src/frontend/controllers/LightPanelController.cpp
+    src/frontend/controllers/CameraPanelController.cpp
+    src/frontend/controllers/UiSettingsController.cpp
+    src/frontend/controllers/CapturePanelController.cpp
+    src/frontend/widgets/MainWindowTabHelpers.cpp
+    src/frontend/widgets/SettingsTabPanelBuilder.cpp
+    src/frontend/widgets/CameraSettingsTab.cpp
+    src/frontend/widgets/StageSettingsTab.cpp
+    src/frontend/widgets/LightSettingsTab.cpp
+    src/frontend/widgets/Ur3eSettingsTab.cpp
+    src/frontend/widgets/CaptureSettingsTab.cpp
+    src/frontend/streaming/FrameCoalescer.cpp
+    src/frontend/streaming/CameraStreamPipeline.cpp
+    src/frontend/processing/DetectorFrameProcessor.cpp
+    src/frontend/processing/WavelengthLookup.cpp
     include/frontend/widgets/MainWindow.hpp
     include/frontend/widgets/OperationWaitDialog.hpp
     include/frontend/widgets/DetectorCrosshairWidget.hpp
@@ -62,6 +82,21 @@ qt_add_executable(app
     include/frontend/widgets/StageAxisWidget.hpp
     include/frontend/widgets/IntensityBarWidget.hpp
     include/frontend/widgets/LumoCameraUi.hpp
+    include/frontend/widgets/WaterfallDisplayWidget.hpp
+    include/frontend/widgets/StreamPaneHelpers.hpp
+    include/frontend/widgets/CameraStreamTabBuilder.hpp
+    include/frontend/controllers/StagePanelController.hpp
+    include/frontend/controllers/LightPanelController.hpp
+    include/frontend/controllers/CameraPanelController.hpp
+    include/frontend/controllers/UiSettingsController.hpp
+    include/frontend/controllers/CapturePanelController.hpp
+    include/frontend/widgets/MainWindowTabHelpers.hpp
+    include/frontend/widgets/SettingsTabPanelBuilder.hpp
+    include/frontend/streaming/FrameCoalescer.hpp
+    include/frontend/streaming/CameraStreamPipeline.hpp
+    include/frontend/streaming/StreamFpsTracker.hpp
+    include/frontend/processing/DetectorFrameProcessor.hpp
+    include/frontend/processing/WavelengthLookup.hpp
     # frontend/processing — frame pipelines (worker threads, extractors)
     src/frontend/processing/BilProfileExtractor.cpp
     src/frontend/processing/DetectorFrameConverter.cpp
@@ -76,6 +111,7 @@ qt_add_executable(app
     include/frontend/settings/AppSettingsStore.hpp
     # backend — device-agnostic workers, orchestration, I/O
     src/backend/CameraWorker.cpp
+    src/backend/SdkLifecycleRunner.cpp
     src/backend/StageWorker.cpp
     src/backend/LighthouseWorker.cpp
     src/backend/LumoDatasetWriter.cpp
@@ -102,6 +138,7 @@ qt_add_executable(app
     include/backend/CameraTypes.hpp
     include/backend/ICameraController.hpp
     include/backend/CameraWorker.hpp
+    include/backend/SdkLifecycleRunner.hpp
     include/backend/StageTypes.hpp
     include/backend/IStageController.hpp
     include/backend/StageWorker.hpp

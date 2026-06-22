@@ -1,7 +1,13 @@
 // Main application window UI layout and control wiring.
 #pragma once
 
-#include <QElapsedTimer>
+#include "adapters/lumo/LumoDeviceTypes.hpp"
+#include "backend/CameraTypes.hpp"
+#include "backend/LighthouseTypes.hpp"
+#include "backend/StageTypes.hpp"
+#include "frontend/controllers/CapturePanelController.hpp"
+#include "frontend/widgets/LumoCameraUi.hpp"
+
 #include <QImage>
 #include <QMainWindow>
 
@@ -12,28 +18,27 @@
 #include <optional>
 #include <vector>
 
-#include "adapters/lumo/LumoDeviceTypes.hpp"
-#include "adapters/lumo/CalpackBandCatalog.hpp"
-#include "backend/CameraTypes.hpp"
-#include "backend/LighthouseTypes.hpp"
-#include "backend/StageTypes.hpp"
-#include "backend/CameraCoordinator.hpp"
-#include "backend/CaptureWriterTypes.hpp"
-#include "frontend/processing/ProfileProcessor.hpp"
-#include "frontend/processing/WaterfallProcessor.hpp"
-
-namespace hf::processing
+namespace hf::camera
 {
-class Gsam2ServerManager;
+class CameraPanelController;
 }
 
-class CaptureWriterWorker;
-class CapturePostProcessorWorker;
-class LumoCamera;
-class QLabel;
-class QGroupBox;
-class Swir3NiCamera;
+namespace hf::light
+{
+class LightPanelController;
+}
 
+namespace hf::settings
+{
+class UiSettingsController;
+}
+
+namespace hf::stage
+{
+class StagePanelController;
+}
+
+class CameraCoordinator;
 class LighthouseWorker;
 class OperationWaitDialog;
 class StageWorker;
@@ -58,46 +63,8 @@ class DetectorCrosshairWidget;
 class IntensityBarWidget;
 class ProfilePlotWidget;
 class StageAxisWidget;
+class WaterfallDisplayWidget;
 } // namespace ui
-
-struct LumoCameraUi
-{
-    std::shared_ptr<LumoCamera> camera;
-    LumoSensorKind sensorKind = LumoSensorKind::Fx10ePleora;
-    std::size_t cameraIndex = 0;
-    CameraState state = CameraState::Disconnected;
-    bool autoStreamStarted = false;
-    bool connectAttemptActive = false;
-    bool shutterReportedOpen = false;
-
-    QComboBox *deviceCombo = nullptr;
-    QLineEdit *calibrationPackEdit = nullptr;
-    QPushButton *calibrationPackBrowseBtn = nullptr;
-    QPushButton *connectBtn = nullptr;
-    QPushButton *applyBtn = nullptr;
-    QDoubleSpinBox *exposureSpin = nullptr;
-    int frameWidth = 0;
-    int frameHeight = 0;
-
-    QGroupBox *detectorPane = nullptr;
-    QGroupBox *waterfallPane = nullptr;
-    QGroupBox *wavelengthPane = nullptr;
-    QGroupBox *pixelStreamPane = nullptr;
-    ui::DetectorCrosshairWidget *detectorView = nullptr;
-    QLabel *waterfallView = nullptr;
-    ui::ProfilePlotWidget *wavelengthView = nullptr;
-    ui::ProfilePlotWidget *pixelStreamView = nullptr;
-    QDoubleSpinBox *frameRateSpin = nullptr;
-    QComboBox *spectralBinningCombo = nullptr;
-    QComboBox *spatialBinningCombo = nullptr;
-    QLabel *shutterIndicator = nullptr;
-    QLabel *shutterStatusLabel = nullptr;
-    QPushButton *shutterToggleBtn = nullptr;
-    QComboBox *redBandCombo = nullptr;
-    QComboBox *greenBandCombo = nullptr;
-    QComboBox *blueBandCombo = nullptr;
-    std::vector<SpectralBand> spectralBands;
-};
 
 struct LighthouseRowUi
 {
@@ -112,9 +79,29 @@ class MainWindow : public QMainWindow
 {
     Q_OBJECT
 
+    friend class hf::capture::CapturePanelController;
+    friend class hf::stage::StagePanelController;
+    friend class hf::light::LightPanelController;
+    friend class hf::camera::CameraPanelController;
+    friend class hf::settings::UiSettingsController;
+
 public:
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
+
+    [[nodiscard]] hf::capture::CapturePanelController *capturePanel() const;
+    [[nodiscard]] hf::stage::StagePanelController *stagePanel() const;
+    [[nodiscard]] hf::light::LightPanelController *lightPanel() const;
+    [[nodiscard]] hf::camera::CameraPanelController *cameraPanel() const;
+    [[nodiscard]] hf::settings::UiSettingsController *settingsPanel() const;
+
+    [[nodiscard]] StageWorker *stageWorker() const;
+    [[nodiscard]] LighthouseWorker *lighthouseWorker() const;
+    [[nodiscard]] CameraCoordinator *coordinator() const;
+
+    [[nodiscard]] bool isCaptureSessionActive() const;
+
+    void appendLog(const QString &message);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -133,219 +120,10 @@ private:
     QWidget *createLightSettingsTab();
     QWidget *createUr3eSettingsTab();
     QWidget *createCaptureSettingsTab();
-    QWidget *createCaptureStreamTab();
-    QWidget *createStreamTabPage(const QString &cameraName, LumoCameraUi &cameraUi);
     QWidget *createRgbUr3eStreamTab();
-    QGroupBox *createPreviewPane(const QString &title, QLabel *&labelOut);
-    QGroupBox *createStreamPane(const QString &title, QWidget *contentWidget);
-
     QWidget *createLumoCameraGroup(QWidget *parent, LumoCameraUi &ui, LumoSensorKind sensorKind);
-    CameraSettings buildCameraSettings(const LumoCameraUi &ui) const;
-    static QString shortProfileTabName(const QString &profileName);
-    QString profileTabNameForUi(const LumoCameraUi &ui) const;
-    void updateCameraTabLabel(const LumoCameraUi &ui);
-    void refreshBandCombos(LumoCameraUi &ui);
-    static void selectBandComboIndex(QComboBox *combo, int bandIndex);
-    static QString resolveBundledCalibrationPackPath(const QString &fileName);
-    static QString defaultFx10eCalibrationPackPath();
-    static QString defaultSwir3CalibrationPackPath();
-    static QString defaultCalibrationPackPathForProfile(const QString &profileName,
-                                                        LumoSensorKind sensorKind);
-    static QString calibrationPackPath(const LumoCameraUi &ui);
-    static void setCalibrationPackDisplay(QLineEdit *edit, const QString &fullPath);
-    void syncCalibrationPackToSelectedProfile(LumoCameraUi &ui);
 
-    void appendLog(const QString &message);
-    void refreshLumoDeviceLists();
-    void refreshStageComPortList();
-    QString selectedStagePortName() const;
-    void setupStageWorker();
-    void setupLighthouseWorker();
-    void updateStageConnectionControls(StageState state, bool refreshCaptureControls = true);
-    void updateStageDeviceDisplay(const StageTopology &topology);
-    void clearStageDeviceDisplay();
-    void onStageStateChanged(StageState state);
-    void onStageTopologyChanged(const StageTopology &topology);
-    void onStageError(const StageError &error);
-    void onLighthouseStateChanged(LighthouseState state);
-    void onLighthouseDeviceInfoChanged(const LighthouseDeviceInfo &info);
-    void onLighthouseSettingsChanged(const LighthouseSettings &settings);
-    void onLighthousePowerStatusChanged(const LighthouseControllerPowerStatus &status);
-    void onLighthouseError(const LighthouseError &error);
-    void updateStageMotionControls(StageState state);
-    void updateStagePositionDisplay(double positionMm);
-    void pollStagePosition();
-    void updateCaptureCamerasList();
-    void updateCaptureStreamLayout();
-    LumoCameraUi *cameraUiForIndex(std::size_t cameraIndex);
-    void updateCaptureCameraPositionRows();
-    void updateCapturePositionControls(StageState state);
-    void updateCaptureRecorderControls();
-    void updateCaptureGsamServerUi();
-    void updateCaptureSessionUiLock();
-    void updateCaptureRecorderStatus();
-    void notifyCaptureRecordComplete();
-    void beginCaptureRecordCompleteNotify();
-    void tryNotifyCaptureRecordComplete();
-    double autoRecordScanSpeedMmPerSec() const;
-    void updateCaptureScanningSpeedControls();
-    bool bothFx10eAndSwir3CaptureCamerasConnected() const;
-    bool dualCameraScanSyncActive() const;
-    void updateCaptureDualCameraSyncControls();
-    void applyDualCameraScanSync(bool applyToHardware = true);
-    struct CaptureScanPlan
-    {
-        double whiteRefStartMm[2] = {0.0, 0.0};
-        double brightRefStartMm[2] = {0.0, 0.0};
-        double sampleScanStartMm[2] = {0.0, 0.0};
-        double sampleScanOriginMm = 0.0;
-        double sampleScanTotalDistanceMm = 0.0;
-        double sampleScanLengthMm = 0.0;
-        double whiteRefScanOriginMm = 0.0;
-        double whiteRefScanTotalDistanceMm = 0.0;
-        double whiteRefScanDistanceMm[2] = {0.0, 0.0};
-        double operationSpeedMmPerSec = 0.0;
-        double recordScanSpeedMmPerSec = 0.0;
-        int whiteReferenceFrameCount = 0;
-        int blackReferenceFrameCount = 0;
-    };
-    enum class CaptureScanPhase
-    {
-        Idle,
-        MoveToFirstRefPosition,
-        MoveToTempStopPosition,
-        MoveToWhiteRefScanOrigin,
-        MoveToSampleScanOrigin,
-        BlackReference,
-        WhiteReferenceScan,
-        SampleScan,
-    };
-    bool buildCaptureScanPlan(CaptureScanPlan &plan, QString &errorMessage) const;
-    QString captureSequenceLogPrefix() const;
-    void resetCaptureSequenceState();
-    void initializeCaptureModeQueue();
-    bool confirmCaptureStart(const LighthouseControllerPowerStatus &powerStatus) const;
-    bool confirmCaptureHoodPreparation(CaptureIlluminationMode mode, bool betweenReflectanceAndTransmittance) const;
-    void startCurrentCaptureMode();
-    void beginCaptureModeMotion();
-    void beginCaptureMoveToTempStopPosition();
-    void completeCaptureModeSequence();
-    void startCaptureSequence();
-    void requestCaptureAbsoluteMove(double positionMm,
-                                    CaptureScanPhase expectedPhaseOnComplete,
-                                    double speedMmPerSec = 0.0);
-    void onCaptureAbsoluteMoveComplete(bool success);
-    void beginCaptureMoveToFirstRefPosition();
-    void beginCaptureBlackReference();
-    void onCaptureBlackReferenceComplete();
-    void beginCaptureWhiteReferenceSequence();
-    void beginCaptureMoveToWhiteRefScanOrigin();
-    void beginCaptureWhiteReferenceScan();
-    void onCaptureWhiteReferenceSequenceComplete();
-    void onCaptureSampleScanComplete();
-    void onWhiteReferenceFrameCollected(std::size_t cameraIndex);
-    void updateWhiteReferenceScanGeometryForCurrentMode();
-    bool selectedCamerasReachedWhiteReferenceTarget() const;
-    bool shouldAcceptWhiteReferenceFrame(std::size_t cameraIndex) const;
-    bool shouldRecordWhiteReferenceFrameForCamera(std::size_t stageCameraIndex,
-                                                  std::size_t cameraIndex,
-                                                  double stagePositionMm) const;
-    bool allSelectedCamerasPastWhiteReferenceWindow(double stagePositionMm) const;
-    double whiteReferenceScanDistanceMmForCamera(const LumoCameraUi &ui,
-                                                   const CaptureScanPlan &plan) const;
-    void beginCaptureSampleScan();
-    void verifySampleScanOriginAndStartScan();
-    void startCaptureRelativeScan(double distanceMm,
-                                  double speedMmPerSec,
-                                  CaptureScanPhase capturePhaseOnMoveStart = CaptureScanPhase::Idle);
-    void onCaptureRelativeScanComplete();
-    void completeCaptureSequence();
-    void runCapturePostProcessingIfEnabled();
-    void failCaptureSequence(const QString &message);
-    void setSelectedCameraShutters(bool open);
-    bool selectedCamerasReachedBlackReferenceTarget() const;
-    bool validateCaptureRecordMetadata(QString &errorMessage) const;
-    bool selectedCaptureCameraIndices(std::vector<std::size_t> &cameraIndices) const;
-    std::size_t stageCameraIndexForUi(const LumoCameraUi &ui, std::size_t cameraIndex) const;
-    double whiteRefStartMmForStageCamera(const CaptureScanPlan &plan,
-                                           CaptureIlluminationMode mode,
-                                           std::size_t stageCameraIndex) const;
-    double estimatedStageScanPositionMm() const;
-    double currentStageScanPositionMm() const;
-    std::optional<double> knownStageScanPositionMm() const;
-    double maxPlausibleStageScanPositionMm() const;
-    bool isStageScanPositionTrustworthy(double positionMm) const;
-    bool hasStageScanElapsedForPosition(double positionMm) const;
-    bool isStagePositionWithinScanWindow(double positionMm,
-                                         double windowStartMm,
-                                         double windowLengthMm) const;
-    bool isStagePositionWithinSampleWindow(double positionMm,
-                                           double windowStartMm,
-                                           double windowLengthMm) const;
-    bool allSelectedCamerasPastSampleWindow(double stagePositionMm) const;
-    bool selectedCamerasEnteredSampleWindow() const;
-    bool selectedCamerasHaveSampleFrames() const;
-    bool canCompleteSampleScan() const;
-    void updateSampleScanWindowProgress(double stagePositionMm);
-    void scheduleRelativeScanTimer(double distanceMm, double speedMmPerSec);
-    void extendSampleScanTimer();
-    bool shouldRecordSampleFrameForCamera(std::size_t stageCameraIndex,
-                                          double stagePositionMm) const;
-    bool selectedCaptureIlluminationModes(std::vector<CaptureIlluminationMode> &modes) const;
-    bool isCaptureStageConnected() const;
-    bool isStageRecordingEnabledInUi() const;
-    bool useStageForCapture() const;
-    bool effectiveCaptureIlluminationModes(std::vector<CaptureIlluminationMode> &modes) const;
-    QString captureIlluminationFolderName(CaptureIlluminationMode mode) const;
-    QString captureCameraFolderName(const LumoCameraUi &ui) const;
-    QString captureStreamRelativeRoot(CaptureIlluminationMode mode, const LumoCameraUi &ui) const;
-    bool resolveCaptureRecordingIlluminationMode(CaptureIlluminationMode &mode,
-                                                 QString &errorMessage) const;
-    bool selectedCaptureCameraStreaming(QString &errorMessage) const;
-    double closestSelectedCaptureCameraPositionMm(bool *hasSelection) const;
-    double closestCaptureCameraPositionMm(bool *hasPosition) const;
-    bool buildCaptureWriterSessionConfig(CaptureWriterSessionConfig &config, QString &errorMessage) const;
-    bool beginCaptureRawDumpSession(QString &errorMessage);
-    void endCaptureRawDumpSession();
-    void appendCaptureRecordFrame(const FramePacket &frame);
-    void startCapturePreview();
-    void startCaptureRecord();
-    void stopCaptureRecorder();
-    void finishCaptureScan();
-    void homeStageAfterCapture();
-    void homeStageBeforeCapture();
-    void loadHardwareConfig();
-    void applyHardwareConfigToUi();
-    void loadPersistedUiSettings();
-    void savePersistedUiSettings();
-    void schedulePersistedUiSettingsSave();
-    void applyPersistedCameraProfilesAndBands();
-    bool selectDeviceProfileByName(QComboBox *combo, const QString &profileName) const;
-    void applyPersistedCameraUiValues(LumoCameraUi &ui);
-    void applyPersistedCameraProfileSelection(LumoCameraUi &ui);
-    void savePersistedCameraSettings(const LumoCameraUi &ui);
-    void connectPersistedSettingsAutosave();
-    void updateCameraControls(LumoCameraUi &ui, CameraState state);
-    void updateShutterDisplay(LumoCameraUi &ui, bool isOpen);
-    void onCameraStateChanged(LumoCameraUi &ui, CameraState state);
-    void onShutterStateChanged(LumoCameraUi &ui, bool isOpen);
-    void onCameraError(LumoCameraUi &ui, const CameraError &error);
-    void onSettingsApplied(LumoCameraUi &ui, const CameraSettingsApplyReport &report);
-    void updateDetectorFrame(const FramePacket &frame);
-    void onStreamFrame(const FramePacket &frame);
-    void updateWaterfallView(LumoCameraUi &ui, const QImage &image);
-    void syncWaterfallBands(LumoCameraUi &ui);
-    ui::WaterfallProcessor *waterfallProcessorFor(const LumoCameraUi &ui);
-    void updateStreamPaneTitles(LumoCameraUi &ui);
-    void updateProfilePaneTitles(LumoCameraUi &ui);
-    void clearDetectorView(LumoCameraUi &ui);
-    void setupWaterfallProcessors();
-    void setupProfileProcessors();
-    ui::ProfileProcessor *profileProcessorFor(const LumoCameraUi &ui);
-    void syncProfileRgbMarkers(LumoCameraUi &ui);
-    void onProfileLinesChanged(LumoCameraUi &ui, int spatialIndex, int bandIndex);
-    void updateProfilePlots(LumoCameraUi &ui, const ui::ProfileExtraction &profiles);
-
+    // Core layout
     QPlainTextEdit *logOutput_ = nullptr;
     QTabWidget *settingsTabs_ = nullptr;
     QTabWidget *streamTabs_ = nullptr;
@@ -362,12 +140,14 @@ private:
     static constexpr int kStreamTabUr3e = 2;
     static constexpr int kStreamTabCapture = 3;
 
+    // Capture stream tab
     QWidget *captureStreamPage_ = nullptr;
     QGridLayout *captureStreamGrid_ = nullptr;
     QLabel *captureStreamEmptyLabel_ = nullptr;
     QGroupBox *captureWaterfallPanes_[2] = {nullptr, nullptr};
-    QLabel *captureWaterfallViews_[2] = {nullptr, nullptr};
+    ui::WaterfallDisplayWidget *captureWaterfallViews_[2] = {nullptr, nullptr};
 
+    // Light settings tab
     QLabel *lightDaqStatusIndicator_ = nullptr;
     QLabel *lightDaqStatusLabel_ = nullptr;
     QPlainTextEdit *lightDaqInfoDisplay_ = nullptr;
@@ -377,22 +157,8 @@ private:
     QGroupBox *lightConnectionBox_ = nullptr;
     QGroupBox *lightLightingBox_ = nullptr;
     LighthouseRowUi lighthouseRows_[4];
-    QTimer *lightPowerPollTimer_ = nullptr;
-    std::array<QElapsedTimer, kLighthouseLampCount> lighthouseLampUptimeElapsed_{};
 
-    void updateLightConnectionDisplay();
-    void updateLightControlsEnabled();
-    void updateLighthouseLampUptimeDisplay();
-    void resetLighthouseLampUptimes();
-    void updateLighthousePowerDisplay(const LighthouseControllerPowerStatus &status);
-    void syncLightUiFromBackend();
-    void applyLighthouseSettingsToUi(const LighthouseSettings &settings);
-    void applyPersistedLighthouseUiValues();
-    LighthouseSettings buildLighthouseConnectDefaults() const;
-    void savePersistedLighthouseSettings() const;
-    static int lighthousePartnerIndex(int rowIndex);
-    void setLighthouseRowIntensity(int rowIndex, int percent);
-
+    // Stage settings tab
     QComboBox *stagePortCombo_ = nullptr;
     QComboBox *stageBaudCombo_ = nullptr;
     QPushButton *stageConnectBtn_ = nullptr;
@@ -409,7 +175,6 @@ private:
     QToolButton *stageAbsoluteMoveBtn_ = nullptr;
     ui::StageAxisWidget *stageAxisWidget_ = nullptr;
     QTimer *stagePositionTimer_ = nullptr;
-    bool stagePositionPollInFlight_ = false;
 
     enum class StageHomingKind
     {
@@ -421,51 +186,13 @@ private:
         AfterCapture,
     };
     StageHomingKind stageHomingKind_ = StageHomingKind::None;
-    std::unique_ptr<StageWorker> stageWorker_;
-    std::unique_ptr<LighthouseWorker> lighthouseWorker_;
 
+    // Capture settings tab
     QLineEdit *captureDatasetEdit_ = nullptr;
     QLineEdit *captureSaveFolderEdit_ = nullptr;
     QPushButton *captureSaveFolderBrowseBtn_ = nullptr;
     QLineEdit *captureOperatorEdit_ = nullptr;
     QPlainTextEdit *captureDescriptionEdit_ = nullptr;
-    enum class CaptureRecorderMode
-    {
-        Idle,
-        Preview,
-        Record,
-    };
-    CaptureRecorderMode captureRecorderMode_ = CaptureRecorderMode::Idle;
-    CaptureScanPhase captureScanPhase_ = CaptureScanPhase::Idle;
-    CaptureScanPlan captureScanPlan_;
-    CaptureScanPhase captureMoveCompletePhase_ = CaptureScanPhase::Idle;
-    std::array<bool, 2> captureWhiteRefWindowComplete_ = {false, false};
-    double captureScanOriginPositionMm_ = 0.0;
-    double captureActiveScanDistanceMm_ = 0.0;
-    double captureLastKnownStagePositionMm_ = 0.0;
-    bool captureScanTimingActive_ = false;
-    bool captureStagePositionKnown_ = false;
-    std::array<bool, 2> captureSampleWindowComplete_ = {false, false};
-    std::array<bool, 2> captureSampleWindowEntered_ = {false, false};
-    bool captureSampleRecordingActive_ = false;
-    bool captureStageSequenceActive_ = false;
-    QElapsedTimer captureScanElapsed_;
-    CaptureIlluminationMode captureRecordingIlluminationMode_ = CaptureIlluminationMode::Reflectance;
-    std::vector<CaptureIlluminationMode> capturePendingIlluminationModes_;
-    std::size_t captureCurrentModeIndex_ = 0;
-    std::array<int, 2> captureBlackRefFramesCollected_ = {0, 0};
-    std::array<int, 2> captureWhiteRefFramesCollected_ = {0, 0};
-    std::array<int, 2> captureSampleFramesCollected_ = {0, 0};
-    quint64 captureRelativeScanTimerToken_ = 0;
-    quint64 captureRelativeScanTimerActiveToken_ = 0;
-    int captureSampleScanTimerExtendCount_ = 0;
-    bool pendingCaptureRecordCompleteNotify_ = false;
-    bool captureRecordCompleteHomingPending_ = false;
-    bool captureRecordCompletePostProcessPending_ = false;
-    QTimer *captureScanTimer_ = nullptr;
-    std::unique_ptr<CaptureWriterWorker> captureWriterWorker_;
-    std::unique_ptr<CapturePostProcessorWorker> capturePostProcessorWorker_;
-    CaptureWriterSessionSummary lastEndedCaptureSessionSummary_;
     QPushButton *captureRecorderStopBtn_ = nullptr;
     QPushButton *captureRecorderPreviewBtn_ = nullptr;
     QPushButton *captureRecorderRecordBtn_ = nullptr;
@@ -482,7 +209,6 @@ private:
     QCheckBox *captureCamera1Check_ = nullptr;
     QCheckBox *captureCamera2Check_ = nullptr;
     QCheckBox *captureDualCameraAutoCheck_ = nullptr;
-    bool applyingDualCameraScanSync_ = false;
     QWidget *captureCameraPositionRows_[2] = {nullptr, nullptr};
     QDoubleSpinBox *captureCameraPositionSpins_[2] = {nullptr, nullptr};
     QDoubleSpinBox *captureTargetLengthSpin_ = nullptr;
@@ -496,20 +222,21 @@ private:
     QPushButton *captureGsamStartServerBtn_ = nullptr;
     QLineEdit *captureGsamPromptEdit_ = nullptr;
     QSpinBox *captureGsamSampleCountSpin_ = nullptr;
-    std::unique_ptr<hf::processing::Gsam2ServerManager> gsam2ServerManager_;
     QWidget *capturePositionContent_ = nullptr;
-    QTimer *settingsSaveTimer_ = nullptr;
     QString persistedStagePort_;
-    std::unique_ptr<CameraCoordinator> coordinator_;
-    std::unique_ptr<ui::WaterfallProcessor> waterfallProcessor1_;
-    std::unique_ptr<ui::WaterfallProcessor> waterfallProcessor2_;
-    std::unique_ptr<ui::ProfileProcessor> profileProcessor1_;
-    std::unique_ptr<ui::ProfileProcessor> profileProcessor2_;
 
+    // Camera UI state
     LumoCameraUi camera1Ui_;
     LumoCameraUi camera2Ui_;
+
     bool gracefulShutdownDone_ = false;
     bool performingGracefulShutdown_ = false;
+
+    std::unique_ptr<hf::stage::StagePanelController> stagePanel_;
+    std::unique_ptr<hf::light::LightPanelController> lightPanel_;
+    std::unique_ptr<hf::camera::CameraPanelController> cameraPanel_;
+    std::unique_ptr<hf::settings::UiSettingsController> settingsPanel_;
+    std::unique_ptr<hf::capture::CapturePanelController> capturePanel_;
 
 private slots:
     void onSettingsTabChanged(int index);

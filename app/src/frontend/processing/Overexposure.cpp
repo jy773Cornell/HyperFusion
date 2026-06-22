@@ -1,4 +1,4 @@
-// Mono12 saturation helpers for detector and waterfall visualization.
+// DN saturation helpers for detector and waterfall visualization.
 #include "frontend/processing/Overexposure.hpp"
 
 #include <algorithm>
@@ -6,14 +6,10 @@
 
 namespace ui
 {
-namespace
+std::uint8_t dnToDisplayGray(const std::uint16_t dn, const CameraBackendId source)
 {
-constexpr double kByteScale = 255.0 / kDnAxisMax;
-} // namespace
-
-std::uint8_t dnToDisplayGray(const std::uint16_t dn)
-{
-    const double scaled = static_cast<double>(dn) * kByteScale;
+    const double axisMax = dnAxisMaxForSource(source);
+    const double scaled = static_cast<double>(dn) * (255.0 / axisMax);
     return static_cast<std::uint8_t>(std::min(255.0, std::max(0.0, scaled)));
 }
 
@@ -35,7 +31,7 @@ std::vector<bool> overexposedSpatialColumns(const FramePacket &frame)
         const std::uint16_t *row = frame.pixels.data() + band * rowPixels;
         for (int x = 0; x < width; ++x)
         {
-            if (isOverexposedDn(row[x]))
+            if (isOverexposedDn(row[x], frame.source))
                 mask[static_cast<std::size_t>(x)] = true;
         }
     }

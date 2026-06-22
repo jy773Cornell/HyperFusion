@@ -152,7 +152,7 @@ bool Mcc1208LighthouseController::connect(LighthouseError &error)
     state_ = LighthouseState::Connected;
     logMessage("Light backend: USB-1208FS-Plus connected on board "
                + std::to_string(activeBoardNumber_)
-               + " — all lamps on, reflectance "
+               + " \u2014 all lamps on, reflectance "
                + std::to_string(settings_.reflectancePercent)
                + "%, transmittance "
                + std::to_string(settings_.transmittancePercent)

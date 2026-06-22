@@ -21,7 +21,8 @@ int mapCalpackBandToBilRow(const int calpackBandIndex,
 namespace
 {
 void scaleBandRowToBytes(const std::uint16_t *row,
-                         int width,
+                         const int width,
+                         const CameraBackendId source,
                          std::vector<std::uint8_t> &channelOut)
 {
     channelOut.resize(static_cast<std::size_t>(width));
@@ -30,7 +31,7 @@ void scaleBandRowToBytes(const std::uint16_t *row,
         return;
 
     for (int x = 0; x < width; ++x)
-        channelOut[static_cast<std::size_t>(x)] = dnToDisplayGray(row[x]);
+        channelOut[static_cast<std::size_t>(x)] = dnToDisplayGray(row[x], source);
 }
 } // namespace
 
@@ -56,9 +57,9 @@ bool extractRgbLineFromBilFrame(const FramePacket &frame,
     std::vector<std::uint8_t> greenChannel;
     std::vector<std::uint8_t> blueChannel;
 
-    scaleBandRowToBytes(frame.pixels.data() + bands.red * rowPixels, width, redChannel);
-    scaleBandRowToBytes(frame.pixels.data() + bands.green * rowPixels, width, greenChannel);
-    scaleBandRowToBytes(frame.pixels.data() + bands.blue * rowPixels, width, blueChannel);
+    scaleBandRowToBytes(frame.pixels.data() + bands.red * rowPixels, width, frame.source, redChannel);
+    scaleBandRowToBytes(frame.pixels.data() + bands.green * rowPixels, width, frame.source, greenChannel);
+    scaleBandRowToBytes(frame.pixels.data() + bands.blue * rowPixels, width, frame.source, blueChannel);
 
     rgbRowOut.resize(rowPixels * 3);
     for (int x = 0; x < width; ++x)
@@ -68,8 +69,6 @@ bool extractRgbLineFromBilFrame(const FramePacket &frame,
         rgbRowOut[index * 3 + 1] = greenChannel[index];
         rgbRowOut[index * 3 + 2] = blueChannel[index];
     }
-
-    markOverexposedColumnsRed(rgbRowOut, width, frame);
 
     return true;
 }
