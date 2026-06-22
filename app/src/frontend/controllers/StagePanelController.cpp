@@ -2,6 +2,7 @@
 #include "frontend/controllers/StagePanelController.hpp"
 
 #include "adapters/zaber/ZaberStageController.hpp"
+#include "backend/CameraTypes.hpp"
 #include "backend/StageWorker.hpp"
 #include "frontend/widgets/MainWindow.hpp"
 #include "frontend/utils/SerialPortEnumerator.hpp"
@@ -19,6 +20,7 @@
 
 #include <cmath>
 #include <memory>
+#include <algorithm>
 
 namespace {
 
@@ -121,7 +123,7 @@ void StagePanelController::wireSettingsTabConnections()
 {
     if (host_->stagePositionTimer_ == nullptr)
         return;
-    connect(host_->stagePositionTimer_, &QTimer::timeout, host_, [this]() { pollPosition(); });
+    connect(host_->stagePositionTimer_, &QTimer::timeout, this, [this]() { pollPosition(); });
 }
 
 void StagePanelController::refreshComPortList()
@@ -181,19 +183,19 @@ void StagePanelController::initializeWorker()
     stageWorker_ = std::make_unique<StageWorker>(controller);
     stageWorker_->setStateCallback([this](const StageState state) {
         QMetaObject::invokeMethod(
-            host_,
+            this,
             [this, state]() { onStateChanged(state); },
             Qt::QueuedConnection);
     });
     stageWorker_->setTopologyCallback([this](const StageTopology &topology) {
         QMetaObject::invokeMethod(
-            host_,
+            this,
             [this, topology]() { onTopologyChanged(topology); },
             Qt::QueuedConnection);
     });
     stageWorker_->setErrorCallback([this](const StageError &error) {
         QMetaObject::invokeMethod(
-            host_,
+            this,
             [this, error]() { onError(error); },
             Qt::QueuedConnection);
     });
@@ -221,16 +223,25 @@ void StagePanelController::updateConnectionControls(const StageState state, cons
 
     if (host_->stagePositionTimer_ != nullptr)
     {
-        if (connected || state == StageState::Homing)
+        if (connected)
+        {
+            syncPositionPollInterval();
             host_->stagePositionTimer_->start();
+            pollPosition();
+        }
         else
+        {
             host_->stagePositionTimer_->stop();
+        }
     }
 
     if (!connected)
+    {
+        manualMotionDepth_ = 0;
         updatePositionDisplay(0.0);
+    }
 
-    if (refreshCaptureControls)
+    if (refreshCaptureControls && host_->capturePanel() != nullptr)
         host_->capturePanel()->updatePositionControls(state);
 }
 
@@ -267,23 +278,62 @@ void StagePanelController::updatePositionDisplay(const double positionMm)
         host_->capturePanel()->onStagePosition(positionMm);
 }
 
+bool StagePanelController::bothCamerasStreaming() const
+{
+    return host_->camera1Ui_.state == CameraState::Streaming
+           && host_->camera2Ui_.state == CameraState::Streaming;
+}
+
+bool StagePanelController::anyCameraStreaming() const
+{
+    return host_->camera1Ui_.state == CameraState::Streaming
+           || host_->camera2Ui_.state == CameraState::Streaming;
+}
+
+void StagePanelController::syncPositionPollInterval()
+{
+    if (host_->stagePositionTimer_ == nullptr)
+        return;
+
+    int intervalMs = 150;
+    if (manualMotionDepth_ > 0)
+        intervalMs = 100;
+    else if (bothCamerasStreaming())
+        intervalMs = 250;
+    else if (anyCameraStreaming())
+        intervalMs = 200;
+
+    host_->stagePositionTimer_->setInterval(intervalMs);
+}
+
+void StagePanelController::onManualMotionStarted()
+{
+    ++manualMotionDepth_;
+    syncPositionPollInterval();
+    pollPosition();
+}
+
+void StagePanelController::onManualMotionStopped()
+{
+    manualMotionDepth_ = std::max(0, manualMotionDepth_ - 1);
+    syncPositionPollInterval();
+    pollPosition();
+}
+
 void StagePanelController::pollPosition()
 {
-    if (stageWorker_ == nullptr || positionPollInFlight_)
+    if (stageWorker_ == nullptr)
         return;
 
-    const StageState state = stageWorker_->currentState();
-    if (state != StageState::Connected && state != StageState::Homing)
+    if (stageWorker_->currentState() != StageState::Connected)
         return;
 
-    positionPollInFlight_ = true;
     stageWorker_->requestPrimaryPosition([this](const double positionMm, const bool ok) {
-        positionPollInFlight_ = false;
         if (!ok)
             return;
 
         QMetaObject::invokeMethod(
-            host_,
+            this,
             [this, positionMm]() { updatePositionDisplay(positionMm); },
             Qt::QueuedConnection);
     });

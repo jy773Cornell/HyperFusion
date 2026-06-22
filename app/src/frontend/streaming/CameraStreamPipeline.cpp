@@ -5,6 +5,8 @@
 
 #include <QMetaObject>
 
+#include <algorithm>
+
 namespace ui
 {
 namespace
@@ -79,7 +81,9 @@ void CameraStreamPipeline::stop()
 
 void CameraStreamPipeline::setDisplayIntervalMs(const int intervalMs)
 {
-    displayTimer_.setInterval(std::max(16, intervalMs));
+    const int clamped = std::max(16, intervalMs);
+    displayTimer_.setInterval(clamped);
+    waterfallDisplayTimer_.setInterval(clamped);
 }
 
 void CameraStreamPipeline::setDisplayPaused(const bool paused)
@@ -107,12 +111,6 @@ void CameraStreamPipeline::wireProcessors(const std::size_t cameraIndex)
 
     waterfallProcessors_[cameraIndex]->setImageReadyCallback(
         [this, cameraIndex](QImage image) {
-            if (!hooks_.waterfallDisplayTarget)
-                return;
-
-            if (hooks_.waterfallDisplayTarget(cameraIndex) == WaterfallDisplayTarget::None)
-                return;
-
             std::lock_guard<std::mutex> lock(pendingMutex_);
             pending_[cameraIndex].waterfallImage = std::move(image);
             pending_[cameraIndex].waterfallDirty = true;

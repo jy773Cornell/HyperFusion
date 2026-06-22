@@ -60,6 +60,7 @@ struct LumoCameraUi
     QComboBox *redBandCombo = nullptr;
     QComboBox *greenBandCombo = nullptr;
     QComboBox *blueBandCombo = nullptr;
+    QLabel *sessionUptimeLabel = nullptr;
     std::vector<SpectralBand> spectralBands;
 
     /// Cached wavelength axis for profile plot (invalidated when spectralBands / frame height changes).

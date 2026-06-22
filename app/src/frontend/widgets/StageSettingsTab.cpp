@@ -176,7 +176,7 @@ QWidget *MainWindow::createStageSettingsTab()
     controlLayout->addLayout(absoluteRow);
 
     stagePositionTimer_ = new QTimer(this);
-    stagePositionTimer_->setInterval(50);
+    stagePositionTimer_->setInterval(100);
 
     connect(stageHomeBtn_, &QToolButton::clicked, this, [this]() {
         if (stageWorker() == nullptr)
@@ -192,12 +192,16 @@ QWidget *MainWindow::createStageSettingsTab()
     connect(stageBackBtn_, &QToolButton::pressed, this, [this]() {
         if (stageWorker() == nullptr)
             return;
+        if (stagePanel() != nullptr)
+            stagePanel()->onManualMotionStarted();
         stageWorker()->requestMoveVelocityMm(-zaber_stage::kMaxSpeedMmPerSec);
     });
     connect(stageBackBtn_, &QToolButton::released, this, [this]() {
         if (stageWorker() == nullptr)
             return;
         stageWorker()->requestStopMotion();
+        if (stagePanel() != nullptr)
+            stagePanel()->onManualMotionStopped();
     });
     connect(stageStopBtn_, &QToolButton::clicked, this, [this]() {
         if (stageWorker() == nullptr)
@@ -208,12 +212,16 @@ QWidget *MainWindow::createStageSettingsTab()
     connect(stageForwardBtn_, &QToolButton::pressed, this, [this]() {
         if (stageWorker() == nullptr)
             return;
+        if (stagePanel() != nullptr)
+            stagePanel()->onManualMotionStarted();
         stageWorker()->requestMoveVelocityMm(zaber_stage::kMaxSpeedMmPerSec);
     });
     connect(stageForwardBtn_, &QToolButton::released, this, [this]() {
         if (stageWorker() == nullptr)
             return;
         stageWorker()->requestStopMotion();
+        if (stagePanel() != nullptr)
+            stagePanel()->onManualMotionStopped();
     });
     connect(stageToEndBtn_, &QToolButton::clicked, this, [this]() {
         if (stageWorker() == nullptr)

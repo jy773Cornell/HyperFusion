@@ -4,6 +4,7 @@
 #include <QPainter>
 #include <QPaintEvent>
 #include <QResizeEvent>
+#include <QShowEvent>
 
 namespace ui
 {
@@ -53,6 +54,13 @@ void WaterfallDisplayWidget::ensureScaledImage()
 void WaterfallDisplayWidget::resizeEvent(QResizeEvent *event)
 {
     QWidget::resizeEvent(event);
+    scaledDirty_ = true;
+    update();
+}
+
+void WaterfallDisplayWidget::showEvent(QShowEvent *event)
+{
+    QWidget::showEvent(event);
     scaledDirty_ = true;
     update();
 }

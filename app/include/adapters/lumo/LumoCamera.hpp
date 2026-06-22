@@ -6,6 +6,7 @@
 
 #include <condition_variable>
 #include <cstdint>
+#include <atomic>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -32,7 +33,12 @@ public:
     std::string swirNiConnectionSummary() const;
 
     /// Read Camera.FrameRate from the SDK (GUI thread; valid while sensor handle is open).
+    /// Returns false without blocking when another thread holds the global Lumo SDK lock.
     bool readAppliedFrameRateHz(double &outHz, CameraError &error);
+
+    /// Read Camera.Temperature (FX10e: °C; SWIR3+NI: Kelvin converted to °C).
+    /// Returns a cached value sampled during streaming when the GUI cannot acquire the SDK lock.
+    bool readCameraTemperatureCelsius(double &outCelsius, CameraError &error);
 
     std::string name() const override;
     CameraBackendId backendId() const override;
@@ -79,6 +85,8 @@ private:
     bool registerDataCallback(CameraError &error);
     void unregisterDataCallback();
     void onFrame(const std::uint8_t *buffer, std::int64_t frameSize, std::int64_t frameNumber);
+    bool refreshCachedTemperatureLocked(void *handle, CameraError &error);
+    void maybeRefreshCachedTemperatureFromCallback();
     /// Stop acquisition and wake any blocked pollFrame (must not hold mutex_ while waiting on frameMutex_).
     void haltAcquisition();
 #endif
@@ -105,4 +113,8 @@ private:
     std::vector<std::uint8_t> latestFrameBytes_;
     std::int64_t latestFrameNumber_ = 0;
     bool frameReady_ = false;
+
+    std::atomic<bool> cachedTemperatureValid_{false};
+    std::atomic<double> cachedTemperatureCelsius_{0.0};
+    std::atomic<std::int64_t> lastTemperatureSampleNs_{0};
 };

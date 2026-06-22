@@ -189,11 +189,11 @@ void CapturePanelController::onStagePosition(const double positionMm)
 
 void CapturePanelController::onStageHomedForCapture()
 {
-    if (host_->stageHomingKind_ == MainWindow::StageHomingKind::BeforeCapture)
-    {
-        host_->stageHomingKind_ = MainWindow::StageHomingKind::None;
-        startCaptureSequence();
-    }
+    if (captureRecorderMode_ == CaptureRecorderMode::Idle)
+        return;
+
+    host_->stageHomingKind_ = MainWindow::StageHomingKind::None;
+    startCaptureSequence();
 }
 
 void CapturePanelController::onStageHomedAfterCapture()
@@ -480,6 +480,18 @@ bool hf::capture::CapturePanelController::dualCameraScanSyncActive() const
     return fx10eSelected && swir3Selected;
 }
 
+bool hf::capture::CapturePanelController::dualCameraScanSyncReadyForHardware() const
+{
+    if (host_->captureDualCameraAutoCheck_ == nullptr || !host_->captureDualCameraAutoCheck_->isChecked())
+        return false;
+
+    if (!bothFx10eAndSwir3CaptureCamerasConnected())
+        return false;
+
+    return host_->isCameraSessionActive(host_->camera1Ui_.state)
+           && host_->isCameraSessionActive(host_->camera2Ui_.state);
+}
+
 bool hf::capture::CapturePanelController::shouldLockSwir3ForDualSync() const
 {
     return host_->captureDualCameraAutoCheck_ != nullptr && host_->captureDualCameraAutoCheck_->isChecked()
@@ -505,6 +517,25 @@ void hf::capture::CapturePanelController::updateDualCameraSyncControls()
 
     if (host_->captureDualCameraAutoCheck_ != nullptr)
         host_->captureDualCameraAutoCheck_->setVisible(bothConnected);
+
+    if (bothConnected && host_->captureDualCameraAutoCheck_ != nullptr
+        && host_->captureDualCameraAutoCheck_->isChecked())
+    {
+        const auto ensureChecked = [](QCheckBox *checkbox, const LumoCameraUi &ui) {
+            if (checkbox == nullptr || ui.state == CameraState::Disconnected
+                || ui.state == CameraState::Fault)
+                return;
+
+            if (!checkbox->isChecked())
+            {
+                QSignalBlocker blocker(checkbox);
+                checkbox->setChecked(true);
+            }
+        };
+
+        ensureChecked(host_->captureCamera1Check_, host_->camera1Ui_);
+        ensureChecked(host_->captureCamera2Check_, host_->camera2Ui_);
+    }
 
     const bool syncActive = dualCameraScanSyncActive();
     const bool lockSwirSettings = shouldLockSwir3ForDualSync();
@@ -536,12 +567,35 @@ void hf::capture::CapturePanelController::updateDualCameraSyncControls()
     if (host_->cameraPanel() != nullptr)
         host_->cameraPanel()->updateCameraControls(host_->camera2Ui_, host_->camera2Ui_.state);
 
-    if (host_->streamTabs_ != nullptr
-        && host_->streamTabs_->currentIndex() == MainWindow::kStreamTabCapture && dualCameraScanSyncActive()
-        && !dualCameraScanSyncHardwareApplied_)
-    {
-        applyDualCameraScanSync(true);
-    }
+    maybeApplyInitialDualCameraSync();
+}
+
+void hf::capture::CapturePanelController::maybeApplyInitialDualCameraSync()
+{
+    if (!dualCameraScanSyncReadyForHardware() || dualCameraScanSyncHardwareApplied_
+        || dualCameraSyncHardwareApplyPending_ || applyingDualCameraScanSync_)
+        return;
+
+    if (captureRecorderMode_ != CaptureRecorderMode::Idle)
+        return;
+
+    const QString fx10eName = host_->cameraPanel()->profileTabNameForUi(host_->camera1Ui_);
+    const QString swirName = host_->cameraPanel()->profileTabNameForUi(host_->camera2Ui_);
+
+    host_->appendLog(QStringLiteral("Dual-camera sync: %1 and %2 connected — synchronizing SWIR3 to %1 scan geometry.")
+                         .arg(fx10eName, swirName));
+
+    QMessageBox::information(
+        host_,
+        QStringLiteral("Dual-camera sync"),
+        QStringLiteral("%1 and %2 are both connected.\n\n"
+                       "HyperFusion will synchronize SWIR3 frame rate and exposure to match %1 "
+                       "so both cameras cover the same physical scan distance.\n\n"
+                       "SWIR3 settings will be applied now. You can disable this later under "
+                       "Capture settings.")
+            .arg(fx10eName, swirName));
+
+    applyDualCameraScanSync(true);
 }
 
 void hf::capture::CapturePanelController::applyDualCameraScanSync(const bool applyToHardware)
@@ -625,7 +679,8 @@ void hf::capture::CapturePanelController::showDualCameraSyncWaitDialog()
     dualCameraSyncWaitDialog_->setWindowTitle(
         QStringLiteral("Syncing SWIR3 to FX10e"));
     dualCameraSyncWaitDialog_->setStatusText(
-        QStringLiteral("Applying synchronized SWIR3 settings\u2026\n\n"
+        QStringLiteral("Both cameras are connected.\n"
+                       "Applying synchronized SWIR3 settings to match FX10e scan geometry\u2026\n\n"
                        "This may take a few seconds."));
     dualCameraSyncWaitDialog_->show();
     dualCameraSyncWaitDialog_->raise();
@@ -1287,7 +1342,8 @@ void hf::capture::CapturePanelController::resetCaptureSequenceState()
     captureSampleWindowComplete_ = {false, false};
     captureSampleWindowEntered_ = {false, false};
     captureSampleRecordingActive_ = false;
-    captureStageSequenceActive_ = false;
+    if (captureRecorderMode_ == CaptureRecorderMode::Idle)
+        captureStageSequenceActive_ = false;
     captureStagePositionKnown_ = false;
     captureScanTimingActive_ = false;
     captureRelativeScanTimerActiveToken_ = 0;
@@ -1426,7 +1482,11 @@ void hf::capture::CapturePanelController::beginCaptureMoveToFirstRefPosition()
 {
     std::vector<std::size_t> selectedCameras;
     if (!selectedCaptureCameraIndices(selectedCameras))
+    {
+        failCaptureSequence(QStringLiteral("%1: no capture cameras selected.")
+                                .arg(captureSequenceLogPrefix()));
         return;
+    }
 
     std::sort(selectedCameras.begin(),
               selectedCameras.end(),
@@ -2360,13 +2420,19 @@ bool hf::capture::CapturePanelController::selectedCaptureCameraIndices(std::vect
 {
     cameraIndices.clear();
 
-    const auto consider = [&cameraIndices](const QCheckBox *checkbox, const std::size_t index) {
-        if (checkbox != nullptr && checkbox->isVisible() && checkbox->isChecked())
+    const auto isConnected = [](const LumoCameraUi &ui) {
+        return ui.state != CameraState::Disconnected && ui.state != CameraState::Fault;
+    };
+
+    const auto consider = [&cameraIndices, &isConnected](const QCheckBox *checkbox,
+                                                         const LumoCameraUi &ui,
+                                                         const std::size_t index) {
+        if (checkbox != nullptr && isConnected(ui) && checkbox->isChecked())
             cameraIndices.push_back(index);
     };
 
-    consider(host_->captureCamera1Check_, 0);
-    consider(host_->captureCamera2Check_, 1);
+    consider(host_->captureCamera1Check_, host_->camera1Ui_, 0);
+    consider(host_->captureCamera2Check_, host_->camera2Ui_, 1);
     return !cameraIndices.empty();
 }
 
@@ -3118,11 +3184,11 @@ void hf::capture::CapturePanelController::stopRecorder()
 
     const bool wasRecord = captureRecorderMode_ == CaptureRecorderMode::Record;
     const bool wasPreview = captureRecorderMode_ == CaptureRecorderMode::Preview;
+    captureRecorderMode_ = CaptureRecorderMode::Idle;
+    captureStageSequenceActive_ = false;
     resetCaptureSequenceState();
     capturePendingIlluminationModes_.clear();
     captureCurrentModeIndex_ = 0;
-
-    captureRecorderMode_ = CaptureRecorderMode::Idle;
     updateRecorderControls();
     host_->lightPanel()->updateConnectionDisplay();
     host_->lightPanel()->updateControlsEnabled();

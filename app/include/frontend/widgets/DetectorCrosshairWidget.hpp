@@ -6,6 +6,8 @@
 #include <QString>
 #include <QWidget>
 
+#include <optional>
+
 class QPainter;
 
 namespace ui
@@ -21,6 +23,7 @@ public:
     void setDetectorImage(const QImage &image);
     void setDetectorImage(const QPixmap &pixmap);
     void setAcquisitionFps(double fps);
+    void setCameraTemperatureCelsius(const std::optional<double> &celsius);
     void clearDisplay(const QString &message = QString());
 
     int spatialIndex() const { return spatialIndex_; }
@@ -48,7 +51,7 @@ private:
     bool mapWidgetToImage(const QPoint &widgetPoint, int &outX, int &outY) const;
     void clampIndices();
     void emitLinesIfChanged();
-    void drawFpsOverlay(QPainter &painter) const;
+    void drawStatusOverlay(QPainter &painter) const;
     void rebuildScaledPixmap();
 
     QImage sourceImage_;
@@ -63,5 +66,7 @@ private:
     DragMode dragMode_ = DragMode::None;
 
     double acquisitionFps_ = 0.0;
+    bool hasCameraTemperature_ = false;
+    double cameraTemperatureCelsius_ = 0.0;
 };
 } // namespace ui

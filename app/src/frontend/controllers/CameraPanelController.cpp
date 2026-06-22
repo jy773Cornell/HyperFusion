@@ -8,6 +8,7 @@
 #include "backend/HyperFusionConfig.hpp"
 #include "backend/SdkLifecycleRunner.hpp"
 #include "frontend/controllers/CapturePanelController.hpp"
+#include "frontend/controllers/StagePanelController.hpp"
 #include "frontend/processing/DetectorFrameConverter.hpp"
 #include "frontend/processing/WavelengthLookup.hpp"
 #include "frontend/widgets/CameraStreamTabBuilder.hpp"
@@ -97,6 +98,26 @@ QString formatOrdinalPixel(const int zeroBasedSpatialIndex)
     return QStringLiteral("%1%2 pixel").arg(pixelNumber).arg(ordinalSuffix(pixelNumber));
 }
 
+QString formatSessionUptime(const qint64 elapsedMs)
+{
+    const qint64 totalSeconds = std::max<qint64>(0, elapsedMs / 1000);
+    const qint64 hours = totalSeconds / 3600;
+    const qint64 minutes = (totalSeconds % 3600) / 60;
+    const qint64 seconds = totalSeconds % 60;
+
+    if (hours > 0)
+    {
+        return QStringLiteral("%1:%2:%3")
+            .arg(hours, 2, 10, QChar('0'))
+            .arg(minutes, 2, 10, QChar('0'))
+            .arg(seconds, 2, 10, QChar('0'));
+    }
+
+    return QStringLiteral("%1:%2")
+        .arg(minutes, 2, 10, QChar('0'))
+        .arg(seconds, 2, 10, QChar('0'));
+}
+
 } // namespace
 
 namespace hf::camera {
@@ -112,7 +133,10 @@ CameraPanelController::CameraPanelController(MainWindow *host, QObject *parent)
 
     sdkFrameRatePollTimer_ = new QTimer(this);
     sdkFrameRatePollTimer_->setInterval(3000);
-    connect(sdkFrameRatePollTimer_, &QTimer::timeout, this, [this]() { pollSdkFrameRates(); });
+    connect(sdkFrameRatePollTimer_, &QTimer::timeout, this, [this]() {
+        pollSdkFrameRates();
+        pollCameraTemperatures();
+    });
     sdkFrameRatePollTimer_->start();
 }
 
@@ -497,8 +521,8 @@ CameraSettings CameraPanelController::buildSettings(const LumoCameraUi &ui) cons
     if (ui.spatialBinningCombo != nullptr)
         settings.spatialBinning = ui.spatialBinningCombo->currentText().toInt();
     settings.externalTrigger = false;
-    settings.acquisitionTimeoutMs =
-        ui.sensorKind == LumoSensorKind::Swir3Ni ? 30000U : 5000U;
+    settings.acquisitionTimeoutMs = ui.sensorKind == LumoSensorKind::Swir3Ni ? kSwir3AcquisitionTimeoutMs
+                                                                               : kFx10eAcquisitionTimeoutMs;
     if (ui.sensorKind == LumoSensorKind::Swir3Ni)
     {
         settings.niGrabberChannel = "img0";
@@ -773,6 +797,15 @@ void CameraPanelController::onCameraStateChanged(LumoCameraUi &ui, const CameraS
     updateCameraControls(ui, state);
     host_->capturePanel()->updateCamerasList();
     host_->capturePanel()->updateRecorderControls();
+    if (host_->stagePanel() != nullptr)
+        host_->stagePanel()->syncPositionPollInterval();
+    syncStreamDisplayLoad();
+
+    if (host_->capturePanel() != nullptr
+        && (state == CameraState::Initialized || state == CameraState::Streaming))
+    {
+        host_->capturePanel()->maybeApplyInitialDualCameraSync();
+    }
 
     if (coordinator_ != nullptr
         && (state == CameraState::Initialized || state == CameraState::Configured
@@ -852,6 +885,16 @@ LumoCameraUi *CameraPanelController::cameraUiForIndex(const std::size_t cameraIn
     return nullptr;
 }
 
+bool CameraPanelController::anyCameraOperationWaitActive() const
+{
+    for (const CameraOperationWait &slot : operationWaits_)
+    {
+        if (slot.active)
+            return true;
+    }
+    return false;
+}
+
 void CameraPanelController::showCameraOperationWait(const std::size_t cameraIndex,
                                                     const CameraWaitOperation operation)
 {
@@ -875,8 +918,19 @@ void CameraPanelController::showCameraOperationWait(const std::size_t cameraInde
     {
     case CameraWaitOperation::Connecting:
         slot.dialog->setWindowTitle(tr("Connecting %1").arg(cameraName));
-        slot.dialog->setStatusText(
-            tr("Connecting to %1...\n\nThis may take up to 30 seconds.").arg(cameraName));
+        if (ui->sensorKind == LumoSensorKind::Swir3Ni)
+        {
+            slot.dialog->setStatusText(
+                tr("Connecting to %1...\n\nThis may still take up to 30 seconds.")
+                    .arg(cameraName));
+        }
+        else
+        {
+            slot.dialog->setStatusText(
+                tr("Connecting to %1...\n\nThis may take up to %2 seconds.")
+                    .arg(cameraName)
+                    .arg(kFx10eConnectWaitTimeoutMs / 1000));
+        }
         break;
     case CameraWaitOperation::ApplyingSettings:
         slot.dialog->setWindowTitle(tr("Applying settings \u2014 %1").arg(cameraName));
@@ -905,7 +959,8 @@ void CameraPanelController::showCameraOperationWait(const std::size_t cameraInde
             });
         }
         connectTimeoutCameraIndex_ = cameraIndex;
-        const int timeoutMs = ui->sensorKind == LumoSensorKind::Swir3Ni ? 35000 : 30000;
+        const int timeoutMs = ui->sensorKind == LumoSensorKind::Swir3Ni ? kSwir3ConnectWaitTimeoutMs
+                                                                          : kFx10eConnectWaitTimeoutMs;
         connectTimeoutTimer_->start(timeoutMs);
     }
 }
@@ -923,9 +978,12 @@ void CameraPanelController::onCameraOperationWaitTimedOut(const std::size_t came
     if (ui != nullptr)
     {
         ui->connectAttemptActive = false;
+        const int timeoutSec = ui->sensorKind == LumoSensorKind::Swir3Ni ? kSwir3ConnectWaitTimeoutMs / 1000
+                                                                           : kFx10eConnectWaitTimeoutMs / 1000;
         host_->appendLog(
-            QStringLiteral("%1: connect wait timed out \u2014 check the log, then retry Connect.")
-                .arg(profileTabNameForUi(*ui)));
+            QStringLiteral("%1: connect wait timed out after %2 s \u2014 check the log, then retry Connect.")
+                .arg(profileTabNameForUi(*ui))
+                .arg(timeoutSec));
     }
     dismissCameraOperationWait(cameraIndex);
 }
@@ -1134,11 +1192,78 @@ void CameraPanelController::refreshAcquisitionFpsOverlays()
             fps = sdkFrameRateHz_[ui->cameraIndex];
 
         ui->detectorView->setAcquisitionFps(fps);
+
+        std::optional<double> temperatureCelsius;
+        if (ui->camera != nullptr && isSessionActive(ui->state))
+        {
+            double celsius = 0.0;
+            CameraError error;
+            if (ui->camera->readCameraTemperatureCelsius(celsius, error))
+                temperatureCelsius = celsius;
+        }
+
+        if (ui->cameraIndex < 2 && temperatureCelsius.has_value())
+            cachedCameraTemperatureCelsius_[ui->cameraIndex] = temperatureCelsius;
+
+        if (ui->cameraIndex < 2)
+        {
+            ui->detectorView->setCameraTemperatureCelsius(
+                temperatureCelsius.has_value() ? temperatureCelsius
+                                               : cachedCameraTemperatureCelsius_[ui->cameraIndex]);
+        }
+    }
+
+    refreshSessionUptimeLabels();
+}
+
+void CameraPanelController::syncSessionUptimeClock(LumoCameraUi &ui, const CameraState state)
+{
+    if (ui.cameraIndex >= 2)
+        return;
+
+    const bool sessionActive = isSessionActive(state);
+    const bool wasActive = sessionUptimeActive_[ui.cameraIndex];
+
+    if (sessionActive && !wasActive)
+    {
+        sessionUptimeTimers_[ui.cameraIndex].restart();
+        sessionUptimeActive_[ui.cameraIndex] = true;
+    }
+    else if (!sessionActive && wasActive)
+    {
+        sessionUptimeActive_[ui.cameraIndex] = false;
+    }
+
+    if (ui.sessionUptimeLabel == nullptr)
+        return;
+
+    if (!sessionActive)
+        ui.sessionUptimeLabel->setText(QStringLiteral("\u2014"));
+    else if (!sessionUptimeActive_[ui.cameraIndex])
+        ui.sessionUptimeLabel->setText(QStringLiteral("00:00"));
+    else
+        ui.sessionUptimeLabel->setText(formatSessionUptime(sessionUptimeTimers_[ui.cameraIndex].elapsed()));
+}
+
+void CameraPanelController::refreshSessionUptimeLabels()
+{
+    for (LumoCameraUi *ui : {&host_->camera1Ui_, &host_->camera2Ui_})
+    {
+        if (ui == nullptr || ui->sessionUptimeLabel == nullptr || ui->cameraIndex >= 2)
+            continue;
+
+        if (!sessionUptimeActive_[ui->cameraIndex] || !isSessionActive(ui->state))
+            continue;
+
+        ui->sessionUptimeLabel->setText(formatSessionUptime(sessionUptimeTimers_[ui->cameraIndex].elapsed()));
     }
 }
 
 void CameraPanelController::pollSdkFrameRates()
 {
+    if (anyCameraOperationWaitActive())
+        return;
+
     for (LumoCameraUi *ui : {&host_->camera1Ui_, &host_->camera2Ui_})
     {
         if (ui == nullptr || ui->camera == nullptr || ui->cameraIndex >= 2)
@@ -1153,6 +1278,37 @@ void CameraPanelController::pollSdkFrameRates()
         if (ui->camera->readAppliedFrameRateHz(hz, error))
             sdkFrameRateHz_[ui->cameraIndex] = hz;
     }
+}
+
+void CameraPanelController::pollCameraTemperatures()
+{
+    if (anyCameraOperationWaitActive())
+        return;
+
+    for (LumoCameraUi *ui : {&host_->camera1Ui_, &host_->camera2Ui_})
+    {
+        if (ui == nullptr || ui->camera == nullptr || ui->cameraIndex >= 2)
+            continue;
+
+        if (!isSessionActive(ui->state))
+            continue;
+
+        double celsius = 0.0;
+        CameraError error;
+        if (ui->camera->readCameraTemperatureCelsius(celsius, error))
+            cachedCameraTemperatureCelsius_[ui->cameraIndex] = celsius;
+    }
+}
+
+void CameraPanelController::syncStreamDisplayLoad()
+{
+    if (streamPipeline_ == nullptr)
+        return;
+
+    const bool cam1Streaming = host_->camera1Ui_.state == CameraState::Streaming;
+    const bool cam2Streaming = host_->camera2Ui_.state == CameraState::Streaming;
+    const int intervalMs = (cam1Streaming && cam2Streaming) ? 50 : 33;
+    streamPipeline_->setDisplayIntervalMs(intervalMs);
 }
 
 void CameraPanelController::onStreamFrame(const SharedFramePacket &frame)
@@ -1368,6 +1524,7 @@ void CameraPanelController::clearDetectorView(LumoCameraUi &ui)
     {
         streamFpsTrackers_[ui.cameraIndex].reset();
         sdkFrameRateHz_[ui.cameraIndex] = 0.0;
+        cachedCameraTemperatureCelsius_[ui.cameraIndex] = std::nullopt;
     }
     updateStreamPaneTitles(ui);
 
@@ -1432,6 +1589,7 @@ void CameraPanelController::updateCameraControls(LumoCameraUi &ui, const CameraS
             ui.blueBandCombo->setEnabled(false);
         if (ui.applyBtn != nullptr)
             ui.applyBtn->setEnabled(false);
+        syncSessionUptimeClock(ui, state);
         return;
     }
 
@@ -1481,6 +1639,8 @@ void CameraPanelController::updateCameraControls(LumoCameraUi &ui, const CameraS
                                || state == CameraState::Streaming;
     if (ui.applyBtn != nullptr)
         ui.applyBtn->setEnabled(readyForApply);
+
+    syncSessionUptimeClock(ui, state);
 }
 
 } // namespace hf::camera

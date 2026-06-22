@@ -14,9 +14,12 @@
 #include <QObject>
 #include <QString>
 
+#include <QElapsedTimer>
+
 #include <array>
 #include <atomic>
 #include <memory>
+#include <optional>
 
 class CameraCoordinator;
 class MainWindow;
@@ -37,6 +40,11 @@ class CameraPanelController : public QObject
     Q_OBJECT
 
 public:
+    static constexpr int kFx10eConnectWaitTimeoutMs = 30000;
+    static constexpr int kSwir3ConnectWaitTimeoutMs = 90000;
+    static constexpr int kFx10eAcquisitionTimeoutMs = 5000;
+    static constexpr int kSwir3AcquisitionTimeoutMs = 60000;
+
     explicit CameraPanelController(MainWindow *host, QObject *parent = nullptr);
 
     void initializeCameras();
@@ -108,7 +116,12 @@ private:
     LumoCameraUi *cameraUiForIndex(std::size_t cameraIndex);
     void noteStreamFrame(const FramePacket &frame);
     void refreshAcquisitionFpsOverlays();
+    void refreshSessionUptimeLabels();
+    void syncSessionUptimeClock(LumoCameraUi &ui, CameraState state);
+    [[nodiscard]] bool anyCameraOperationWaitActive() const;
     void pollSdkFrameRates();
+    void pollCameraTemperatures();
+    void syncStreamDisplayLoad();
 
     MainWindow *host_ = nullptr;
     std::unique_ptr<CameraCoordinator> coordinator_;
@@ -116,6 +129,9 @@ private:
     std::unique_ptr<ui::CameraStreamPipeline> streamPipeline_;
     ui::StreamFpsTracker streamFpsTrackers_[2];
     std::array<double, 2> sdkFrameRateHz_{0.0, 0.0};
+    std::array<std::optional<double>, 2> cachedCameraTemperatureCelsius_{};
+    std::array<QElapsedTimer, 2> sessionUptimeTimers_{};
+    std::array<bool, 2> sessionUptimeActive_{false, false};
     std::array<std::atomic<uint8_t>, 2> waterfallDisplayTargets_{};
     std::array<CameraOperationWait, 2> operationWaits_{};
     QTimer *connectTimeoutTimer_ = nullptr;

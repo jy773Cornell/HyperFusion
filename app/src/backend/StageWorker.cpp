@@ -1,5 +1,6 @@
 #include "backend/StageWorker.hpp"
 
+#include <algorithm>
 #include <future>
 
 StageWorker::StageWorker(std::shared_ptr<IStageController> controller)
@@ -121,7 +122,7 @@ void StageWorker::shutdownSync(const bool homeBeforeDisconnect)
 
 void StageWorker::requestStopMotion()
 {
-    enqueueCommand([this]() {
+    enqueuePriorityCommand([this]() {
         if (controller_)
             controller_->stopMotion();
     });
@@ -148,15 +149,22 @@ void StageWorker::requestHome()
 
 void StageWorker::requestPrimaryPosition(PositionCallback callback)
 {
-    enqueuePriorityCommand([this, callback = std::move(callback)]() {
-        if (!controller_ || !callback)
-            return;
+    {
+        std::lock_guard lock(commandMutex_);
+        purgePendingPositionPolls();
+    }
 
-        StageError error;
-        double positionMm = 0.0;
-        const bool ok = controller_->getPrimaryPositionMm(positionMm, error);
-        callback(positionMm, ok);
-    });
+    enqueueCommand(
+        [this, callback = std::move(callback)]() {
+            if (!controller_ || !callback)
+                return;
+
+            StageError error;
+            double positionMm = 0.0;
+            const bool ok = controller_->getPrimaryPositionMm(positionMm, error);
+            callback(positionMm, ok);
+        },
+        CommandKind::PositionPoll);
 }
 
 void StageWorker::requestMoveRelativeMm(const double distanceMm, const double speedMmPerSec)
@@ -195,7 +203,7 @@ void StageWorker::requestMoveAbsoluteMm(const double positionMm,
 
 void StageWorker::requestMoveVelocityMm(const double velocityMmPerSec)
 {
-    enqueueCommand([this, velocityMmPerSec]() {
+    enqueuePriorityCommand([this, velocityMmPerSec]() {
         StageError error;
         if (controller_->moveVelocityMm(velocityMmPerSec, error))
             return;
@@ -232,20 +240,31 @@ void StageWorker::setErrorCallback(ErrorCallback callback)
     errorCallback_ = std::move(callback);
 }
 
-void StageWorker::enqueueCommand(ControlCommand command)
+void StageWorker::enqueueCommand(ControlCommand command, const CommandKind kind)
 {
     {
         std::lock_guard lock(commandMutex_);
-        commandQueue_.push_back(std::move(command));
+        commandQueue_.push_back({kind, std::move(command)});
     }
     commandCv_.notify_one();
+}
+
+void StageWorker::purgePendingPositionPolls()
+{
+    commandQueue_.erase(std::remove_if(commandQueue_.begin(),
+                                       commandQueue_.end(),
+                                       [](const QueuedCommand &cmd) {
+                                           return cmd.kind == CommandKind::PositionPoll;
+                                       }),
+                        commandQueue_.end());
 }
 
 void StageWorker::enqueuePriorityCommand(ControlCommand command)
 {
     {
         std::lock_guard lock(commandMutex_);
-        commandQueue_.push_front(std::move(command));
+        purgePendingPositionPolls();
+        commandQueue_.push_front({CommandKind::Normal, std::move(command)});
     }
     commandCv_.notify_one();
 }
@@ -254,7 +273,7 @@ void StageWorker::controlLoop()
 {
     while (running_)
     {
-        ControlCommand command;
+        QueuedCommand queued;
         {
             std::unique_lock lock(commandMutex_);
             commandCv_.wait(lock, [this]() { return !commandQueue_.empty() || !running_; });
@@ -263,12 +282,14 @@ void StageWorker::controlLoop()
             if (commandQueue_.empty())
                 continue;
 
-            command = std::move(commandQueue_.front());
+            queued = std::move(commandQueue_.front());
             commandQueue_.pop_front();
         }
 
-        if (command)
-            command();
+        commandInFlight_.store(true, std::memory_order_release);
+        if (queued.fn)
+            queued.fn();
+        commandInFlight_.store(false, std::memory_order_release);
     }
 }
 

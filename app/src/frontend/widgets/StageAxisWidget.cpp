@@ -3,6 +3,8 @@
 #include <QPainter>
 #include <QPaintEvent>
 
+#include <cmath>
+
 namespace ui
 {
 namespace
@@ -34,6 +36,9 @@ void StageAxisWidget::setTravelRangeMm(const double minimumMm, const double maxi
 
 void StageAxisWidget::setPositionMm(const double positionMm)
 {
+    if (std::abs(positionMm - positionMm_) < 0.02)
+        return;
+
     positionMm_ = positionMm;
     update();
 }
@@ -43,7 +48,6 @@ void StageAxisWidget::paintEvent(QPaintEvent *event)
     QWidget::paintEvent(event);
 
     QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing, true);
 
     const QFont endFont = painter.font();
     const QFontMetrics endMetrics(endFont);

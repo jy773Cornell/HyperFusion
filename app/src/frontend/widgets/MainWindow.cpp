@@ -233,6 +233,12 @@ void MainWindow::onSettingsTabChanged(const int index)
     }
     else if (index == kSettingsTabLight)
         lightPanel_->syncUiFromBackend();
+
+    if (streamTabs_ != nullptr && streamTabs_->currentIndex() == kStreamTabCapture
+        && cameraPanel_ != nullptr)
+    {
+        cameraPanel_->refreshWaterfallDisplayTargets();
+    }
 }
 
 hf::stage::StagePanelController *MainWindow::stagePanel() const { return stagePanel_.get(); }

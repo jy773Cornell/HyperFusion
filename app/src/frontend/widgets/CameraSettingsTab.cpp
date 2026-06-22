@@ -133,6 +133,9 @@ QWidget *MainWindow::createLumoCameraGroup(QWidget *parent,
 
     ui.applyBtn->setEnabled(false);
 
+    ui.sessionUptimeLabel = new QLabel(QStringLiteral("\u2014"), page);
+    ui.sessionUptimeLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+
     form->addRow("Sensor profile", ui.deviceCombo);
     form->addRow("Calibration pack", calibrationRow);
     form->addRow("Shutter", shutterRow);
@@ -143,6 +146,7 @@ QWidget *MainWindow::createLumoCameraGroup(QWidget *parent,
     form->addRow("Red band", ui.redBandCombo);
     form->addRow("Green band", ui.greenBandCombo);
     form->addRow("Blue band", ui.blueBandCombo);
+    form->addRow(QStringLiteral("Session uptime"), ui.sessionUptimeLabel);
     form->addRow("", ui.connectBtn);
     form->addRow("", ui.applyBtn);
 

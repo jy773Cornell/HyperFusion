@@ -57,8 +57,21 @@ public:
 private:
     using ControlCommand = std::function<void()>;
 
-    void enqueueCommand(ControlCommand command);
+    enum class CommandKind
+    {
+        Normal,
+        PositionPoll,
+    };
+
+    struct QueuedCommand
+    {
+        CommandKind kind = CommandKind::Normal;
+        ControlCommand fn;
+    };
+
+    void enqueueCommand(ControlCommand command, CommandKind kind = CommandKind::Normal);
     void enqueuePriorityCommand(ControlCommand command);
+    void purgePendingPositionPolls();
     void controlLoop();
     void notifyState(StageState state);
     void notifyTopology(const StageTopology &topology);
@@ -73,8 +86,9 @@ private:
 
     mutable std::mutex commandMutex_;
     std::condition_variable commandCv_;
-    std::deque<ControlCommand> commandQueue_;
+    std::deque<QueuedCommand> commandQueue_;
 
     std::atomic<bool> running_{false};
+    std::atomic<bool> commandInFlight_{false};
     std::thread controlThread_;
 };

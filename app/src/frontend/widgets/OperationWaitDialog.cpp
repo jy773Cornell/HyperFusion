@@ -9,7 +9,7 @@ OperationWaitDialog::OperationWaitDialog(QWidget *parent)
     : QDialog(parent)
 {
     setWindowTitle(tr("Please wait"));
-    setWindowModality(Qt::ApplicationModal);
+    setWindowModality(Qt::NonModal);
     setWindowFlag(Qt::CustomizeWindowHint, true);
     setWindowFlag(Qt::WindowCloseButtonHint, false);
     setMinimumWidth(360);

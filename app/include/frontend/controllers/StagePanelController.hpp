@@ -32,6 +32,9 @@ public:
     void updateMotionControls(StageState state);
     void updatePositionDisplay(double positionMm);
     void pollPosition();
+    void syncPositionPollInterval();
+    void onManualMotionStarted();
+    void onManualMotionStopped();
     void wireSettingsTabConnections();
 
 public slots:
@@ -42,10 +45,11 @@ public slots:
 private:
     void updateDeviceDisplay(const StageTopology &topology);
     void clearDeviceDisplay();
+    [[nodiscard]] bool bothCamerasStreaming() const;
+    [[nodiscard]] bool anyCameraStreaming() const;
 
     MainWindow *host_ = nullptr;
     std::unique_ptr<StageWorker> stageWorker_;
-    bool positionPollInFlight_ = false;
-    class QTimer *positionTimer_ = nullptr;
+    int manualMotionDepth_ = 0;
 };
 } // namespace hf::stage

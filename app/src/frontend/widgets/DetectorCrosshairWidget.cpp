@@ -66,6 +66,19 @@ void DetectorCrosshairWidget::setAcquisitionFps(const double fps)
     update();
 }
 
+void DetectorCrosshairWidget::setCameraTemperatureCelsius(const std::optional<double> &celsius)
+{
+    if (!celsius.has_value())
+        return;
+
+    if (hasCameraTemperature_ && std::abs(*celsius - cameraTemperatureCelsius_) < 0.05)
+        return;
+
+    hasCameraTemperature_ = true;
+    cameraTemperatureCelsius_ = *celsius;
+    update();
+}
+
 void DetectorCrosshairWidget::setDetectorImage(const QPixmap &pixmap)
 {
     sourceImage_ = pixmap.toImage();
@@ -103,24 +116,45 @@ void DetectorCrosshairWidget::clearDisplay(const QString &message)
     frameWidth_ = 0;
     frameHeight_ = 0;
     acquisitionFps_ = 0.0;
+    hasCameraTemperature_ = false;
+    cameraTemperatureCelsius_ = 0.0;
     update();
 }
 
-void DetectorCrosshairWidget::drawFpsOverlay(QPainter &painter) const
+void DetectorCrosshairWidget::drawStatusOverlay(QPainter &painter) const
 {
-    if (acquisitionFps_ <= 0.0)
+    if (acquisitionFps_ <= 0.0 && !hasCameraTemperature_)
         return;
-
-    const QString fpsText = QStringLiteral("%1 fps").arg(acquisitionFps_, 0, 'f', 1);
 
     QFont font = painter.font();
     font.setBold(true);
     font.setPointSize(10);
     painter.setFont(font);
-
-    const QRect widgetRect = rect().adjusted(kFpsOverlayMarginPx, kFpsOverlayMarginPx, 0, 0);
     painter.setPen(QColor(0xcc, 0xcc, 0xcc));
-    painter.drawText(widgetRect, Qt::AlignTop | Qt::AlignLeft, fpsText);
+
+    const QFontMetrics metrics(font);
+    const int lineHeight = metrics.height();
+    const int lineGap = 2;
+    const QRect widgetRect = rect().adjusted(kFpsOverlayMarginPx, kFpsOverlayMarginPx, 0, 0);
+
+    int y = widgetRect.top();
+    if (acquisitionFps_ > 0.0)
+    {
+        const QString fpsText = QStringLiteral("%1 fps").arg(acquisitionFps_, 0, 'f', 1);
+        painter.drawText(QRect(widgetRect.left(), y, widgetRect.width(), lineHeight),
+                         Qt::AlignTop | Qt::AlignLeft,
+                         fpsText);
+        y += lineHeight + lineGap;
+    }
+
+    if (hasCameraTemperature_)
+    {
+        const QString tempText =
+            QStringLiteral("%1 \u00B0C").arg(cameraTemperatureCelsius_, 0, 'f', 1);
+        painter.drawText(QRect(widgetRect.left(), y, widgetRect.width(), lineHeight),
+                         Qt::AlignTop | Qt::AlignLeft,
+                         tempText);
+    }
 }
 
 QRect DetectorCrosshairWidget::imageDrawRect() const
@@ -183,7 +217,7 @@ void DetectorCrosshairWidget::paintEvent(QPaintEvent *event)
 
     const QRect drawRect = imageDrawRect();
     painter.drawPixmap(drawRect, pixmap_);
-    drawFpsOverlay(painter);
+    drawStatusOverlay(painter);
 
     if (frameWidth_ <= 0 || frameHeight_ <= 0)
         return;

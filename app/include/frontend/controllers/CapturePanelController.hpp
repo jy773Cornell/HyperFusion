@@ -105,6 +105,7 @@ public:
     void applyDualCameraScanSync(bool applyToHardware = true);
     void onCaptureStreamTabActivated();
     void resetDualCameraScanSyncHardwareState();
+    void maybeApplyInitialDualCameraSync();
 
     [[nodiscard]] bool isDualCameraSyncHardwareApplyPending() const;
     void notifyDualCameraSyncSettingsApplied(const CameraSettingsApplyReport &report);
@@ -120,6 +121,7 @@ public slots:
 private:
     double autoRecordScanSpeedMmPerSec() const;
     bool bothFx10eAndSwir3CaptureCamerasConnected() const;
+    [[nodiscard]] bool dualCameraScanSyncReadyForHardware() const;
     void updateSessionUiLock();
     void updateRecorderStatus();
     void notifyRecordComplete();

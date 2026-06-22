@@ -66,6 +66,20 @@ struct LumoGlobalLock
     ~LumoGlobalLock() { g_lumoGlobalMutex.unlock(); }
 };
 
+struct LumoGlobalTryLock
+{
+    bool locked = false;
+
+    LumoGlobalTryLock() { locked = g_lumoGlobalMutex.try_lock(); }
+    ~LumoGlobalTryLock()
+    {
+        if (locked)
+            g_lumoGlobalMutex.unlock();
+    }
+
+    explicit operator bool() const { return locked; }
+};
+
 bool checkSiCode(const int code, const char *operation, CameraError &error)
 {
     if (code == siNoError)
@@ -309,7 +323,15 @@ std::string LumoCamera::swirNiConnectionSummary() const
 bool LumoCamera::readAppliedFrameRateHz(double &outHz, CameraError &error)
 {
 #if defined(HF_HAVE_LUMO_SDK)
-    LumoGlobalLock lumoApi;
+    LumoGlobalTryLock lumoApi;
+    if (!lumoApi)
+    {
+        error.code = CameraErrorCode::Timeout;
+        error.message = tag() + " Lumo SDK busy (connect/init in progress).";
+        error.fatal = false;
+        return false;
+    }
+
     std::lock_guard<std::mutex> lock(mutex_);
     if (handle_ == nullptr)
     {
@@ -342,6 +364,100 @@ bool LumoCamera::readAppliedFrameRateHz(double &outHz, CameraError &error)
     (void)error;
     outHz = settings_.frameRateHz;
     return handle_ != nullptr;
+#endif
+}
+
+bool LumoCamera::refreshCachedTemperatureLocked(void *const handlePtr, CameraError &error)
+{
+    const SI_H handle = static_cast<SI_H>(handlePtr);
+    SI_BOOL implemented = SI_FALSE;
+    if (!SI_SUCCEEDED(SI_IsImplemented(handle, L"Camera.Temperature", &implemented)) || !implemented)
+    {
+        error.code = CameraErrorCode::SdkError;
+        error.message = tag() + " Camera.Temperature not implemented.";
+        error.fatal = false;
+        return false;
+    }
+
+    double rawTemperature = 0.0;
+    if (!checkSi(SI_GetFloat(handle, L"Camera.Temperature", &rawTemperature),
+                 "SI_GetFloat(Camera.Temperature)",
+                 error))
+        return false;
+
+    const double celsius =
+        sensorKind_ == LumoSensorKind::Swir3Ni ? rawTemperature - 273.15 : rawTemperature;
+    cachedTemperatureCelsius_.store(celsius, std::memory_order_relaxed);
+    cachedTemperatureValid_.store(true, std::memory_order_release);
+    return true;
+}
+
+void LumoCamera::maybeRefreshCachedTemperatureFromCallback()
+{
+    const std::int64_t nowNs = static_cast<std::int64_t>(steadyNowNs());
+    const std::int64_t lastNs = lastTemperatureSampleNs_.load(std::memory_order_relaxed);
+    if (nowNs - lastNs < 2'000'000'000LL)
+        return;
+
+    LumoGlobalTryLock lumoApi;
+    if (!lumoApi)
+        return;
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (handle_ == nullptr || state_ != CameraState::Streaming)
+        return;
+
+    CameraError error;
+    if (refreshCachedTemperatureLocked(handle_, error))
+        lastTemperatureSampleNs_.store(nowNs, std::memory_order_relaxed);
+}
+
+bool LumoCamera::readCameraTemperatureCelsius(double &outCelsius, CameraError &error)
+{
+#if defined(HF_HAVE_LUMO_SDK)
+    if (cachedTemperatureValid_.load(std::memory_order_acquire))
+    {
+        outCelsius = cachedTemperatureCelsius_.load(std::memory_order_relaxed);
+        return true;
+    }
+
+    LumoGlobalTryLock lumoApi;
+    if (!lumoApi)
+    {
+        error.code = CameraErrorCode::Timeout;
+        error.message = tag() + " Lumo SDK busy (connect/init in progress).";
+        error.fatal = false;
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (handle_ == nullptr)
+    {
+        error.code = CameraErrorCode::InvalidState;
+        error.message = tag() + " sensor handle not open.";
+        error.fatal = false;
+        return false;
+    }
+
+    if (state_ != CameraState::Initialized && state_ != CameraState::Configured
+        && state_ != CameraState::Armed && state_ != CameraState::Streaming
+        && state_ != CameraState::SafeStopped)
+    {
+        error.code = CameraErrorCode::InvalidState;
+        error.message = tag() + " sensor not initialized.";
+        error.fatal = false;
+        return false;
+    }
+
+    if (!refreshCachedTemperatureLocked(handle_, error))
+        return false;
+
+    outCelsius = cachedTemperatureCelsius_.load(std::memory_order_relaxed);
+    return true;
+#else
+    (void)error;
+    outCelsius = 0.0;
+    return false;
 #endif
 }
 
@@ -629,6 +745,7 @@ void LumoCamera::onFrame(const std::uint8_t *buffer,
     latestFrameNumber_ = frameNumber;
     frameReady_ = true;
     frameCv_.notify_all();
+    maybeRefreshCachedTemperatureFromCallback();
 }
 
 bool LumoCamera::registerDataCallback(CameraError &error)
@@ -1147,6 +1264,8 @@ bool LumoCamera::start(CameraError &error)
         return false;
     }
 
+    (void)refreshCachedTemperatureLocked(handle_, error);
+
     state_ = CameraState::Streaming;
     return true;
 }
@@ -1198,6 +1317,7 @@ void LumoCamera::disconnect()
         handleToClose = handle_;
         handle_ = nullptr;
         state_ = CameraState::Disconnected;
+        cachedTemperatureValid_.store(false, std::memory_order_release);
     }
 
     {
