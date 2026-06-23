@@ -28,6 +28,12 @@ struct HardwareConfig
     int lighthouseTransmittancePercent = 40;
     double stageMotionAccelerationMmPerSec2 = 30.0;
 
+    struct WavelengthRangeNm
+    {
+        double minNm = 0.0;
+        double maxNm = 0.0;
+    };
+
     struct PreprocessingConfig
     {
         int illuminantD = 65;
@@ -35,6 +41,10 @@ struct HardwareConfig
         double ffcClampMin = 0.0;
         double ffcClampMax = 1.0;
         double truncateNm = 780.0;
+        /// SWIR post-capture false-color PNG: mean reflectance per channel over these nm ranges.
+        WavelengthRangeNm swirFalseColorRed{1550.0, 1700.0};
+        WavelengthRangeNm swirFalseColorGreen{1100.0, 1300.0};
+        WavelengthRangeNm swirFalseColorBlue{950.0, 1050.0};
     };
 
     PreprocessingConfig preprocessing;

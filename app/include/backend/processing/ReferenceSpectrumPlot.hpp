@@ -12,6 +12,7 @@ bool saveReferenceMeanStdPlotPng(const std::vector<double> &wavelengthsNm,
                                  const std::vector<double> &stdDn,
                                  const QString &title,
                                  const QString &outputPath,
+                                 double yAxisMax = 4096.0,
                                  QString *errorMessage = nullptr);
 
 } // namespace hf::processing

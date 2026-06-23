@@ -31,7 +31,7 @@ public:
     /// Home (if connected), disconnect, and stop the worker thread.
     /// When @p homeBeforeDisconnect is false, motion is stopped and the stage disconnects immediately.
     void shutdownSync(bool homeBeforeDisconnect = true);
-    void requestStopMotion();
+    void requestStopMotion(std::function<void()> onComplete = nullptr, bool waitUntilIdle = true);
     void requestHome();
     void requestMoveRelativeMm(double distanceMm,
                                double speedMmPerSec = zaber_stage::kMaxSpeedMmPerSec);

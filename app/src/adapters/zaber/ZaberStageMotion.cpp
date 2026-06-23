@@ -133,12 +133,14 @@ bool ZaberStageMotion::homeLockstep(zaber::motion::ascii::Lockstep &lockstep, St
     }
 }
 
-bool ZaberStageMotion::stopLockstep(zaber::motion::ascii::Lockstep &lockstep, StageError &error)
+bool ZaberStageMotion::stopLockstep(zaber::motion::ascii::Lockstep &lockstep,
+                                    StageError &error,
+                                    const bool waitUntilIdle)
 {
     try
     {
         Lockstep::StopOptions options;
-        options.waitUntilIdle = true;
+        options.waitUntilIdle = waitUntilIdle;
         lockstep.stop(options);
         return true;
     }

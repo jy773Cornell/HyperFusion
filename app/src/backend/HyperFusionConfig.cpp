@@ -231,6 +231,79 @@ void assignCameraPosition(hf::HardwareConfig &config,
     config.cameraPositionMm[static_cast<std::size_t>(cameraIndex)] = valueMm;
 }
 
+void assignFx10eSpatialMmPerPixel(hf::HardwareConfig &config,
+                                    const double valueMm,
+                                    QStringList &warnings)
+{
+    if (valueMm <= 0.0)
+        warnings.push_back(QStringLiteral("fx10e_spatial_mm_per_pixel must be > 0"));
+    else
+        config.spatialMmPerPixel[0] = valueMm;
+}
+
+void assignSwir3SpatialMmPerPixel(hf::HardwareConfig &config,
+                                  const double valueMm,
+                                  QStringList &warnings)
+{
+    if (valueMm <= 0.0)
+        warnings.push_back(QStringLiteral("swir3_spatial_mm_per_pixel must be > 0"));
+    else
+        config.spatialMmPerPixel[1] = valueMm;
+}
+
+void assignBothSpatialMmPerPixel(hf::HardwareConfig &config,
+                                 const double valueMm,
+                                 QStringList &warnings)
+{
+    if (valueMm <= 0.0)
+        warnings.push_back(QStringLiteral("spatial_mm_per_pixel must be > 0"));
+    else
+    {
+        config.spatialMmPerPixel[0] = valueMm;
+        config.spatialMmPerPixel[1] = valueMm;
+    }
+}
+
+bool parseSpatialMmPerPixelKey(const QString &key,
+                             const QString &value,
+                             const bool hasNumber,
+                             const double numericValue,
+                             hf::HardwareConfig &config,
+                             QStringList &warnings)
+{
+    if (key == QStringLiteral("fx10e_spatial_mm_per_pixel")
+        || key == QStringLiteral("fx10e_spatial_distance_per_pixel_mm"))
+    {
+        if (!hasNumber)
+            warnings.push_back(QStringLiteral("Invalid fx10e_spatial_mm_per_pixel: %1").arg(value));
+        else
+            assignFx10eSpatialMmPerPixel(config, numericValue, warnings);
+        return true;
+    }
+
+    if (key == QStringLiteral("swir3_spatial_mm_per_pixel")
+        || key == QStringLiteral("swir3_spatial_distance_per_pixel_mm"))
+    {
+        if (!hasNumber)
+            warnings.push_back(QStringLiteral("Invalid swir3_spatial_mm_per_pixel: %1").arg(value));
+        else
+            assignSwir3SpatialMmPerPixel(config, numericValue, warnings);
+        return true;
+    }
+
+    if (key == QStringLiteral("spatial_mm_per_pixel")
+        || key == QStringLiteral("spatial_distance_per_pixel_mm"))
+    {
+        if (!hasNumber)
+            warnings.push_back(QStringLiteral("Invalid spatial_mm_per_pixel: %1").arg(value));
+        else
+            assignBothSpatialMmPerPixel(config, numericValue, warnings);
+        return true;
+    }
+
+    return false;
+}
+
 bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStringList &warnings)
 {
     QString section;
@@ -354,6 +427,9 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 else
                     config.stageMotionAccelerationMmPerSec2 = numericValue;
             }
+            else if (parseSpatialMmPerPixelKey(key, value, hasNumber, numericValue, config, warnings))
+            {
+            }
             else
             {
                 warnings.push_back(QStringLiteral("Unknown key in [scanning_settings]: %1").arg(key));
@@ -378,38 +454,8 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
         }
         else if (section == QStringLiteral("calibration"))
         {
-            if (key == QStringLiteral("fx10e_spatial_mm_per_pixel")
-                || key == QStringLiteral("fx10e_spatial_distance_per_pixel_mm"))
+            if (parseSpatialMmPerPixelKey(key, value, hasNumber, numericValue, config, warnings))
             {
-                if (!hasNumber)
-                    warnings.push_back(QStringLiteral("Invalid fx10e_spatial_mm_per_pixel: %1").arg(value));
-                else if (numericValue <= 0.0)
-                    warnings.push_back(QStringLiteral("fx10e_spatial_mm_per_pixel must be > 0"));
-                else
-                    config.spatialMmPerPixel[0] = numericValue;
-            }
-            else if (key == QStringLiteral("swir3_spatial_mm_per_pixel")
-                     || key == QStringLiteral("swir3_spatial_distance_per_pixel_mm"))
-            {
-                if (!hasNumber)
-                    warnings.push_back(QStringLiteral("Invalid swir3_spatial_mm_per_pixel: %1").arg(value));
-                else if (numericValue <= 0.0)
-                    warnings.push_back(QStringLiteral("swir3_spatial_mm_per_pixel must be > 0"));
-                else
-                    config.spatialMmPerPixel[1] = numericValue;
-            }
-            else if (key == QStringLiteral("spatial_mm_per_pixel")
-                     || key == QStringLiteral("spatial_distance_per_pixel_mm"))
-            {
-                if (!hasNumber)
-                    warnings.push_back(QStringLiteral("Invalid spatial_mm_per_pixel: %1").arg(value));
-                else if (numericValue <= 0.0)
-                    warnings.push_back(QStringLiteral("spatial_mm_per_pixel must be > 0"));
-                else
-                {
-                    config.spatialMmPerPixel[0] = numericValue;
-                    config.spatialMmPerPixel[1] = numericValue;
-                }
             }
             else
             {
@@ -515,6 +561,48 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                     warnings.push_back(QStringLiteral("Invalid preprocessing truncate_nm: %1").arg(value));
                 else
                     config.preprocessing.truncateNm = numericValue;
+            }
+            else if (key == QStringLiteral("swir_false_color_red_nm_min"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid swir_false_color_red_nm_min: %1").arg(value));
+                else
+                    config.preprocessing.swirFalseColorRed.minNm = numericValue;
+            }
+            else if (key == QStringLiteral("swir_false_color_red_nm_max"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid swir_false_color_red_nm_max: %1").arg(value));
+                else
+                    config.preprocessing.swirFalseColorRed.maxNm = numericValue;
+            }
+            else if (key == QStringLiteral("swir_false_color_green_nm_min"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid swir_false_color_green_nm_min: %1").arg(value));
+                else
+                    config.preprocessing.swirFalseColorGreen.minNm = numericValue;
+            }
+            else if (key == QStringLiteral("swir_false_color_green_nm_max"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid swir_false_color_green_nm_max: %1").arg(value));
+                else
+                    config.preprocessing.swirFalseColorGreen.maxNm = numericValue;
+            }
+            else if (key == QStringLiteral("swir_false_color_blue_nm_min"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid swir_false_color_blue_nm_min: %1").arg(value));
+                else
+                    config.preprocessing.swirFalseColorBlue.minNm = numericValue;
+            }
+            else if (key == QStringLiteral("swir_false_color_blue_nm_max"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid swir_false_color_blue_nm_max: %1").arg(value));
+                else
+                    config.preprocessing.swirFalseColorBlue.maxNm = numericValue;
             }
             else
             {
@@ -633,12 +721,11 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "\n"
         << "[scanning_settings]\n"
         << "operation_scanning_speed_mm_per_sec = 80\n"
+        << "acceleration_mm_per_sec2 = 30\n"
         << "white_reference_frames = 100\n"
         << "black_reference_frames = 100\n"
         << "sample_window_max_length_mm = 500\n"
-        << "\n"
-        << "[calibration]\n"
-        << "# Spatial scale along the scan axis (mm per detector pixel).\n"
+        << "# Spatial scale along the scan axis (mm per detector pixel at spatial binning 1).\n"
         << "fx10e_spatial_mm_per_pixel = 0.205\n"
         << "swir3_spatial_mm_per_pixel = 0.4\n"
         << "\n"
@@ -657,6 +744,13 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "ffc_clamp_min = 0.0\n"
         << "ffc_clamp_max = 1.0\n"
         << "truncate_nm = 780.0\n"
+        << "# SWIR false-color PNG (post-capture): mean reflectance per channel inside each nm range.\n"
+        << "swir_false_color_red_nm_min = 1550\n"
+        << "swir_false_color_red_nm_max = 1700\n"
+        << "swir_false_color_green_nm_min = 1100\n"
+        << "swir_false_color_green_nm_max = 1300\n"
+        << "swir_false_color_blue_nm_min = 950\n"
+        << "swir_false_color_blue_nm_max = 1050\n"
         << "\n"
         << "[segmentation]\n"
         << "# GSAM2 sidecar (WSL). sam2_repo_linux empty = auto from resources/sam2.\n"

@@ -120,12 +120,20 @@ void StageWorker::shutdownSync(const bool homeBeforeDisconnect)
         controlThread_.join();
 }
 
-void StageWorker::requestStopMotion()
+void StageWorker::requestStopMotion(std::function<void()> onComplete, const bool waitUntilIdle)
 {
-    enqueuePriorityCommand([this]() {
+    auto command = [this, onComplete = std::move(onComplete), waitUntilIdle]() {
         if (controller_)
-            controller_->stopMotion();
-    });
+            controller_->stopMotion(waitUntilIdle);
+
+        if (onComplete)
+            onComplete();
+    };
+
+    if (waitUntilIdle)
+        enqueuePriorityCommand(std::move(command));
+    else
+        enqueueCommand(std::move(command));
 }
 
 void StageWorker::requestHome()

@@ -351,7 +351,7 @@ bool ZaberStageController::getPrimaryPositionMm(double &positionMm, StageError &
 #endif
 }
 
-void ZaberStageController::stopMotion()
+void ZaberStageController::stopMotion(const bool waitUntilIdle)
 {
 #ifndef HF_HAVE_ZML
     return;
@@ -365,7 +365,7 @@ void ZaberStageController::stopMotion()
             connection_->getDevice(zaber_stage::kDeviceAddress);
         StageError error;
         zaber::motion::ascii::Lockstep lockstep = ZaberStageMotion::requireEnabledLockstep(device, error);
-        ZaberStageMotion::stopLockstep(lockstep, error);
+        ZaberStageMotion::stopLockstep(lockstep, error, waitUntilIdle);
     }
     catch (...)
     {

@@ -1,9 +1,12 @@
-// Waterfall RGB stack display: spatial axis fills width, line history fills height.
+// Waterfall RGB stack display: full pane width, height from aspect, anchored to bottom edge.
 #pragma once
 
 #include <QImage>
+#include <QRect>
 #include <QSize>
 #include <QWidget>
+
+#include <memory>
 
 namespace ui
 {
@@ -15,7 +18,11 @@ public:
     explicit WaterfallDisplayWidget(QWidget *parent = nullptr);
 
     void setImage(QImage image);
+    void setSharedImage(std::shared_ptr<const QImage> image);
     void clearDisplay(const QString &message = QString());
+
+signals:
+    void paneGeometryChanged();
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -24,9 +31,12 @@ protected:
 
 private:
     void ensureScaledImage();
+    [[nodiscard]] const QImage *sourceImage() const;
 
     QImage image_;
+    std::shared_ptr<const QImage> sharedImage_;
     QImage scaledImage_;
+    QRect imageDrawRect_;
     QString placeholder_;
     QSize cachedScaleSize_;
     bool scaledDirty_ = true;

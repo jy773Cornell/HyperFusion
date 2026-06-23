@@ -49,6 +49,9 @@ public:
         double whiteRefScanOriginMm = 0.0;
         double whiteRefScanTotalDistanceMm = 0.0;
         double whiteRefScanDistanceMm[2] = {0.0, 0.0};
+        /// One-pass record scan: origin/end span all white-ref and sample windows.
+        double recordScanOriginMm = 0.0;
+        double recordScanTotalDistanceMm = 0.0;
         double operationSpeedMmPerSec = 0.0;
         double recordScanSpeedMmPerSec = 0.0;
         int whiteReferenceFrameCount = 0;
@@ -65,6 +68,8 @@ public:
         BlackReference,
         WhiteReferenceScan,
         SampleScan,
+        /// Single stage pass: white ref then sample windows per camera (dual or single).
+        CombinedRecordScan,
     };
 
     enum class CaptureRecorderMode
@@ -92,6 +97,7 @@ public:
     void updateCamerasList();
     void updateRecorderControls();
     void updateGsamServerUi();
+    void tryAutoStartGsamServer();
     void wireSettingsTabConnections();
     void updateDualCameraSyncControls();
     void updateScanningSpeedControls();
@@ -123,7 +129,9 @@ private:
     bool bothFx10eAndSwir3CaptureCamerasConnected() const;
     [[nodiscard]] bool dualCameraScanSyncReadyForHardware() const;
     void updateSessionUiLock();
+    void syncCaptureIlluminationModeControls();
     void updateRecorderStatus();
+    void clearRecorderCameraStatusLabels();
     void notifyRecordComplete();
     void beginRecordCompleteNotify();
     void tryNotifyRecordComplete();
@@ -134,6 +142,7 @@ private:
     bool confirmCaptureStart(const LighthouseControllerPowerStatus &powerStatus) const;
     bool confirmCaptureHoodPreparation(CaptureIlluminationMode mode,
                                        bool betweenReflectanceAndTransmittance) const;
+    bool confirmContinuousCaptureWithoutStage() const;
     void startCurrentCaptureMode();
     void beginCaptureModeMotion();
     void beginCaptureMoveToTempStopPosition();
@@ -146,13 +155,14 @@ private:
     void beginCaptureMoveToFirstRefPosition();
     void beginCaptureBlackReference();
     void onCaptureBlackReferenceComplete();
-    void beginCaptureWhiteReferenceSequence();
+    void beginCaptureRecordScanSequence();
     void beginCaptureMoveToWhiteRefScanOrigin();
-    void beginCaptureWhiteReferenceScan();
+    void beginCombinedRecordScan();
+    void onCaptureCombinedRecordScanComplete();
     void onCaptureWhiteReferenceSequenceComplete();
     void onCaptureSampleScanComplete();
     void onWhiteReferenceFrameCollected(std::size_t cameraIndex);
-    void updateWhiteReferenceScanGeometryForCurrentMode();
+    void updateCombinedRecordScanGeometry();
     bool selectedCamerasReachedWhiteReferenceTarget() const;
     bool shouldAcceptWhiteReferenceFrame(std::size_t cameraIndex) const;
     bool shouldRecordWhiteReferenceFrameForCamera(std::size_t stageCameraIndex,
@@ -172,6 +182,7 @@ private:
     void failCaptureSequence(const QString &message);
     void setSelectedCameraShutters(bool open);
     bool selectedCamerasReachedBlackReferenceTarget() const;
+    bool shouldAcceptBlackReferenceFrame(std::size_t cameraIndex) const;
     bool validateCaptureRecordMetadata(QString &errorMessage) const;
     bool selectedCaptureCameraIndices(std::vector<std::size_t> &cameraIndices) const;
     std::size_t stageCameraIndexForUi(const LumoCameraUi &ui, std::size_t cameraIndex) const;
@@ -194,6 +205,8 @@ private:
     bool selectedCamerasEnteredSampleWindow() const;
     bool selectedCamerasHaveSampleFrames() const;
     bool canCompleteSampleScan() const;
+    bool canCompleteCombinedRecordScan() const;
+    [[nodiscard]] QString recorderCameraStatusText(std::size_t cameraIndex) const;
     void updateSampleScanWindowProgress(double stagePositionMm);
     void scheduleRelativeScanTimer(double distanceMm, double speedMmPerSec);
     void extendSampleScanTimer();
@@ -201,6 +214,7 @@ private:
                                           double stagePositionMm) const;
     bool selectedCaptureIlluminationModes(std::vector<CaptureIlluminationMode> &modes) const;
     bool isCaptureStageConnected() const;
+    bool isCaptureStagePresent() const;
     bool isStageRecordingEnabledInUi() const;
     bool useStageForCapture() const;
     bool effectiveCaptureIlluminationModes(std::vector<CaptureIlluminationMode> &modes) const;
@@ -248,6 +262,7 @@ private:
     quint64 captureRelativeScanTimerToken_ = 0;
     quint64 captureRelativeScanTimerActiveToken_ = 0;
     int captureSampleScanTimerExtendCount_ = 0;
+    bool captureStageWasPresent_ = false;
     bool pendingCaptureRecordCompleteNotify_ = false;
     bool captureRecordCompleteHomingPending_ = false;
     bool captureRecordCompletePostProcessPending_ = false;

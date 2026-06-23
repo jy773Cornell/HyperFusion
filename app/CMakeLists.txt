@@ -163,6 +163,7 @@ qt_add_executable(app
     src/adapters/zaber/ZaberStageHoming.cpp
     src/adapters/zaber/ZaberStageMotion.cpp
     src/adapters/lumo/CalpackBandCatalog.cpp
+    src/adapters/lumo/CalibrationPackPaths.cpp
     src/adapters/lumo/LumoCamera.cpp
     src/adapters/lumo/Swir3NiCamera.cpp
     src/adapters/mcc/Mcc1208LighthouseController.cpp
@@ -173,6 +174,7 @@ qt_add_executable(app
     include/adapters/zaber/ZaberStageMotion.hpp
     include/adapters/zaber/ZaberStageProfile.hpp
     include/adapters/lumo/CalpackBandCatalog.hpp
+    include/adapters/lumo/CalibrationPackPaths.hpp
     include/adapters/lumo/LumoCamera.hpp
     include/adapters/lumo/Swir3NiCamera.hpp
     include/adapters/lumo/LumoDeviceTypes.hpp

@@ -198,9 +198,11 @@ private:
     QPushButton *captureRecorderRecordBtn_ = nullptr;
     QLabel *captureRecorderStatusIndicator_ = nullptr;
     QLabel *captureRecorderStatusLabel_ = nullptr;
+    QLabel *captureRecorderCameraStatusLabels_[2] = {nullptr, nullptr};
     QTimer *captureRecorderStatusTimer_ = nullptr;
     QCheckBox *captureReflectanceCheck_ = nullptr;
     QCheckBox *captureTransmittanceCheck_ = nullptr;
+    QGroupBox *captureModesBox_ = nullptr;
     QGroupBox *captureMetadataBox_ = nullptr;
     QGroupBox *capturePositionBox_ = nullptr;
     QGroupBox *captureCamerasBox_ = nullptr;
@@ -219,7 +221,7 @@ private:
     QCheckBox *capturePreprocessAfterScanCheck_ = nullptr;
     QCheckBox *captureSaveFfcImageCheck_ = nullptr;
     QCheckBox *captureRunGsamCheck_ = nullptr;
-    QPushButton *captureGsamStartServerBtn_ = nullptr;
+    QLabel *captureGsamServerStatusLabel_ = nullptr;
     QLineEdit *captureGsamPromptEdit_ = nullptr;
     QSpinBox *captureGsamSampleCountSpin_ = nullptr;
     QWidget *capturePositionContent_ = nullptr;

@@ -1,9 +1,9 @@
+// Mean ± 1σ reference spectrum plot export (intensity DN vs wavelength).
 #include "backend/processing/ReferenceSpectrumPlot.hpp"
 
 #include <QDir>
 #include <QFileInfo>
 #include <QFont>
-#include <QFontMetrics>
 #include <QImage>
 #include <QPainter>
 #include <QPen>
@@ -23,7 +23,7 @@ constexpr int kMarginLeft = 72;
 constexpr int kMarginRight = 24;
 constexpr int kMarginTop = 48;
 constexpr int kMarginBottom = 56;
-constexpr double kDnAxisMax = 4096.0;
+constexpr int kAxisTickCount = 10;
 
 QPointF mapDataToPlot(const QRectF &plotRect,
                       const double wavelengthMin,
@@ -39,6 +39,21 @@ QPointF mapDataToPlot(const QRectF &plotRect,
     return QPointF(plotRect.left() + xNorm * plotRect.width(),
                    plotRect.bottom() - yNorm * plotRect.height());
 }
+
+QString formatDnAxisTickLabel(const double value)
+{
+    if (value >= 1000.0)
+        return QString::number(static_cast<qint64>(std::llround(value)));
+    return QString::number(value, 'f', 0);
+}
+
+QString yAxisLabelForMax(const double yAxisMax)
+{
+    if (yAxisMax > 4096.0)
+        return QStringLiteral("Intensity (DN, 0\u201365535, 16-bit)");
+
+    return QStringLiteral("Intensity (DN, 0\u20134096)");
+}
 } // namespace
 
 bool saveReferenceMeanStdPlotPng(const std::vector<double> &wavelengthsNm,
@@ -46,6 +61,7 @@ bool saveReferenceMeanStdPlotPng(const std::vector<double> &wavelengthsNm,
                                  const std::vector<double> &stdDn,
                                  const QString &title,
                                  const QString &outputPath,
+                                 const double yAxisMax,
                                  QString *errorMessage)
 {
     if (wavelengthsNm.empty() || meanDn.empty() || stdDn.empty())
@@ -67,7 +83,7 @@ bool saveReferenceMeanStdPlotPng(const std::vector<double> &wavelengthsNm,
     const double wavelengthMin = wavelengthsNm.front();
     const double wavelengthMax = wavelengthsNm[bandCount - 1];
     const double yMin = 0.0;
-    const double yMax = kDnAxisMax;
+    const double yMax = std::max(1.0, yAxisMax);
 
     QImage image(kPlotWidth, kPlotHeight, QImage::Format_RGB32);
     image.fill(Qt::white);
@@ -87,12 +103,19 @@ bool saveReferenceMeanStdPlotPng(const std::vector<double> &wavelengthsNm,
                           kPlotWidth - kMarginLeft - kMarginRight,
                           kPlotHeight - kMarginTop - kMarginBottom);
 
+    QFont tickFont = painter.font();
+    tickFont.setPointSize(8);
+    painter.setFont(tickFont);
+
     painter.setPen(QPen(QColor(220, 220, 220)));
-    for (int grid = 0; grid <= 4; ++grid)
+    for (int tick = 0; tick < kAxisTickCount; ++tick)
     {
-        const double yValue = yMin + (static_cast<double>(grid) / 4.0) * (yMax - yMin);
-        const QPointF left = mapDataToPlot(plotRect, wavelengthMin, wavelengthMax, yMin, yMax, wavelengthMin, yValue);
-        const QPointF right = mapDataToPlot(plotRect, wavelengthMin, wavelengthMax, yMin, yMax, wavelengthMax, yValue);
+        const double yValue =
+            yMin + (static_cast<double>(tick) / static_cast<double>(kAxisTickCount - 1)) * (yMax - yMin);
+        const QPointF left =
+            mapDataToPlot(plotRect, wavelengthMin, wavelengthMax, yMin, yMax, wavelengthMin, yValue);
+        const QPointF right =
+            mapDataToPlot(plotRect, wavelengthMin, wavelengthMax, yMin, yMax, wavelengthMax, yValue);
         painter.drawLine(left, right);
     }
 
@@ -137,13 +160,42 @@ bool saveReferenceMeanStdPlotPng(const std::vector<double> &wavelengthsNm,
     }
     painter.drawPolyline(meanLine);
 
-    QFont axisFont = painter.font();
-    axisFont.setBold(false);
-    axisFont.setPointSize(9);
-    painter.setFont(axisFont);
     painter.setPen(Qt::black);
+    for (int tick = 0; tick < kAxisTickCount; ++tick)
+    {
+        const double yValue =
+            yMin + (static_cast<double>(tick) / static_cast<double>(kAxisTickCount - 1)) * (yMax - yMin);
+        const QPointF plotPoint =
+            mapDataToPlot(plotRect, wavelengthMin, wavelengthMax, yMin, yMax, wavelengthMin, yValue);
+        painter.drawLine(QPointF(plotRect.left() - 5.0, plotPoint.y()),
+                         QPointF(plotRect.left(), plotPoint.y()));
+        painter.drawText(QRect(4,
+                               static_cast<int>(std::lround(plotPoint.y())) - 8,
+                               kMarginLeft - 12,
+                               16),
+                         Qt::AlignRight | Qt::AlignVCenter,
+                         formatDnAxisTickLabel(yValue));
+    }
 
-    painter.drawText(QRect(0, kPlotHeight - kMarginBottom + 8, kPlotWidth, 24),
+    for (int tick = 0; tick < kAxisTickCount; ++tick)
+    {
+        const double wavelength =
+            wavelengthMin
+            + (static_cast<double>(tick) / static_cast<double>(kAxisTickCount - 1))
+                  * (wavelengthMax - wavelengthMin);
+        const QPointF plotPoint =
+            mapDataToPlot(plotRect, wavelengthMin, wavelengthMax, yMin, yMax, wavelength, yMin);
+        painter.drawLine(QPointF(plotPoint.x(), plotRect.bottom()),
+                         QPointF(plotPoint.x(), plotRect.bottom() + 5.0));
+        painter.drawText(QRect(static_cast<int>(std::lround(plotPoint.x())) - 28,
+                               kPlotHeight - kMarginBottom + 6,
+                               56,
+                               20),
+                         Qt::AlignHCenter | Qt::AlignTop,
+                         QString::number(static_cast<int>(std::lround(wavelength))));
+    }
+
+    painter.drawText(QRect(kMarginLeft, kPlotHeight - kMarginBottom + 28, static_cast<int>(plotRect.width()), 24),
                      Qt::AlignHCenter | Qt::AlignTop,
                      QStringLiteral("Wavelength (nm)"));
 
@@ -152,27 +204,8 @@ bool saveReferenceMeanStdPlotPng(const std::vector<double> &wavelengthsNm,
     painter.rotate(-90.0);
     painter.drawText(QRect(-kPlotHeight / 2, 0, kPlotHeight, 20),
                      Qt::AlignHCenter | Qt::AlignTop,
-                     QStringLiteral("Intensity (DN, 0–4096)"));
+                     yAxisLabelForMax(yMax));
     painter.restore();
-
-    for (int tick = 0; tick <= 4; ++tick)
-    {
-        const double yValue = yMin + (static_cast<double>(tick) / 4.0) * (yMax - yMin);
-        const QPointF tickPos =
-            mapDataToPlot(plotRect, wavelengthMin, wavelengthMax, yMin, yMax, wavelengthMin, yValue);
-        painter.drawLine(QPointF(plotRect.left() - 4.0, tickPos.y()),
-                         QPointF(plotRect.left(), tickPos.y()));
-        painter.drawText(QRectF(8.0, tickPos.y() - 8.0, kMarginLeft - 12.0, 16.0),
-                         Qt::AlignRight | Qt::AlignVCenter,
-                         QString::number(static_cast<int>(yValue)));
-    }
-
-    painter.drawText(QRectF(plotRect.left(), plotRect.bottom() + 6.0, plotRect.width() / 2.0, 16.0),
-                     Qt::AlignLeft | Qt::AlignTop,
-                     QString::number(wavelengthMin, 'f', 0));
-    painter.drawText(QRectF(plotRect.center().x(), plotRect.bottom() + 6.0, plotRect.width() / 2.0, 16.0),
-                     Qt::AlignRight | Qt::AlignTop,
-                     QString::number(wavelengthMax, 'f', 0));
 
     painter.end();
 

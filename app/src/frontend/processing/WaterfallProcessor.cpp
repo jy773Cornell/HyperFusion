@@ -57,9 +57,33 @@ void WaterfallProcessor::reset()
 void WaterfallProcessor::setMaxLines(const int maxLines)
 {
     std::lock_guard<std::mutex> stateLock(stateMutex_);
-    maxLines_ = std::max(16, maxLines);
-    if (lineCount_ > maxLines_)
-        lineCount_ = maxLines_;
+    const int newMax = std::max(16, maxLines);
+    if (lineCount_ > newMax)
+        lineCount_ = newMax;
+
+    if (waterfallImage_.isNull())
+    {
+        maxLines_ = newMax;
+        return;
+    }
+
+    const int width = waterfallImage_.width();
+    if (newMax != maxLines_ || waterfallImage_.height() != newMax)
+    {
+        QImage expanded(width, newMax, QImage::Format_RGB888);
+        expanded.fill(qRgb(0, 0, 0));
+        const int copyLines = std::min(lineCount_, newMax);
+        for (int y = 0; y < copyLines; ++y)
+        {
+            std::memcpy(expanded.scanLine(y),
+                        waterfallImage_.scanLine(y),
+                        static_cast<std::size_t>(width) * 3);
+        }
+        waterfallImage_ = std::move(expanded);
+        displayDirty_ = true;
+    }
+
+    maxLines_ = newMax;
 }
 
 void WaterfallProcessor::setBandIndices(const RgbBandIndices &bands)
@@ -111,7 +135,7 @@ void WaterfallProcessor::appendRgbLine(const std::vector<std::uint8_t> &rgbRow, 
     if (width <= 0 || rgbRow.size() < static_cast<std::size_t>(width) * 3)
         return;
 
-    if (waterfallImage_.isNull() || waterfallImage_.width() != width)
+    if (waterfallImage_.isNull() || waterfallImage_.width() != width || waterfallImage_.height() != maxLines_)
     {
         waterfallImage_ = QImage(width, maxLines_, QImage::Format_RGB888);
         waterfallImage_.fill(qRgb(0, 0, 0));

@@ -17,6 +17,7 @@ Gsam2RoiAnalysisResult analyzeGsam2SegmentationRois(const QString &ffcHdrPath,
                                                      const QString &segmentationDirectory,
                                                      const QString &imageName,
                                                      const QString &manifestJsonPath,
+                                                     const QString &yAxisLabel,
                                                      QString *errorMessage = nullptr);
 
 } // namespace hf::processing

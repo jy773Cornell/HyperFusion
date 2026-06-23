@@ -17,6 +17,8 @@ struct EnviFloatWriter
     QString hdrPath;
     QString rawPath;
     EnviBilMetadata metadata;
+    QString sensorTypeLabel;
+    QString description;
     int linesWritten = 0;
 };
 
@@ -24,6 +26,7 @@ bool beginEnviFloatWriter(EnviFloatWriter &writer,
                           const QString &hdrPath,
                           const EnviBilMetadata &templateMetadata,
                           const QString &sensorTypeLabel,
+                          const QString &description,
                           QString *errorMessage = nullptr);
 
 bool appendEnviFloatLine(EnviFloatWriter &writer,

@@ -3,6 +3,7 @@
 #include "frontend/controllers/CameraAppController.hpp"
 
 #include "adapters/lumo/LumoCamera.hpp"
+#include "adapters/lumo/CalibrationPackPaths.hpp"
 #include "adapters/lumo/Swir3NiCamera.hpp"
 #include "frontend/widgets/LumoCameraUi.hpp"
 #include "backend/CameraCoordinator.hpp"
@@ -20,8 +21,6 @@
 
 namespace
 {
-constexpr auto kFx10eCalibrationFileName = "3210441_20211027_calpack.scp";
-
 bool lumoProfileMatchesFx10eSlot(const QString &name)
 {
     if (name.contains(QStringLiteral("SWIR"), Qt::CaseInsensitive))
@@ -150,22 +149,7 @@ void CameraAppController::shutdown()
 
 QString CameraAppController::defaultFx10eCalibrationPackPath()
 {
-    const QString fileName = QString::fromLatin1(kFx10eCalibrationFileName);
-    const QString appDir = QCoreApplication::applicationDirPath();
-
-    const QStringList candidates = {
-        QDir(appDir).filePath(QStringLiteral("calibration/") + fileName),
-        QDir(appDir).filePath(QStringLiteral("../calibration/") + fileName),
-        QDir(appDir).filePath(QStringLiteral("../../app/calibration/") + fileName),
-    };
-
-    for (const QString &candidate : candidates)
-    {
-        if (QFileInfo::exists(candidate))
-            return QDir::cleanPath(candidate);
-    }
-
-    return QDir::cleanPath(QDir(appDir).filePath(QStringLiteral("../calibration/") + fileName));
+    return lumo::resolveBundledCalibrationPackPath(LumoSensorKind::Fx10ePleora);
 }
 
 CameraSettings CameraAppController::settingsFromUi(const LumoCameraUi &ui)
@@ -190,7 +174,13 @@ CameraSettings CameraAppController::settingsFromUi(const LumoCameraUi &ui)
     if (ui.deviceCombo != nullptr)
         settings.profileName = ui.deviceCombo->currentText().toStdString();
     if (ui.calibrationPackEdit != nullptr)
-        settings.lumoCalibrationPackPath = ui.calibrationPackEdit->text().trimmed().toStdString();
+    {
+        QString stored = ui.calibrationPackEdit->property(QStringLiteral("hf_calibrationPackPath")).toString();
+        if (stored.isEmpty())
+            stored = ui.calibrationPackEdit->text();
+        settings.lumoCalibrationPackPath =
+            lumo::resolveCalibrationPackPath(stored, ui.sensorKind).toStdString();
+    }
     return settings;
 }
 

@@ -4,6 +4,7 @@
 #include "adapters/lumo/LumoCamera.hpp"
 #include "adapters/lumo/Swir3NiCamera.hpp"
 #include "adapters/lumo/CalpackBandCatalog.hpp"
+#include "adapters/lumo/CalibrationPackPaths.hpp"
 #include "backend/CameraCoordinator.hpp"
 #include "backend/HyperFusionConfig.hpp"
 #include "backend/SdkLifecycleRunner.hpp"
@@ -48,8 +49,6 @@
 
 namespace {
 
-constexpr auto kFx10eCalibrationFileName = "3210441_20211027_calpack.scp";
-constexpr auto kSwir3CalibrationFileName = "462111_OLES15_20250109_calpack.scp";
 constexpr auto kCalibrationPackPathProperty = "hf_calibrationPackPath";
 constexpr int kDefaultRedBandIndex = 193;
 constexpr int kDefaultGreenBandIndex = 112;
@@ -133,10 +132,7 @@ CameraPanelController::CameraPanelController(MainWindow *host, QObject *parent)
 
     sdkFrameRatePollTimer_ = new QTimer(this);
     sdkFrameRatePollTimer_->setInterval(3000);
-    connect(sdkFrameRatePollTimer_, &QTimer::timeout, this, [this]() {
-        pollSdkFrameRates();
-        pollCameraTemperatures();
-    });
+    connect(sdkFrameRatePollTimer_, &QTimer::timeout, this, [this]() { pollSdkFrameRates(); });
     sdkFrameRatePollTimer_->start();
 }
 
@@ -233,18 +229,18 @@ void CameraPanelController::initializeCameras()
     });
 
     setupStreamPipeline();
+    wireWaterfallPaneResizeHandlers();
 
     coordinator_->setFrameCallback([this](FramePacket frame) {
         noteStreamFrame(frame);
 
         if (host_->isCaptureSessionActive())
         {
-            const auto packet = std::make_shared<FramePacket>(std::move(frame));
+            const auto packet = std::make_shared<FramePacket>(frame);
             QMetaObject::invokeMethod(
                 host_,
                 [this, packet]() { onStreamFrame(packet); },
                 Qt::QueuedConnection);
-            return;
         }
 
         if (streamPipeline_ != nullptr)
@@ -418,18 +414,31 @@ void CameraPanelController::refreshBandCombos(LumoCameraUi &ui)
 
 QString CameraPanelController::calibrationPackPath(const LumoCameraUi &ui)
 {
-    if (ui.calibrationPackEdit == nullptr)
-        return {};
-
-    const QVariant stored = ui.calibrationPackEdit->property(kCalibrationPackPathProperty);
-    if (stored.isValid())
+    QString stored;
+    if (ui.calibrationPackEdit != nullptr)
     {
-        const QString path = stored.toString();
-        if (!path.isEmpty())
-            return path;
+        const QVariant property = ui.calibrationPackEdit->property(kCalibrationPackPathProperty);
+        if (property.isValid())
+            stored = property.toString();
+        if (stored.isEmpty())
+            stored = ui.calibrationPackEdit->text();
     }
 
-    return ui.calibrationPackEdit->text().trimmed();
+    return lumo::resolveCalibrationPackPath(stored, ui.sensorKind);
+}
+
+QString CameraPanelController::ensureCalibrationPackResolved(LumoCameraUi &ui)
+{
+    const QString resolved = calibrationPackPath(ui);
+    if (resolved.isEmpty() || ui.calibrationPackEdit == nullptr)
+        return resolved;
+
+    const QVariant property = ui.calibrationPackEdit->property(kCalibrationPackPathProperty);
+    const QString previous = property.isValid() ? property.toString() : QString();
+    if (!QFileInfo::exists(previous) || QDir::cleanPath(previous) != resolved)
+        setCalibrationPackDisplay(ui.calibrationPackEdit, resolved);
+
+    return resolved;
 }
 
 void CameraPanelController::setCalibrationPackDisplay(QLineEdit *edit, const QString &fullPath)
@@ -443,56 +452,20 @@ void CameraPanelController::setCalibrationPackDisplay(QLineEdit *edit, const QSt
     edit->setToolTip(cleaned);
 }
 
-QString CameraPanelController::resolveBundledCalibrationPackPath(const QString &fileName)
-{
-    if (fileName.isEmpty())
-        return {};
-
-    const QString appDir = QCoreApplication::applicationDirPath();
-    QStringList candidates = {
-        QDir(appDir).filePath(QStringLiteral("calibration/") + fileName),
-        QDir(appDir).filePath(QStringLiteral("../calibration/") + fileName),
-        QDir(appDir).filePath(QStringLiteral("../../calibration/") + fileName),
-        QDir(appDir).filePath(QStringLiteral("../../app/calibration/") + fileName),
-        QDir(appDir).filePath(QStringLiteral("../../../app/calibration/") + fileName),
-    };
-
-#ifdef HF_APP_SOURCE_DIR
-    candidates.prepend(
-        QDir(QString::fromUtf8(HF_APP_SOURCE_DIR)).filePath(QStringLiteral("calibration/") + fileName));
-#endif
-
-    for (const QString &candidate : candidates)
-    {
-        if (QFileInfo::exists(candidate))
-            return QDir::cleanPath(candidate);
-    }
-
-    return {};
-}
-
 QString CameraPanelController::defaultFx10eCalibrationPackPath()
 {
-    return resolveBundledCalibrationPackPath(QString::fromLatin1(kFx10eCalibrationFileName));
+    return lumo::resolveBundledCalibrationPackPath(LumoSensorKind::Fx10ePleora);
 }
 
 QString CameraPanelController::defaultSwir3CalibrationPackPath()
 {
-    return resolveBundledCalibrationPackPath(QString::fromLatin1(kSwir3CalibrationFileName));
+    return lumo::resolveBundledCalibrationPackPath(LumoSensorKind::Swir3Ni);
 }
 
 QString CameraPanelController::defaultCalibrationPackPathForProfile(const QString &profileName,
                                                        const LumoSensorKind sensorKind)
 {
-    if (profileName.contains(QStringLiteral("SWIR"), Qt::CaseInsensitive))
-        return defaultSwir3CalibrationPackPath();
-    if (profileName.contains(QStringLiteral("FX10e"), Qt::CaseInsensitive)
-        || profileName.contains(QStringLiteral("FX10"), Qt::CaseInsensitive))
-        return defaultFx10eCalibrationPackPath();
-
-    if (sensorKind == LumoSensorKind::Swir3Ni)
-        return defaultSwir3CalibrationPackPath();
-    return defaultFx10eCalibrationPackPath();
+    return lumo::defaultCalibrationPackPathForProfile(profileName, sensorKind);
 }
 
 void CameraPanelController::syncCalibrationPackToSelectedProfile(LumoCameraUi &ui)
@@ -797,8 +770,6 @@ void CameraPanelController::onCameraStateChanged(LumoCameraUi &ui, const CameraS
     updateCameraControls(ui, state);
     host_->capturePanel()->updateCamerasList();
     host_->capturePanel()->updateRecorderControls();
-    if (host_->stagePanel() != nullptr)
-        host_->stagePanel()->syncPositionPollInterval();
     syncStreamDisplayLoad();
 
     if (host_->capturePanel() != nullptr
@@ -1111,12 +1082,6 @@ void CameraPanelController::setupStreamPipeline()
             return true;
         return host_->streamTabs_->currentIndex() == static_cast<int>(cameraIndex);
     };
-    hooks.waterfallDisplayTarget = [this](const std::size_t cameraIndex) {
-        if (cameraIndex >= waterfallDisplayTargets_.size())
-            return ui::WaterfallDisplayTarget::None;
-        return static_cast<ui::WaterfallDisplayTarget>(
-            waterfallDisplayTargets_[cameraIndex].load(std::memory_order_acquire));
-    };
     streamPipeline_->setDisplayHooks(std::move(hooks));
 
     if (host_->streamTabs_ != nullptr)
@@ -1192,25 +1157,6 @@ void CameraPanelController::refreshAcquisitionFpsOverlays()
             fps = sdkFrameRateHz_[ui->cameraIndex];
 
         ui->detectorView->setAcquisitionFps(fps);
-
-        std::optional<double> temperatureCelsius;
-        if (ui->camera != nullptr && isSessionActive(ui->state))
-        {
-            double celsius = 0.0;
-            CameraError error;
-            if (ui->camera->readCameraTemperatureCelsius(celsius, error))
-                temperatureCelsius = celsius;
-        }
-
-        if (ui->cameraIndex < 2 && temperatureCelsius.has_value())
-            cachedCameraTemperatureCelsius_[ui->cameraIndex] = temperatureCelsius;
-
-        if (ui->cameraIndex < 2)
-        {
-            ui->detectorView->setCameraTemperatureCelsius(
-                temperatureCelsius.has_value() ? temperatureCelsius
-                                               : cachedCameraTemperatureCelsius_[ui->cameraIndex]);
-        }
     }
 
     refreshSessionUptimeLabels();
@@ -1280,35 +1226,12 @@ void CameraPanelController::pollSdkFrameRates()
     }
 }
 
-void CameraPanelController::pollCameraTemperatures()
-{
-    if (anyCameraOperationWaitActive())
-        return;
-
-    for (LumoCameraUi *ui : {&host_->camera1Ui_, &host_->camera2Ui_})
-    {
-        if (ui == nullptr || ui->camera == nullptr || ui->cameraIndex >= 2)
-            continue;
-
-        if (!isSessionActive(ui->state))
-            continue;
-
-        double celsius = 0.0;
-        CameraError error;
-        if (ui->camera->readCameraTemperatureCelsius(celsius, error))
-            cachedCameraTemperatureCelsius_[ui->cameraIndex] = celsius;
-    }
-}
-
 void CameraPanelController::syncStreamDisplayLoad()
 {
     if (streamPipeline_ == nullptr)
         return;
 
-    const bool cam1Streaming = host_->camera1Ui_.state == CameraState::Streaming;
-    const bool cam2Streaming = host_->camera2Ui_.state == CameraState::Streaming;
-    const int intervalMs = (cam1Streaming && cam2Streaming) ? 50 : 33;
-    streamPipeline_->setDisplayIntervalMs(intervalMs);
+    streamPipeline_->setDisplayIntervalMs(33);
 }
 
 void CameraPanelController::onStreamFrame(const SharedFramePacket &frame)
@@ -1355,6 +1278,54 @@ void CameraPanelController::syncWaterfallBands(LumoCameraUi &ui)
         bands.blue = ui::mapCalpackBandToBilRow(bands.blue, frameBands, spectralBin);
     }
     processor->setBandIndices(bands);
+}
+
+void CameraPanelController::syncWaterfallMaxLines(LumoCameraUi &ui)
+{
+    ui::WaterfallProcessor *processor = waterfallProcessorFor(ui);
+    if (processor == nullptr || ui.frameWidth <= 0)
+        return;
+
+    int maxNeeded = 64;
+    const auto considerPane = [&](QWidget *pane) {
+        if (pane == nullptr)
+            return;
+        const QSize paneSize = pane->size();
+        if (paneSize.width() <= 0 || paneSize.height() <= 0)
+            return;
+        const int neededLines = static_cast<int>(std::ceil(
+            static_cast<double>(paneSize.height()) * static_cast<double>(ui.frameWidth)
+            / static_cast<double>(paneSize.width())));
+        maxNeeded = std::max(maxNeeded, neededLines);
+    };
+
+    considerPane(ui.waterfallView);
+    if (ui.cameraIndex < 2)
+        considerPane(host_->captureWaterfallViews_[ui.cameraIndex]);
+
+    constexpr int kMinLines = 64;
+    constexpr int kMaxLinesCap = 8192;
+    processor->setMaxLines(std::clamp(maxNeeded, kMinLines, kMaxLinesCap));
+}
+
+void CameraPanelController::wireWaterfallPaneResizeHandlers()
+{
+    const auto connectPane = [this](LumoCameraUi &ui, ui::WaterfallDisplayWidget *widget) {
+        if (widget == nullptr)
+            return;
+
+        connect(widget,
+                &ui::WaterfallDisplayWidget::paneGeometryChanged,
+                this,
+                [this, &ui]() { syncWaterfallMaxLines(ui); });
+    };
+
+    connectPane(host_->camera1Ui_, host_->camera1Ui_.waterfallView);
+    connectPane(host_->camera2Ui_, host_->camera2Ui_.waterfallView);
+    if (host_->captureWaterfallViews_[0] != nullptr)
+        connectPane(host_->camera1Ui_, host_->captureWaterfallViews_[0]);
+    if (host_->captureWaterfallViews_[1] != nullptr)
+        connectPane(host_->camera2Ui_, host_->captureWaterfallViews_[1]);
 }
 
 void CameraPanelController::syncProfileRgbMarkers(LumoCameraUi &ui)
@@ -1417,6 +1388,7 @@ void CameraPanelController::applyDetectorDisplay(LumoCameraUi &ui, const QImage 
         ui.detectorView->setFrameSize(image.width(), image.height());
         updateStreamPaneTitles(ui);
         syncWaterfallBands(ui);
+        syncWaterfallMaxLines(ui);
         syncProfileRgbMarkers(ui);
     }
 
@@ -1428,35 +1400,7 @@ void CameraPanelController::refreshWaterfallDisplayTargets()
     constexpr int kWaterfallPublishActiveMs = 33;
     constexpr int kWaterfallPublishIdleMs = 1000;
 
-    for (auto &target : waterfallDisplayTargets_)
-        target.store(static_cast<uint8_t>(ui::WaterfallDisplayTarget::None), std::memory_order_release);
-
-    int tabIndex = -1;
-    if (host_->streamTabs_ != nullptr)
-        tabIndex = host_->streamTabs_->currentIndex();
-
-    if (tabIndex == MainWindow::kStreamTabCamera1)
-    {
-        waterfallDisplayTargets_[0].store(static_cast<uint8_t>(ui::WaterfallDisplayTarget::StreamTab),
-                                          std::memory_order_release);
-    }
-    else if (tabIndex == MainWindow::kStreamTabCamera2)
-    {
-        waterfallDisplayTargets_[1].store(static_cast<uint8_t>(ui::WaterfallDisplayTarget::StreamTab),
-                                          std::memory_order_release);
-    }
-    else if (tabIndex == MainWindow::kStreamTabCapture && host_->capturePanel() != nullptr)
-    {
-        for (std::size_t cameraIndex = 0; cameraIndex < 2; ++cameraIndex)
-        {
-            if (host_->capturePanel()->isCaptureStreamWaterfallVisible(cameraIndex))
-            {
-                waterfallDisplayTargets_[cameraIndex].store(
-                    static_cast<uint8_t>(ui::WaterfallDisplayTarget::CaptureTab),
-                    std::memory_order_release);
-            }
-        }
-    }
+    const bool captureActive = host_->isCaptureSessionActive();
 
     for (std::size_t cameraIndex = 0; cameraIndex < 2; ++cameraIndex)
     {
@@ -1466,20 +1410,57 @@ void CameraPanelController::refreshWaterfallDisplayTargets()
         if (processor == nullptr)
             continue;
 
-        const auto target = static_cast<ui::WaterfallDisplayTarget>(
-            waterfallDisplayTargets_[cameraIndex].load(std::memory_order_acquire));
-
-        const int intervalMs = target == ui::WaterfallDisplayTarget::None ? kWaterfallPublishIdleMs
-                                                                          : kWaterfallPublishActiveMs;
+        const LumoCameraUi *ui = cameraUiForIndex(cameraIndex);
+        const bool cameraSession = ui != nullptr && isSessionActive(ui->state);
+        const int intervalMs = (cameraSession || captureActive) ? kWaterfallPublishActiveMs
+                                                                  : kWaterfallPublishIdleMs;
         processor->setPublishIntervalMs(intervalMs);
+        republishGlobalWaterfallViews(cameraIndex);
     }
+}
+
+void CameraPanelController::publishWaterfallToAllViews(std::size_t cameraIndex,
+                                                       std::shared_ptr<const QImage> image)
+{
+    if (image == nullptr || image->isNull())
+        return;
+
+    LumoCameraUi *ui = cameraUiForIndex(cameraIndex);
+    if (ui != nullptr)
+        syncWaterfallMaxLines(*ui);
+
+    if (ui != nullptr && ui->waterfallView != nullptr)
+        ui->waterfallView->setSharedImage(image);
+
+    if (cameraIndex < 2 && host_->captureWaterfallViews_[cameraIndex] != nullptr)
+        host_->captureWaterfallViews_[cameraIndex]->setSharedImage(image);
+}
+
+void CameraPanelController::republishGlobalWaterfallViews(const std::size_t cameraIndex)
+{
+    if (cameraIndex >= globalWaterfallImages_.size())
+        return;
+
+    const std::shared_ptr<const QImage> &image = globalWaterfallImages_[cameraIndex];
+    if (image == nullptr || image->isNull())
+        return;
+
+    publishWaterfallToAllViews(cameraIndex, image);
 }
 
 void CameraPanelController::applyWaterfallDisplay(LumoCameraUi &ui,
                                                   QImage image,
                                                   const ui::WaterfallDisplayTarget target)
 {
-    updateWaterfallView(ui, image, target);
+    Q_UNUSED(target);
+    if (image.isNull())
+        return;
+
+    const std::shared_ptr<const QImage> shared = std::make_shared<QImage>(std::move(image));
+    if (ui.cameraIndex < globalWaterfallImages_.size())
+        globalWaterfallImages_[ui.cameraIndex] = shared;
+
+    publishWaterfallToAllViews(ui.cameraIndex, shared);
 }
 
 void CameraPanelController::updateProfilePlots(LumoCameraUi &ui, const ui::ProfileExtraction &profiles)
@@ -1504,14 +1485,8 @@ void CameraPanelController::updateWaterfallView(LumoCameraUi &ui,
                                                 const QImage &image,
                                                 const ui::WaterfallDisplayTarget target)
 {
-    if (image.isNull() || target == ui::WaterfallDisplayTarget::None)
-        return;
-
-    if (target == ui::WaterfallDisplayTarget::StreamTab && ui.waterfallView != nullptr)
-        ui.waterfallView->setImage(image);
-    else if (target == ui::WaterfallDisplayTarget::CaptureTab && ui.cameraIndex < 2
-             && host_->captureWaterfallViews_[ui.cameraIndex] != nullptr)
-        host_->captureWaterfallViews_[ui.cameraIndex]->setImage(image);
+    Q_UNUSED(target);
+    applyWaterfallDisplay(ui, image, ui::WaterfallDisplayTarget::StreamTab);
 }
 
 void CameraPanelController::clearDetectorView(LumoCameraUi &ui)
@@ -1524,7 +1499,6 @@ void CameraPanelController::clearDetectorView(LumoCameraUi &ui)
     {
         streamFpsTrackers_[ui.cameraIndex].reset();
         sdkFrameRateHz_[ui.cameraIndex] = 0.0;
-        cachedCameraTemperatureCelsius_[ui.cameraIndex] = std::nullopt;
     }
     updateStreamPaneTitles(ui);
 
@@ -1532,6 +1506,9 @@ void CameraPanelController::clearDetectorView(LumoCameraUi &ui)
         processor->reset();
     if (ui::ProfileProcessor *profileProcessor = profileProcessorFor(ui))
         profileProcessor->reset();
+
+    if (ui.cameraIndex < 2)
+        globalWaterfallImages_[ui.cameraIndex].reset();
 
     const QString cameraName = QStringLiteral("Camera %1").arg(ui.cameraIndex + 1);
     if (ui.detectorView != nullptr)

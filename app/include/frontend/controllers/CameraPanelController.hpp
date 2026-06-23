@@ -17,9 +17,7 @@
 #include <QElapsedTimer>
 
 #include <array>
-#include <atomic>
 #include <memory>
-#include <optional>
 
 class CameraCoordinator;
 class MainWindow;
@@ -61,9 +59,10 @@ public:
     static void setCalibrationPackDisplay(class QLineEdit *edit, const QString &fullPath);
     static QString defaultCalibrationPackPathForProfile(const QString &profileName,
                                                         LumoSensorKind sensorKind);
-    static QString resolveBundledCalibrationPackPath(const QString &fileName);
     static QString defaultFx10eCalibrationPackPath();
     static QString defaultSwir3CalibrationPackPath();
+    /// Resolves UI/saved path and updates the line edit when a bundled default is used.
+    QString ensureCalibrationPackResolved(LumoCameraUi &ui);
     static void selectBandComboIndex(class QComboBox *combo, int bandIndex);
 
     void updateTabLabel(const LumoCameraUi &ui);
@@ -78,6 +77,8 @@ public:
     ui::WaterfallProcessor *waterfallProcessorFor(const LumoCameraUi &ui);
     ui::ProfileProcessor *profileProcessorFor(const LumoCameraUi &ui);
     void syncWaterfallBands(LumoCameraUi &ui);
+    void syncWaterfallMaxLines(LumoCameraUi &ui);
+    void wireWaterfallPaneResizeHandlers();
     void syncProfileRgbMarkers(LumoCameraUi &ui);
     void onProfileLinesChanged(LumoCameraUi &ui, int spatialIndex, int bandIndex);
     void applyDetectorDisplay(LumoCameraUi &ui, const QImage &image);
@@ -110,6 +111,8 @@ private:
 
     void updateProfilePlots(LumoCameraUi &ui, const ui::ProfileExtraction &profiles);
     void updateWaterfallView(LumoCameraUi &ui, const QImage &image, ui::WaterfallDisplayTarget target);
+    void publishWaterfallToAllViews(std::size_t cameraIndex, std::shared_ptr<const QImage> image);
+    void republishGlobalWaterfallViews(std::size_t cameraIndex);
     void onCameraOperationWaitTimedOut(std::size_t cameraIndex);
     void finishAutoStreamStartup(std::size_t cameraIndex);
     void setConnectDisplayPaused(bool paused);
@@ -120,7 +123,6 @@ private:
     void syncSessionUptimeClock(LumoCameraUi &ui, CameraState state);
     [[nodiscard]] bool anyCameraOperationWaitActive() const;
     void pollSdkFrameRates();
-    void pollCameraTemperatures();
     void syncStreamDisplayLoad();
 
     MainWindow *host_ = nullptr;
@@ -129,10 +131,9 @@ private:
     std::unique_ptr<ui::CameraStreamPipeline> streamPipeline_;
     ui::StreamFpsTracker streamFpsTrackers_[2];
     std::array<double, 2> sdkFrameRateHz_{0.0, 0.0};
-    std::array<std::optional<double>, 2> cachedCameraTemperatureCelsius_{};
     std::array<QElapsedTimer, 2> sessionUptimeTimers_{};
     std::array<bool, 2> sessionUptimeActive_{false, false};
-    std::array<std::atomic<uint8_t>, 2> waterfallDisplayTargets_{};
+    std::array<std::shared_ptr<const QImage>, 2> globalWaterfallImages_{};
     std::array<CameraOperationWait, 2> operationWaits_{};
     QTimer *connectTimeoutTimer_ = nullptr;
     std::size_t connectTimeoutCameraIndex_ = 0;

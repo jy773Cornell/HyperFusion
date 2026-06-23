@@ -65,24 +65,6 @@ QWidget *MainWindow::createCaptureSettingsTab()
     recorderButtonLayout->addWidget(captureRecorderRecordBtn_, 1);
     recorderLayout->addLayout(recorderButtonLayout);
 
-    auto *recorderModeLayout = new QHBoxLayout();
-    recorderModeLayout->setContentsMargins(0, 6, 0, 0);
-    recorderModeLayout->setSpacing(16);
-    captureReflectanceCheck_ = new QCheckBox(QStringLiteral("Reflectance"), recorderBox);
-    captureTransmittanceCheck_ = new QCheckBox(QStringLiteral("Transmittance"), recorderBox);
-    captureReflectanceCheck_->setChecked(true);
-    captureTransmittanceCheck_->setChecked(true);
-    captureReflectanceCheck_->setEnabled(false);
-    captureTransmittanceCheck_->setEnabled(false);
-    captureReflectanceCheck_->setToolTip(
-        tr("Include reflectance scan (requires linear stage)"));
-    captureTransmittanceCheck_->setToolTip(
-        tr("Include transmittance scan (requires linear stage)"));
-    recorderModeLayout->addWidget(captureReflectanceCheck_);
-    recorderModeLayout->addWidget(captureTransmittanceCheck_);
-    recorderModeLayout->addStretch(1);
-    recorderLayout->addLayout(recorderModeLayout);
-
     auto *recorderStatusLayout = new QHBoxLayout();
     recorderStatusLayout->setContentsMargins(0, 4, 0, 0);
     recorderStatusLayout->setSpacing(8);
@@ -95,6 +77,19 @@ QWidget *MainWindow::createCaptureSettingsTab()
     recorderStatusLayout->addWidget(captureRecorderStatusIndicator_);
     recorderStatusLayout->addWidget(captureRecorderStatusLabel_, 1);
     recorderLayout->addLayout(recorderStatusLayout);
+
+    auto *cameraStatusLayout = new QVBoxLayout();
+    cameraStatusLayout->setContentsMargins(22, 0, 0, 0);
+    cameraStatusLayout->setSpacing(2);
+    for (std::size_t cameraIndex = 0; cameraIndex < 2; ++cameraIndex)
+    {
+        captureRecorderCameraStatusLabels_[cameraIndex] = new QLabel(recorderBox);
+        captureRecorderCameraStatusLabels_[cameraIndex]->setWordWrap(true);
+        captureRecorderCameraStatusLabels_[cameraIndex]->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        captureRecorderCameraStatusLabels_[cameraIndex]->hide();
+        cameraStatusLayout->addWidget(captureRecorderCameraStatusLabels_[cameraIndex]);
+    }
+    recorderLayout->addLayout(cameraStatusLayout);
 
     captureCamerasBox_ = new QGroupBox("Cameras", page);
     auto *camerasLayout = new QVBoxLayout(captureCamerasBox_);
@@ -117,8 +112,6 @@ QWidget *MainWindow::createCaptureSettingsTab()
     };
     connect(captureCamera1Check_, &QCheckBox::toggled, this, refreshRecorder);
     connect(captureCamera2Check_, &QCheckBox::toggled, this, refreshRecorder);
-    connect(captureReflectanceCheck_, &QCheckBox::toggled, this, refreshRecorder);
-    connect(captureTransmittanceCheck_, &QCheckBox::toggled, this, refreshRecorder);
     camerasLayout->addWidget(captureCamerasEmptyLabel_);
     camerasLayout->addWidget(captureCamera1Check_);
     camerasLayout->addWidget(captureCamera2Check_);
@@ -156,15 +149,37 @@ QWidget *MainWindow::createCaptureSettingsTab()
         settingsPanel()->schedulePersistedUiSettingsSave();
     });
 
+    captureModesBox_ = new QGroupBox(QStringLiteral("Modes"), page);
+    captureModesBox_->setToolTip(
+        tr("Requires a connected camera and stage with \"Use HyperFusion Stage for recording\" enabled."));
+    auto *modesLayout = new QHBoxLayout(captureModesBox_);
+    modesLayout->setContentsMargins(6, 4, 6, 6);
+    modesLayout->setSpacing(16);
+    captureReflectanceCheck_ = new QCheckBox(QStringLiteral("Reflectance"), captureModesBox_);
+    captureTransmittanceCheck_ = new QCheckBox(QStringLiteral("Transmittance"), captureModesBox_);
+    captureReflectanceCheck_->setChecked(true);
+    captureTransmittanceCheck_->setChecked(true);
+    captureReflectanceCheck_->setToolTip(
+        tr("Include reflectance scan (requires connected camera, stage, and stage recording)"));
+    captureTransmittanceCheck_->setToolTip(
+        tr("Include transmittance scan (requires connected camera, stage, and stage recording)"));
+    modesLayout->addWidget(captureReflectanceCheck_);
+    modesLayout->addWidget(captureTransmittanceCheck_);
+    modesLayout->addStretch(1);
+    connect(captureReflectanceCheck_, &QCheckBox::toggled, this, refreshRecorder);
+    connect(captureTransmittanceCheck_, &QCheckBox::toggled, this, refreshRecorder);
+
     auto *positionBox = new QGroupBox(QStringLiteral("Position"), page);
     capturePositionBox_ = positionBox;
+    positionBox->setToolTip(
+        tr("Requires a connected camera and stage. Configure scan position, target length, and speed."));
     auto *positionLayout = new QVBoxLayout(positionBox);
     positionLayout->setContentsMargins(6, 4, 6, 6);
     positionLayout->setSpacing(6);
 
     captureUseStageForRecordingCheck_ =
         new QCheckBox(QStringLiteral("Use HyperFusion Stage for recording"), positionBox);
-    captureUseStageForRecordingCheck_->setChecked(true);
+    captureUseStageForRecordingCheck_->setChecked(false);
     captureUseStageForRecordingCheck_->setToolTip(
         tr("When enabled, Preview and Record follow the stage scanning procedure "
            "(black ref, white ref, sample scan). When disabled, Record saves reflectance "
@@ -293,7 +308,7 @@ QWidget *MainWindow::createCaptureSettingsTab()
     auto *preprocessingBox = new QGroupBox(QStringLiteral("Preprocessing"), page);
     capturePreprocessingBox_ = preprocessingBox;
     preprocessingBox->setToolTip(
-        tr("Post-processing requires a stage scan with dark and white references. "
+        tr("Post-processing requires a connected camera and stage. "
            "Enable \"Use HyperFusion Stage for recording\" to use these options."));
     auto *preprocessingLayout = new QVBoxLayout(preprocessingBox);
     preprocessingLayout->setContentsMargins(6, 4, 6, 6);
@@ -304,7 +319,7 @@ QWidget *MainWindow::createCaptureSettingsTab()
     capturePreprocessAfterScanCheck_->setChecked(true);
     capturePreprocessAfterScanCheck_->setToolTip(
         tr("Run post-processing on captured data after a stage scan sequence completes. "
-           "Requires a connected stage."));
+           "Requires a connected camera and stage."));
     preprocessingLayout->addWidget(capturePreprocessAfterScanCheck_);
 
     captureSaveFfcImageCheck_ =
@@ -317,19 +332,23 @@ QWidget *MainWindow::createCaptureSettingsTab()
     captureRunGsamCheck_ =
         new QCheckBox(QStringLiteral("Run GSAM segmentation"), preprocessingBox);
     captureRunGsamCheck_->setChecked(false);
+    captureRunGsamCheck_->setEnabled(false);
     captureRunGsamCheck_->setToolTip(
         tr("After preprocessing, send the RGB preview to the GSAM2 WSL server and write masks "
-           "and ROI spectra under preprocessed/segmentation/"));
+           "and ROI spectra under preprocessed/segmentation/. "
+           "Requires a connected GSAM2 server."));
 
     auto *gsamServerRow = new QWidget(preprocessingBox);
     auto *gsamServerLayout = new QHBoxLayout(gsamServerRow);
     gsamServerLayout->setContentsMargins(0, 0, 0, 0);
     gsamServerLayout->setSpacing(8);
-    captureGsamStartServerBtn_ = new QPushButton(QStringLiteral("Start server"), gsamServerRow);
-    captureGsamStartServerBtn_->setToolTip(
-        tr("Cold-start the GSAM2 HTTP server in WSL. Keep it running for segmentation requests."));
     gsamServerLayout->addWidget(captureRunGsamCheck_);
-    gsamServerLayout->addWidget(captureGsamStartServerBtn_);
+    gsamServerLayout->addSpacing(16);
+    captureGsamServerStatusLabel_ = new QLabel(QStringLiteral("GSAM server: not available"), gsamServerRow);
+    captureGsamServerStatusLabel_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    captureGsamServerStatusLabel_->setToolTip(
+        tr("GSAM2 sidecar status. The app tries to start the server automatically at launch."));
+    gsamServerLayout->addWidget(captureGsamServerStatusLabel_);
     gsamServerLayout->addStretch(1);
     preprocessingLayout->addWidget(gsamServerRow);
 
@@ -434,6 +453,7 @@ QWidget *MainWindow::createCaptureSettingsTab()
     layout->addWidget(recorderBox);
     layout->addWidget(metadataBox);
     layout->addWidget(captureCamerasBox_);
+    layout->addWidget(captureModesBox_);
     layout->addWidget(positionBox);
     layout->addWidget(preprocessingBox);
     if (capturePanel() != nullptr)

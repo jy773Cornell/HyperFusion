@@ -115,6 +115,8 @@ void UiSettingsController::loadPersistedUiSettings()
         host_->capturePreprocessAfterScanCheck_->setChecked(capturePosition.preprocessAfterScan);
     if (host_->captureSaveFfcImageCheck_ != nullptr)
         host_->captureSaveFfcImageCheck_->setChecked(capturePosition.saveFfcImage);
+    if (host_->captureRunGsamCheck_ != nullptr)
+        host_->captureRunGsamCheck_->setChecked(capturePosition.runGsamSegmentation);
     if (host_->captureGsamPromptEdit_ != nullptr)
         host_->captureGsamPromptEdit_->setText(capturePosition.gsamPrompt);
     if (host_->captureGsamSampleCountSpin_ != nullptr)
@@ -145,6 +147,8 @@ void UiSettingsController::savePersistedUiSettings()
         capturePosition.preprocessAfterScan = host_->capturePreprocessAfterScanCheck_->isChecked();
     if (host_->captureSaveFfcImageCheck_ != nullptr)
         capturePosition.saveFfcImage = host_->captureSaveFfcImageCheck_->isChecked();
+    if (host_->captureRunGsamCheck_ != nullptr)
+        capturePosition.runGsamSegmentation = host_->captureRunGsamCheck_->isChecked();
     if (host_->captureGsamPromptEdit_ != nullptr)
         capturePosition.gsamPrompt = host_->captureGsamPromptEdit_->text().trimmed();
     if (host_->captureGsamSampleCountSpin_ != nullptr)
@@ -301,8 +305,12 @@ void UiSettingsController::applyPersistedCameraProfilesAndBands()
 
     if (hf::camera::CameraPanelController::calibrationPackPath(host_->camera1Ui_).isEmpty())
         host_->cameraPanel()->syncCalibrationPackToSelectedProfile(host_->camera1Ui_);
+    else
+        host_->cameraPanel()->ensureCalibrationPackResolved(host_->camera1Ui_);
     if (hf::camera::CameraPanelController::calibrationPackPath(host_->camera2Ui_).isEmpty())
         host_->cameraPanel()->syncCalibrationPackToSelectedProfile(host_->camera2Ui_);
+    else
+        host_->cameraPanel()->ensureCalibrationPackResolved(host_->camera2Ui_);
 }
 
 void UiSettingsController::connectAutosave()

@@ -31,6 +31,7 @@ bool writeFlatFieldCorrectedEnvi(const QString &sampleHdrPath,
                                  const BilRowReference &whiteRow,
                                  const QString &outputHdrPath,
                                  const QString &sensorTypeLabel,
+                                 const QString &enviDescription,
                                  const FlatFieldParams &params,
                                  QString *errorMessage = nullptr);
 

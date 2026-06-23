@@ -13,6 +13,8 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSignalBlocker>
+
+#include <cmath>
 #include <QTimer>
 #include <QDoubleSpinBox>
 #include <QGroupBox>
@@ -238,6 +240,8 @@ void StagePanelController::updateConnectionControls(const StageState state, cons
     if (!connected)
     {
         manualMotionDepth_ = 0;
+        manualMotionCoastActive_ = false;
+        manualMotionCoastStableCount_ = 0;
         updatePositionDisplay(0.0);
     }
 
@@ -278,44 +282,88 @@ void StagePanelController::updatePositionDisplay(const double positionMm)
         host_->capturePanel()->onStagePosition(positionMm);
 }
 
-bool StagePanelController::bothCamerasStreaming() const
-{
-    return host_->camera1Ui_.state == CameraState::Streaming
-           && host_->camera2Ui_.state == CameraState::Streaming;
-}
-
-bool StagePanelController::anyCameraStreaming() const
-{
-    return host_->camera1Ui_.state == CameraState::Streaming
-           || host_->camera2Ui_.state == CameraState::Streaming;
-}
-
 void StagePanelController::syncPositionPollInterval()
 {
     if (host_->stagePositionTimer_ == nullptr)
         return;
 
-    int intervalMs = 150;
-    if (manualMotionDepth_ > 0)
-        intervalMs = 100;
-    else if (bothCamerasStreaming())
-        intervalMs = 250;
-    else if (anyCameraStreaming())
-        intervalMs = 200;
-
+    const bool fastPoll = manualMotionDepth_ > 0 || manualMotionCoastActive_;
+    const int intervalMs =
+        fastPoll ? kManualPositionPollIntervalMs : kIdlePositionPollIntervalMs;
     host_->stagePositionTimer_->setInterval(intervalMs);
 }
 
 void StagePanelController::onManualMotionStarted()
 {
+    manualMotionCoastActive_ = false;
+    manualMotionCoastStableCount_ = 0;
     ++manualMotionDepth_;
     syncPositionPollInterval();
     pollPosition();
 }
 
+void StagePanelController::onStopMotionRequested()
+{
+    if (stageWorker_ == nullptr)
+        return;
+
+    manualMotionCoastActive_ = false;
+    manualMotionCoastStableCount_ = 0;
+
+    stageWorker_->requestStopMotion(
+        [this]() {
+            QMetaObject::invokeMethod(
+                this, [this]() { beginManualMotionCoastWatch(); }, Qt::QueuedConnection);
+        },
+        false);
+}
+
 void StagePanelController::onManualMotionStopped()
 {
-    manualMotionDepth_ = std::max(0, manualMotionDepth_ - 1);
+    if (manualMotionDepth_ <= 0 || stageWorker_ == nullptr)
+        return;
+
+    stageWorker_->requestStopMotion(
+        [this]() {
+            QMetaObject::invokeMethod(
+                this, [this]() { beginManualMotionCoastWatch(); }, Qt::QueuedConnection);
+        },
+        false);
+}
+
+void StagePanelController::beginManualMotionCoastWatch()
+{
+    manualMotionCoastActive_ = true;
+    manualMotionCoastStableCount_ = 0;
+    syncPositionPollInterval();
+    pollPosition();
+}
+
+void StagePanelController::onManualMotionCoastPositionSample(const double positionMm)
+{
+    if (!manualMotionCoastActive_)
+        return;
+
+    if (std::abs(positionMm - manualMotionCoastLastPositionMm_) <= kManualMotionCoastStableToleranceMm)
+        ++manualMotionCoastStableCount_;
+    else
+        manualMotionCoastStableCount_ = 0;
+
+    manualMotionCoastLastPositionMm_ = positionMm;
+
+    if (manualMotionCoastStableCount_ >= kManualMotionCoastStablePollsRequired)
+        finishManualMotionCoast();
+}
+
+void StagePanelController::finishManualMotionCoast()
+{
+    if (!manualMotionCoastActive_)
+        return;
+
+    manualMotionCoastActive_ = false;
+    manualMotionCoastStableCount_ = 0;
+    if (manualMotionDepth_ > 0)
+        manualMotionDepth_ = std::max(0, manualMotionDepth_ - 1);
     syncPositionPollInterval();
     pollPosition();
 }
@@ -334,7 +382,11 @@ void StagePanelController::pollPosition()
 
         QMetaObject::invokeMethod(
             this,
-            [this, positionMm]() { updatePositionDisplay(positionMm); },
+            [this, positionMm]() {
+                updatePositionDisplay(positionMm);
+                if (manualMotionCoastActive_)
+                    onManualMotionCoastPositionSample(positionMm);
+            },
             Qt::QueuedConnection);
     });
 }

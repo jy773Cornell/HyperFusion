@@ -81,6 +81,7 @@ bool writeFlatFieldCorrectedEnvi(const QString &sampleHdrPath,
                                  const BilRowReference &whiteRow,
                                  const QString &outputHdrPath,
                                  const QString &sensorTypeLabel,
+                                 const QString &enviDescription,
                                  const FlatFieldParams &params,
                                  QString *errorMessage)
 {
@@ -89,7 +90,12 @@ bool writeFlatFieldCorrectedEnvi(const QString &sampleHdrPath,
         return false;
 
     EnviFloatWriter writer;
-    if (!beginEnviFloatWriter(writer, outputHdrPath, sampleMetadata, sensorTypeLabel, errorMessage))
+    if (!beginEnviFloatWriter(writer,
+                              outputHdrPath,
+                              sampleMetadata,
+                              sensorTypeLabel,
+                              enviDescription,
+                              errorMessage))
         return false;
 
     const bool ok = applyFlatFieldCorrection(

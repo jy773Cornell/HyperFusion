@@ -205,6 +205,17 @@ bool readEnviFloatBilLines(const EnviBilMetadata &metadata,
         return false;
     }
 
+    if (metadata.dataType != 4)
+    {
+        if (errorMessage != nullptr)
+        {
+            *errorMessage =
+                QStringLiteral("ENVI float reader requires data type 4 (float32 FFC), got %1.")
+                    .arg(metadata.dataType);
+        }
+        return false;
+    }
+
     const QString rawPath = rawPathOverride.isEmpty() ? metadata.rawPath : rawPathOverride;
     QFile rawFile(rawPath);
     if (!rawFile.open(QIODevice::ReadOnly))

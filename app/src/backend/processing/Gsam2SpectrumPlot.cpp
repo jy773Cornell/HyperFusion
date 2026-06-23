@@ -59,6 +59,7 @@ QColor seriesColor(const std::size_t index)
 bool saveRoiSpectrumMeanStdPlotPng(const std::vector<double> &wavelengthsNm,
                                    const std::vector<RoiSpectrumSeries> &series,
                                    const QString &title,
+                                   const QString &yAxisLabel,
                                    const QString &outputPath,
                                    QString *errorMessage)
 {
@@ -97,7 +98,7 @@ bool saveRoiSpectrumMeanStdPlotPng(const std::vector<double> &wavelengthsNm,
     tickFont.setPointSize(8);
     painter.setFont(tickFont);
 
-    constexpr int kYTickCount = 6;
+    constexpr int kYTickCount = 10;
     painter.setPen(QPen(QColor(220, 220, 220)));
     for (int tick = 0; tick < kYTickCount; ++tick)
     {
@@ -130,7 +131,7 @@ bool saveRoiSpectrumMeanStdPlotPng(const std::vector<double> &wavelengthsNm,
                          QString::number(yValue, 'f', 1));
     }
 
-    constexpr int kXTickCount = 6;
+    constexpr int kXTickCount = 10;
     for (int tick = 0; tick < kXTickCount; ++tick)
     {
         const double wavelength =
@@ -233,7 +234,7 @@ bool saveRoiSpectrumMeanStdPlotPng(const std::vector<double> &wavelengthsNm,
     painter.save();
     painter.translate(18, kPlotHeight / 2);
     painter.rotate(-90);
-    painter.drawText(-80, 0, 160, 20, Qt::AlignCenter, QStringLiteral("Reflectance"));
+    painter.drawText(-80, 0, 160, 20, Qt::AlignCenter, yAxisLabel);
     painter.restore();
 
     QSaveFile file(outputPath);

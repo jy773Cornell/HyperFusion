@@ -13,12 +13,18 @@ Gsam2ServerManager::Gsam2ServerManager(QObject *parent)
     : QObject(parent)
 {
     connect(&process_, &QProcess::readyReadStandardError, this, [this]() {
+        if (silentMode_ && state_ == State::Starting)
+            return;
+
         const QByteArray chunk = process_.readAllStandardError();
         if (!chunk.trimmed().isEmpty())
             setState(state_, QString::fromUtf8(chunk.trimmed()));
     });
 
     connect(&process_, &QProcess::readyReadStandardOutput, this, [this]() {
+        if (silentMode_ && state_ == State::Starting)
+            return;
+
         const QByteArray chunk = process_.readAllStandardOutput();
         if (!chunk.trimmed().isEmpty())
             setState(state_, QString::fromUtf8(chunk.trimmed()));
@@ -31,6 +37,12 @@ Gsam2ServerManager::Gsam2ServerManager(QObject *parent)
         [this](const int exitCode, const QProcess::ExitStatus status) {
             if (state_ == State::Starting || state_ == State::Running)
             {
+                if (silentMode_)
+                {
+                    markUnavailable();
+                    return;
+                }
+
                 const QString detail =
                     QStringLiteral("GSAM2 server exited (code=%1, status=%2)")
                         .arg(exitCode)
@@ -49,12 +61,14 @@ QString Gsam2ServerManager::statusText() const
 {
     switch (state_)
     {
+    case State::Unavailable:
+        return QStringLiteral("Not available");
     case State::Stopped:
         return QStringLiteral("Stopped");
     case State::Starting:
-        return QStringLiteral("Starting\u2026");
+        return QStringLiteral("Connecting\u2026");
     case State::Running:
-        return lastDetail_.isEmpty() ? QStringLiteral("Running") : lastDetail_;
+        return lastDetail_.isEmpty() ? QStringLiteral("Connected") : lastDetail_;
     case State::Failed:
         return lastDetail_.isEmpty() ? QStringLiteral("Failed") : lastDetail_;
     }
@@ -72,6 +86,18 @@ void Gsam2ServerManager::setState(const State state, const QString &detail)
     state_ = state;
     if (!detail.isEmpty())
         lastDetail_ = detail;
+
+    if (state == State::Running || state == State::Unavailable || state == State::Stopped)
+        silentMode_ = false;
+
+    emit stateChanged(state_, lastDetail_);
+}
+
+void Gsam2ServerManager::markUnavailable()
+{
+    silentMode_ = false;
+    lastDetail_.clear();
+    state_ = State::Unavailable;
     emit stateChanged(state_, lastDetail_);
 }
 
@@ -99,6 +125,15 @@ QString Gsam2ServerManager::buildLaunchCommand() const
     return inner;
 }
 
+void Gsam2ServerManager::tryAutoStart()
+{
+    silentMode_ = true;
+    startServer();
+
+    if (state_ == State::Failed)
+        markUnavailable();
+}
+
 void Gsam2ServerManager::startServer()
 {
     if (state_ == State::Starting || state_ == State::Running)
@@ -107,15 +142,19 @@ void Gsam2ServerManager::startServer()
     const QString repoLinux = resolveSam2RepoLinuxPath();
     if (repoLinux.isEmpty())
     {
-        setState(State::Failed, QStringLiteral("Could not locate resources/sam2 for WSL."));
+        if (silentMode_)
+            markUnavailable();
+        else
+            setState(State::Failed, QStringLiteral("Could not locate resources/sam2 for WSL."));
         return;
     }
 
     bool modelLoaded = false;
     if (gsam2ServerHealthCheck(serverUrl(), &modelLoaded))
     {
-        setState(State::Running, modelLoaded ? QStringLiteral("Running (models loaded)")
-                                             : QStringLiteral("Running"));
+        setState(State::Running,
+                 modelLoaded ? QStringLiteral("Connected (models loaded)")
+                             : QStringLiteral("Connected"));
         return;
     }
 
@@ -124,12 +163,14 @@ void Gsam2ServerManager::startServer()
 
     QStringList arguments;
     if (!cfg.wslDistro.trimmed().isEmpty())
-    {
         arguments << QStringLiteral("-d") << cfg.wslDistro.trimmed();
-    }
     arguments << QStringLiteral("--") << QStringLiteral("bash") << QStringLiteral("-lc") << inner;
 
-    setState(State::Starting, QStringLiteral("Launching WSL GSAM2 server\u2026"));
+    if (!silentMode_)
+        setState(State::Starting, QStringLiteral("Launching WSL GSAM2 server\u2026"));
+    else
+        setState(State::Starting);
+
     healthPollAttempts_ = 0;
     process_.setProgram(QStringLiteral("wsl.exe"));
     process_.setArguments(arguments);
@@ -137,7 +178,10 @@ void Gsam2ServerManager::startServer()
 
     if (!process_.waitForStarted(10000))
     {
-        setState(State::Failed, QStringLiteral("Failed to start wsl.exe: %1").arg(process_.errorString()));
+        if (silentMode_)
+            markUnavailable();
+        else
+            setState(State::Failed, QStringLiteral("Failed to start wsl.exe: %1").arg(process_.errorString()));
         return;
     }
 
@@ -154,25 +198,35 @@ void Gsam2ServerManager::pollHealth()
     if (gsam2ServerHealthCheck(serverUrl(), &modelLoaded, &error))
     {
         setState(State::Running,
-                 modelLoaded ? QStringLiteral("Running (models loaded)")
-                             : QStringLiteral("Running (warming up models on first request)"));
+                 modelLoaded ? QStringLiteral("Connected (models loaded)")
+                             : QStringLiteral("Connected (warming up on first request)"));
         return;
     }
 
     ++healthPollAttempts_;
     if (healthPollAttempts_ >= 600)
     {
-        setState(State::Failed,
-                 error.isEmpty() ? QStringLiteral("GSAM2 server did not become ready.")
-                                 : error);
+        if (silentMode_)
+            markUnavailable();
+        else
+        {
+            setState(State::Failed,
+                     error.isEmpty() ? QStringLiteral("GSAM2 server did not become ready.")
+                                     : error);
+        }
         return;
     }
 
     if (process_.state() == QProcess::NotRunning)
     {
-        setState(State::Failed,
-                 lastDetail_.isEmpty() ? QStringLiteral("GSAM2 server process exited during startup.")
-                                       : lastDetail_);
+        if (silentMode_)
+            markUnavailable();
+        else
+        {
+            setState(State::Failed,
+                     lastDetail_.isEmpty() ? QStringLiteral("GSAM2 server process exited during startup.")
+                                           : lastDetail_);
+        }
         return;
     }
 
@@ -181,6 +235,8 @@ void Gsam2ServerManager::pollHealth()
 
 void Gsam2ServerManager::stopServer()
 {
+    silentMode_ = false;
+
     if (state_ == State::Running || state_ == State::Starting)
     {
         QString shutdownError;

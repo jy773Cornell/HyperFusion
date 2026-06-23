@@ -39,8 +39,6 @@ struct CameraStreamDisplayHooks
     std::function<void(LumoCameraUi &, const ProfileExtraction &profiles)> applyProfiles;
     /// FX10e/SWIR stream tab active for this camera (detector/profile panes).
     std::function<bool(std::size_t cameraIndex)> isStreamTabVisible;
-    /// Thread-safe: which waterfall widget (if any) should receive the next paint for this camera.
-    std::function<WaterfallDisplayTarget(std::size_t cameraIndex)> waterfallDisplayTarget;
 };
 
 class CameraStreamPipeline final : public QObject

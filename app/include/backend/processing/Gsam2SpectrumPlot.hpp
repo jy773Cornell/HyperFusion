@@ -17,6 +17,7 @@ struct RoiSpectrumSeries
 bool saveRoiSpectrumMeanStdPlotPng(const std::vector<double> &wavelengthsNm,
                                  const std::vector<RoiSpectrumSeries> &series,
                                  const QString &title,
+                                 const QString &yAxisLabel,
                                  const QString &outputPath,
                                  QString *errorMessage = nullptr);
 

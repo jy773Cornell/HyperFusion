@@ -228,6 +228,16 @@ QWidget *MainWindow::createLumoCameraGroup(QWidget *parent,
             return;
         }
 
+        const QString calpackPath = cameraPanel()->ensureCalibrationPackResolved(ui);
+        if (calpackPath.isEmpty())
+        {
+            appendLog(QStringLiteral("%1: calibration pack (.scp) not found — place it under calibration/%2/ beside app.exe.")
+                          .arg(cameraLabel,
+                               ui.sensorKind == LumoSensorKind::Swir3Ni ? QStringLiteral("swir")
+                                                                        : QStringLiteral("fx10e")));
+            return;
+        }
+
         const CameraSettings connectionSettings = cameraPanel()->buildSettings(ui);
         ui.camera->prepareConnection(connectionSettings);
         ui.connectAttemptActive = true;
@@ -252,8 +262,11 @@ QWidget *MainWindow::createLumoCameraGroup(QWidget *parent,
         const QString grabberNote = ui.sensorKind == LumoSensorKind::Swir3Ni
                                         ? QStringLiteral("NI IMAQdx \u2014 stop Grab in NI MAX before connect")
                                         : QStringLiteral("Pleora eBUS picker may appear");
-        appendLog(QString("%1: connect camera \u2014 profile %2 (%3; not ready until Initialized).")
-                      .arg(cameraLabel, ui.deviceCombo->currentText(), grabberNote));
+        appendLog(QString("%1: connect camera — profile %2, calpack %3 (%4; not ready until Initialized).")
+                      .arg(cameraLabel,
+                           ui.deviceCombo->currentText(),
+                           QFileInfo(calpackPath).fileName(),
+                           grabberNote));
 
         cameraPanel()->showCameraOperationWait(ui.cameraIndex,
                                                hf::camera::CameraWaitOperation::Connecting);

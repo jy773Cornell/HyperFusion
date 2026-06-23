@@ -13,6 +13,7 @@ bool writeFloatEnviHdr(const QString &hdrPath,
                        const EnviBilMetadata &metadata,
                        const int lineCount,
                        const QString &sensorTypeLabel,
+                       const QString &description,
                        QString *errorMessage)
 {
     QSaveFile file(hdrPath);
@@ -26,7 +27,7 @@ bool writeFloatEnviHdr(const QString &hdrPath,
     QTextStream out(&file);
     out.setRealNumberNotation(QTextStream::FixedNotation);
     out << "ENVI\n";
-    out << "description = {HyperFusion preprocessed reflectance}\n";
+    out << "description = {" << description << "}\n";
     out << "file type = ENVI\n\n";
     out << "sensor type = " << sensorTypeLabel << "\n\n";
     out << "samples = " << metadata.samples << "\n";
@@ -61,6 +62,7 @@ bool beginEnviFloatWriter(EnviFloatWriter &writer,
                           const QString &hdrPath,
                           const EnviBilMetadata &templateMetadata,
                           const QString &sensorTypeLabel,
+                          const QString &description,
                           QString *errorMessage)
 {
     writer = EnviFloatWriter{};
@@ -68,6 +70,8 @@ bool beginEnviFloatWriter(EnviFloatWriter &writer,
     writer.metadata = templateMetadata;
     writer.metadata.lines = 0;
     writer.metadata.dataType = 4;
+    writer.sensorTypeLabel = sensorTypeLabel;
+    writer.description = description;
 
     const QFileInfo hdrInfo(hdrPath);
     writer.rawPath = hdrInfo.absolutePath() + QLatin1Char('/')
@@ -82,7 +86,12 @@ bool beginEnviFloatWriter(EnviFloatWriter &writer,
     }
 
     rawFile.close();
-    return writeFloatEnviHdr(writer.hdrPath, writer.metadata, 0, sensorTypeLabel, errorMessage);
+    return writeFloatEnviHdr(writer.hdrPath,
+                             writer.metadata,
+                             0,
+                             writer.sensorTypeLabel,
+                             writer.description,
+                             errorMessage);
 }
 
 bool appendEnviFloatLine(EnviFloatWriter &writer,
@@ -124,7 +133,8 @@ bool finalizeEnviFloatWriter(EnviFloatWriter &writer, QString *errorMessage)
     return writeFloatEnviHdr(writer.hdrPath,
                              writer.metadata,
                              writer.linesWritten,
-                             QStringLiteral("HyperFusion preprocessed"),
+                             writer.sensorTypeLabel,
+                             writer.description,
                              errorMessage);
 }
 

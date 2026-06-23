@@ -197,17 +197,14 @@ QWidget *MainWindow::createStageSettingsTab()
         stageWorker()->requestMoveVelocityMm(-zaber_stage::kMaxSpeedMmPerSec);
     });
     connect(stageBackBtn_, &QToolButton::released, this, [this]() {
-        if (stageWorker() == nullptr)
-            return;
-        stageWorker()->requestStopMotion();
         if (stagePanel() != nullptr)
             stagePanel()->onManualMotionStopped();
     });
     connect(stageStopBtn_, &QToolButton::clicked, this, [this]() {
-        if (stageWorker() == nullptr)
+        if (stagePanel() == nullptr)
             return;
         appendLog("Stage: stop requested");
-        stageWorker()->requestStopMotion();
+        stagePanel()->onStopMotionRequested();
     });
     connect(stageForwardBtn_, &QToolButton::pressed, this, [this]() {
         if (stageWorker() == nullptr)
@@ -217,9 +214,6 @@ QWidget *MainWindow::createStageSettingsTab()
         stageWorker()->requestMoveVelocityMm(zaber_stage::kMaxSpeedMmPerSec);
     });
     connect(stageForwardBtn_, &QToolButton::released, this, [this]() {
-        if (stageWorker() == nullptr)
-            return;
-        stageWorker()->requestStopMotion();
         if (stagePanel() != nullptr)
             stagePanel()->onManualMotionStopped();
     });

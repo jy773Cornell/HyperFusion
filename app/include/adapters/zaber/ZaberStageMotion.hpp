@@ -38,7 +38,9 @@ public:
 
     static bool homeLockstep(zaber::motion::ascii::Lockstep &lockstep, StageError &error);
 
-    static bool stopLockstep(zaber::motion::ascii::Lockstep &lockstep, StageError &error);
+    static bool stopLockstep(zaber::motion::ascii::Lockstep &lockstep,
+                             StageError &error,
+                             bool waitUntilIdle = true);
 
     static bool moveVelocityMm(zaber::motion::ascii::Lockstep &lockstep,
                                double velocityMmPerSec,

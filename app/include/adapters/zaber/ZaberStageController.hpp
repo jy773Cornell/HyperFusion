@@ -23,7 +23,7 @@ public:
     bool connect(const StageConnectSettings &settings, StageError &error) override;
     bool homeWithLocalization(StageError &error) override;
     bool home(StageError &error) override;
-    void stopMotion() override;
+    void stopMotion(bool waitUntilIdle = true) override;
     void disconnect() override;
 
     bool moveRelativeMm(double distanceMm, double speedMmPerSec, StageError &error) override;

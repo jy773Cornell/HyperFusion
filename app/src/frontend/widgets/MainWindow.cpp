@@ -93,9 +93,6 @@
 
 namespace
 {
-constexpr auto kFx10eCalibrationFileName = "3210441_20211027_calpack.scp";
-constexpr auto kSwir3CalibrationFileName = "462111_OLES15_20250109_calpack.scp";
-constexpr auto kCalibrationPackPathProperty = "hf_calibrationPackPath";
 constexpr int kDefaultRedBandIndex = 193;
 constexpr int kDefaultGreenBandIndex = 112;
 constexpr int kDefaultBlueBandIndex = 25;
@@ -201,6 +198,14 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     lightPanel_->initializeWorker();
 
     capturePanel_->initializeWorkers();
+    capturePanel_->wireSettingsTabConnections();
+    capturePanel_->updateGsamServerUi();
+    capturePanel_->updateRecorderControls();
+
+    QTimer::singleShot(250, this, [this]() {
+        if (capturePanel_ != nullptr)
+            capturePanel_->tryAutoStartGsamServer();
+    });
 }
 
 MainWindow::~MainWindow()

@@ -14,7 +14,7 @@ public:
     virtual bool connect(const StageConnectSettings &settings, StageError &error) = 0;
     virtual bool homeWithLocalization(StageError &error) = 0;
     virtual bool home(StageError &error) = 0;
-    virtual void stopMotion() = 0;
+    virtual void stopMotion(bool waitUntilIdle = true) = 0;
     virtual void disconnect() = 0;
 
     // All motion after connect uses lockstep group 1; distances refer to the primary axis only.

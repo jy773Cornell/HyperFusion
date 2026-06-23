@@ -41,6 +41,7 @@ struct StreamProcessReport
     QString segmentationDir;
     QString segmentationCsvPath;
     QString segmentationPlotPath;
+    QString rgbExportMode;
     QString errorMessage;
 };
 
@@ -64,6 +65,80 @@ QString datasetStemFromStreamBaseName(const QString &baseName)
         return baseName.left(baseName.size() - kTransmittanceSuffix.size());
 
     return baseName;
+}
+
+bool streamIsTransmittance(const CaptureWriterStreamSummary &stream)
+{
+    static const QString kTransmittanceSuffix = QStringLiteral("_transmittance");
+    if (stream.baseName.endsWith(kTransmittanceSuffix, Qt::CaseInsensitive))
+        return true;
+
+    return stream.relativeRoot.startsWith(QStringLiteral("transmittance/"), Qt::CaseInsensitive);
+}
+
+struct CaptureStreamTraits
+{
+    bool isTransmittance = false;
+    bool isSwir3 = false;
+};
+
+CaptureStreamTraits captureStreamTraits(const CaptureWriterStreamSummary &stream)
+{
+    CaptureStreamTraits traits;
+    const QStringList parts =
+        stream.relativeRoot.split(QLatin1Char('/'), Qt::SkipEmptyParts);
+
+    if (parts.size() >= 2)
+    {
+        traits.isTransmittance =
+            parts[0].compare(QStringLiteral("transmittance"), Qt::CaseInsensitive) == 0;
+        traits.isSwir3 = parts[1].compare(QStringLiteral("swir3"), Qt::CaseInsensitive) == 0;
+        return traits;
+    }
+
+    traits.isTransmittance = streamIsTransmittance(stream);
+    const QString streamHint = stream.relativeRoot + QLatin1Char('/') + stream.baseName;
+    traits.isSwir3 = streamHint.contains(QStringLiteral("swir3"), Qt::CaseInsensitive);
+    return traits;
+}
+
+QString spectrumYAxisLabelForStream(const CaptureStreamTraits &traits)
+{
+    return traits.isTransmittance ? QStringLiteral("Transmittance") : QStringLiteral("Reflectance");
+}
+
+QString preprocessedEnviDescriptionForStream(const CaptureStreamTraits &traits)
+{
+    return traits.isTransmittance ? QStringLiteral("HyperFusion preprocessed transmittance")
+                                  : QStringLiteral("HyperFusion preprocessed reflectance");
+}
+
+double referencePlotDnAxisMaxForStream(const CaptureStreamTraits &traits)
+{
+    return traits.isSwir3 ? 65535.0 : 4096.0;
+}
+
+ReflectanceRgbExportMode rgbExportModeForStream(const CaptureStreamTraits &traits)
+{
+    // reflectance/fx10e + transmittance/fx10e → D-illuminant sRGB (λ ≤ truncate_nm)
+    // reflectance/swir3 + transmittance/swir3 → SWIR false-color wavelength ranges
+    return traits.isSwir3 ? ReflectanceRgbExportMode::SwirFalseColorRanges
+                          : ReflectanceRgbExportMode::SpectralToSrgb;
+}
+
+QString rgbExportModeLabel(const ReflectanceRgbExportMode mode)
+{
+    return mode == ReflectanceRgbExportMode::SwirFalseColorRanges ? QStringLiteral("swir_false_color")
+                                                                  : QStringLiteral("srgb");
+}
+
+SwirFalseColorConfig swirFalseColorConfigFromHardware(const hf::HardwareConfig::PreprocessingConfig &cfg)
+{
+    SwirFalseColorConfig falseColor;
+    falseColor.red = cfg.swirFalseColorRed;
+    falseColor.green = cfg.swirFalseColorGreen;
+    falseColor.blue = cfg.swirFalseColorBlue;
+    return falseColor;
 }
 
 QString referencePlotPath(const QString &preprocessedDir,
@@ -107,6 +182,12 @@ bool writeManifest(const QString &preprocessedDir,
     configObject.insert(QStringLiteral("ffcClampMax"), cfg.ffcClampMax);
     configObject.insert(QStringLiteral("truncateNm"), cfg.truncateNm);
     configObject.insert(QStringLiteral("illuminantsJson"), defaultIlluminantsJsonPath());
+    configObject.insert(QStringLiteral("swirFalseColorRedNmMin"), cfg.swirFalseColorRed.minNm);
+    configObject.insert(QStringLiteral("swirFalseColorRedNmMax"), cfg.swirFalseColorRed.maxNm);
+    configObject.insert(QStringLiteral("swirFalseColorGreenNmMin"), cfg.swirFalseColorGreen.minNm);
+    configObject.insert(QStringLiteral("swirFalseColorGreenNmMax"), cfg.swirFalseColorGreen.maxNm);
+    configObject.insert(QStringLiteral("swirFalseColorBlueNmMin"), cfg.swirFalseColorBlue.minNm);
+    configObject.insert(QStringLiteral("swirFalseColorBlueNmMax"), cfg.swirFalseColorBlue.maxNm);
     root.insert(QStringLiteral("config"), configObject);
 
     QJsonArray streamsArray;
@@ -124,6 +205,8 @@ bool writeManifest(const QString &preprocessedDir,
         streamObject.insert(QStringLiteral("ffcHdrPath"), report.ffcHdrPath);
         streamObject.insert(QStringLiteral("ffcRawPath"), report.ffcRawPath);
         streamObject.insert(QStringLiteral("rgbPath"), report.rgbPath);
+        if (!report.rgbExportMode.isEmpty())
+            streamObject.insert(QStringLiteral("rgbExportMode"), report.rgbExportMode);
         streamObject.insert(QStringLiteral("segmentationDir"), report.segmentationDir);
         streamObject.insert(QStringLiteral("segmentationCsvPath"), report.segmentationCsvPath);
         streamObject.insert(QStringLiteral("segmentationPlotPath"), report.segmentationPlotPath);
@@ -173,6 +256,7 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
     const QString streamLabel =
         stream.relativeRoot.isEmpty() ? stream.baseName : stream.relativeRoot;
     const QString datasetStem = datasetStemFromStreamBaseName(stream.baseName);
+    const CaptureStreamTraits streamTraits = captureStreamTraits(stream);
     const QString illuminantsJsonPath = defaultIlluminantsJsonPath();
     const hf::HardwareConfig::PreprocessingConfig &cfg = hf::hardwareConfig().preprocessing;
 
@@ -205,11 +289,12 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
             darkRowReady = true;
             report.darkPlotOk =
                 saveReferenceMeanStdPlotPng(darkPlotStats.wavelengthsNm,
-                                          darkPlotStats.meanDn,
-                                          darkPlotStats.stdDn,
-                                          QStringLiteral("Dark Reference Mean ±1σ"),
-                                          report.darkPlotPath,
-                                          &error);
+                                            darkPlotStats.meanDn,
+                                            darkPlotStats.stdDn,
+                                            QStringLiteral("Dark Reference Mean ±1σ"),
+                                            report.darkPlotPath,
+                                            referencePlotDnAxisMaxForStream(streamTraits),
+                                            &error);
             if (report.darkPlotOk)
             {
                 logLines.push_back(QStringLiteral("Capture post-process (%1): wrote %2")
@@ -249,6 +334,7 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
                                             whitePlotStats.stdDn,
                                             QStringLiteral("White Reference Mean ±1σ"),
                                             report.whitePlotPath,
+                                            referencePlotDnAxisMaxForStream(streamTraits),
                                             &error);
             if (report.whitePlotOk)
             {
@@ -270,7 +356,11 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
                                   && whiteRowReady;
 
     if (!canProcessSample)
+    {
+        QString manifestError;
+        writeManifest(preprocessedDir, summary, {report}, options, &manifestError);
         return report;
+    }
 
     const QString ffcBaseName = datasetStem + QStringLiteral("_ffc");
     report.ffcHdrPath = QDir(preprocessedDir).filePath(ffcBaseName + QStringLiteral(".hdr"));
@@ -299,6 +389,7 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
                                    whiteRow,
                                    ffcHdrForRgb,
                                    sensorLabel,
+                                   preprocessedEnviDescriptionForStream(streamTraits),
                                    ffcParams,
                                    &error))
     {
@@ -322,15 +413,20 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
         return report;
     }
 
-    if (!writeReflectanceRgbPngFromLines(ffcMetadata,
-                                         QFileInfo(ffcHdrForRgb).absolutePath() + QLatin1Char('/')
-                                             + QFileInfo(ffcHdrForRgb).completeBaseName()
-                                             + QStringLiteral(".raw"),
-                                         cfg.illuminantD,
-                                         cfg.truncateNm,
-                                         illuminantsJsonPath,
-                                         report.rgbPath,
-                                         &error))
+    const QString ffcRawPath = QFileInfo(ffcHdrForRgb).absolutePath() + QLatin1Char('/')
+                               + QFileInfo(ffcHdrForRgb).completeBaseName() + QStringLiteral(".raw");
+    const ReflectanceRgbExportMode rgbMode = rgbExportModeForStream(streamTraits);
+    const SwirFalseColorConfig swirFalseColor = swirFalseColorConfigFromHardware(cfg);
+
+    if (!writeFfcCubeRgbPng(ffcMetadata,
+                            ffcRawPath,
+                            rgbMode,
+                            swirFalseColor,
+                            cfg.illuminantD,
+                            cfg.truncateNm,
+                            illuminantsJsonPath,
+                            report.rgbPath,
+                            &error))
     {
         report.errorMessage = QStringLiteral("RGB export failed: %1").arg(error);
         logLines.push_back(QStringLiteral("Capture post-process (%1): %2").arg(streamLabel, report.errorMessage));
@@ -338,8 +434,31 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
     }
 
     report.rgbOk = true;
-    logLines.push_back(QStringLiteral("Capture post-process (%1): wrote %2")
-                           .arg(streamLabel, QFileInfo(report.rgbPath).fileName()));
+    report.rgbExportMode = rgbExportModeLabel(rgbMode);
+    logLines.push_back(
+        QStringLiteral("Capture post-process (%1): RGB from FFC float raw (%2/%3)")
+            .arg(streamLabel)
+            .arg(streamTraits.isTransmittance ? QStringLiteral("transmittance")
+                                              : QStringLiteral("reflectance"))
+            .arg(streamTraits.isSwir3 ? QStringLiteral("swir3") : QStringLiteral("fx10e")));
+    if (rgbMode == ReflectanceRgbExportMode::SwirFalseColorRanges)
+    {
+        logLines.push_back(
+            QStringLiteral("Capture post-process (%1): wrote %2 (SWIR false-color, R %3–%4 nm, G %5–%6 nm, B %7–%8 nm)")
+                .arg(streamLabel)
+                .arg(QFileInfo(report.rgbPath).fileName())
+                .arg(cfg.swirFalseColorRed.minNm, 0, 'f', 0)
+                .arg(cfg.swirFalseColorRed.maxNm, 0, 'f', 0)
+                .arg(cfg.swirFalseColorGreen.minNm, 0, 'f', 0)
+                .arg(cfg.swirFalseColorGreen.maxNm, 0, 'f', 0)
+                .arg(cfg.swirFalseColorBlue.minNm, 0, 'f', 0)
+                .arg(cfg.swirFalseColorBlue.maxNm, 0, 'f', 0));
+    }
+    else
+    {
+        logLines.push_back(QStringLiteral("Capture post-process (%1): wrote %2 (sRGB)")
+                               .arg(streamLabel, QFileInfo(report.rgbPath).fileName()));
+    }
 
     if (options.runGsamSegmentation)
     {
@@ -389,6 +508,7 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
             segDir,
             datasetStem + QStringLiteral("_rgb.png"),
             segResponse.manifestJsonPath,
+            spectrumYAxisLabelForStream(streamTraits),
             &segError);
         if (!roiResult.success)
         {

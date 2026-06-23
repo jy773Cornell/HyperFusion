@@ -173,6 +173,7 @@ Gsam2RoiAnalysisResult analyzeGsam2SegmentationRois(const QString &ffcHdrPath,
                                                      const QString &segmentationDirectory,
                                                      const QString &imageName,
                                                      const QString &manifestJsonPath,
+                                                     const QString &yAxisLabel,
                                                      QString *errorMessage)
 {
     Gsam2RoiAnalysisResult result;
@@ -311,9 +312,12 @@ Gsam2RoiAnalysisResult analyzeGsam2SegmentationRois(const QString &ffcHdrPath,
 
     const QString plotPath =
         QDir(segmentationDirectory).filePath(QStringLiteral("roi_spectra_plot.png"));
+    const QString plotTitle =
+        QStringLiteral("ROI %1 spectra").arg(yAxisLabel.toLower());
     if (!saveRoiSpectrumMeanStdPlotPng(wavelengthsNm,
                                        plotSeries,
-                                       QStringLiteral("ROI reflectance spectra"),
+                                       plotTitle,
+                                       yAxisLabel,
                                        plotPath,
                                        &localError))
     {

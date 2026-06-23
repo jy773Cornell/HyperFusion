@@ -167,12 +167,12 @@ void CameraStreamPipeline::applyWaterfallDisplay(const std::size_t cameraIndex,
                                                  QImage image,
                                                  const WaterfallDisplayTarget target)
 {
+    Q_UNUSED(target);
     LumoCameraUi *ui = cameraIndex < cameraUi_.size() ? cameraUi_[cameraIndex] : nullptr;
-    if (ui == nullptr || image.isNull() || target == WaterfallDisplayTarget::None
-        || !hooks_.applyWaterfallImage)
+    if (ui == nullptr || image.isNull() || !hooks_.applyWaterfallImage)
         return;
 
-    hooks_.applyWaterfallImage(*ui, std::move(image), target);
+    hooks_.applyWaterfallImage(*ui, std::move(image), WaterfallDisplayTarget::StreamTab);
 }
 
 void CameraStreamPipeline::flushWaterfallDisplay()
@@ -201,13 +201,7 @@ void CameraStreamPipeline::flushWaterfallDisplay()
         if (!localDirty[cameraIndex] || localImages[cameraIndex].isNull())
             continue;
 
-        WaterfallDisplayTarget target = WaterfallDisplayTarget::None;
-        if (hooks_.waterfallDisplayTarget)
-            target = hooks_.waterfallDisplayTarget(cameraIndex);
-        if (target == WaterfallDisplayTarget::None)
-            continue;
-
-        applyWaterfallDisplay(cameraIndex, std::move(localImages[cameraIndex]), target);
+        applyWaterfallDisplay(cameraIndex, std::move(localImages[cameraIndex]), WaterfallDisplayTarget::StreamTab);
     }
 }
 

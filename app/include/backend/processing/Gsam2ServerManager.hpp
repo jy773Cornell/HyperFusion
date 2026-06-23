@@ -14,6 +14,7 @@ class Gsam2ServerManager : public QObject
 public:
     enum class State
     {
+        Unavailable,
         Stopped,
         Starting,
         Running,
@@ -23,9 +24,12 @@ public:
     explicit Gsam2ServerManager(QObject *parent = nullptr);
 
     State state() const { return state_; }
+    bool isServerConnected() const { return state_ == State::Running; }
     QString statusText() const;
     QString serverUrl() const;
 
+    /// Best-effort launch on app start; missing WSL/resources leave state Unavailable (no error UI).
+    void tryAutoStart();
     void startServer();
     void stopServer();
 
@@ -38,11 +42,13 @@ signals:
 private:
     void setState(State state, const QString &detail = QString());
     QString buildLaunchCommand() const;
+    void markUnavailable();
 
     QProcess process_;
-    State state_ = State::Stopped;
+    State state_ = State::Unavailable;
     QString lastDetail_;
     int healthPollAttempts_ = 0;
+    bool silentMode_ = false;
 };
 
 } // namespace hf::processing

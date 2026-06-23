@@ -35,6 +35,7 @@ public:
     void syncPositionPollInterval();
     void onManualMotionStarted();
     void onManualMotionStopped();
+    void onStopMotionRequested();
     void wireSettingsTabConnections();
 
 public slots:
@@ -45,11 +46,20 @@ public slots:
 private:
     void updateDeviceDisplay(const StageTopology &topology);
     void clearDeviceDisplay();
-    [[nodiscard]] bool bothCamerasStreaming() const;
-    [[nodiscard]] bool anyCameraStreaming() const;
+    void beginManualMotionCoastWatch();
+    void onManualMotionCoastPositionSample(double positionMm);
+    void finishManualMotionCoast();
+
+    static constexpr int kIdlePositionPollIntervalMs = 100;
+    static constexpr int kManualPositionPollIntervalMs = 50;
+    static constexpr int kManualMotionCoastStablePollsRequired = 4;
+    static constexpr double kManualMotionCoastStableToleranceMm = 0.03;
 
     MainWindow *host_ = nullptr;
     std::unique_ptr<StageWorker> stageWorker_;
     int manualMotionDepth_ = 0;
+    bool manualMotionCoastActive_ = false;
+    int manualMotionCoastStableCount_ = 0;
+    double manualMotionCoastLastPositionMm_ = 0.0;
 };
 } // namespace hf::stage
