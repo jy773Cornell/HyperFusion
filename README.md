@@ -13,10 +13,8 @@ Designed for research and high-throughput phenotyping, HyperFusion integrates li
 <p align="center">
   <img src="assets/HyperFusionDemo.gif" alt="HyperFusion demo — dual-camera streaming and capture workflow" width="800"/>
   <br/>
-  <sub><a href="https://github.com/jy773Cornell/HyperFusion/raw/main/assets/HyperFusionDemo-readme.mp4">▶ Watch full demo (MP4)</a></sub>
+  <sub><a href="https://github.com/jy773Cornell/HyperFusion/raw/main/assets/HyperFusionDemo.mp4">▶ Watch full demo (MP4)</a></sub>
 </p>
-
-https://github.com/jy773Cornell/HyperFusion/raw/main/assets/HyperFusionDemo-readme.mp4
 
 ---
 
