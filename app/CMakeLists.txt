@@ -136,6 +136,9 @@ qt_add_executable(app
     src/backend/processing/FlatFieldCorrector.cpp
     src/backend/processing/HsiToColor.cpp
     src/backend/processing/SwirBprCorrector.cpp
+    src/backend/processing/SwirBprCalpackMap.cpp
+    src/backend/processing/SwirBprApply.cpp
+    src/backend/processing/SwirAdaptiveBprCorrector.cpp
     include/backend/CameraTypes.hpp
     include/backend/ICameraController.hpp
     include/backend/CameraWorker.hpp
@@ -159,6 +162,9 @@ qt_add_executable(app
     include/backend/processing/GsamWslPathUtil.hpp
     include/backend/processing/CapturePostProcessor.hpp
     include/backend/processing/SwirBprCorrector.hpp
+    include/backend/processing/SwirBprCalpackMap.hpp
+    include/backend/processing/SwirBprApply.hpp
+    include/backend/processing/SwirAdaptiveBprCorrector.hpp
     # adapters — vendor SDK / hardware
     src/adapters/zaber/ZaberStageController.cpp
     src/adapters/zaber/ZaberStageConfigurator.cpp

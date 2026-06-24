@@ -16,7 +16,9 @@
 #include "SI_errors.h"
 #include "SI_sensor.h"
 #include "SI_types.h"
+#include "backend/HyperFusionConfig.hpp"
 #include "backend/processing/SwirBprCorrector.hpp"
+#include "backend/processing/SwirAdaptiveBprCorrector.hpp"
 
 #include <QString>
 #endif
@@ -199,6 +201,41 @@ bool readHandleBoolFeature(const SI_H handle, const wchar_t *feature, SI_BOOL &v
     return SI_SUCCEEDED(SI_GetBool(handle, feature, &value));
 }
 
+bool readSdkBprEnabled(const SI_H handle, bool &enabledOut)
+{
+    SI_BOOL enabled = SI_FALSE;
+    if (!readHandleBoolFeature(handle, L"Camera.BPR", enabled))
+        return false;
+
+    enabledOut = (enabled == SI_TRUE);
+    return true;
+}
+
+bool enableSdkBpr(const SI_H handle, CameraError &error)
+{
+    SI_BOOL bprImplemented = SI_FALSE;
+    if (!SI_SUCCEEDED(SI_IsImplemented(handle, L"Camera.BPR", &bprImplemented)) || !bprImplemented)
+        return true;
+
+    SI_BOOL writable = SI_FALSE;
+    if (!SI_SUCCEEDED(SI_IsWritable(handle, L"Camera.BPR", &writable)) || !writable)
+        return true;
+
+    if (!checkSiCode(SI_SetBool(handle, L"Camera.BPR", SI_TRUE), "SI_SetBool(Camera.BPR,true)", error))
+        return false;
+
+    bool enabled = false;
+    if (readSdkBprEnabled(handle, enabled) && !enabled)
+    {
+        error.code = CameraErrorCode::SdkError;
+        error.message = "Camera.BPR read back false after enable.";
+        error.fatal = false;
+        return false;
+    }
+
+    return true;
+}
+
 bool disableSdkBpr(const SI_H handle, CameraError &error)
 {
     SI_BOOL bprImplemented = SI_FALSE;
@@ -212,8 +249,8 @@ bool disableSdkBpr(const SI_H handle, CameraError &error)
     if (!checkSiCode(SI_SetBool(handle, L"Camera.BPR", SI_FALSE), "SI_SetBool(Camera.BPR,false)", error))
         return false;
 
-    SI_BOOL enabled = SI_FALSE;
-    if (readHandleBoolFeature(handle, L"Camera.BPR", enabled) && enabled == SI_TRUE)
+    bool enabled = true;
+    if (readSdkBprEnabled(handle, enabled) && enabled)
     {
         error.code = CameraErrorCode::SdkError;
         error.message = "Camera.BPR read back true after disable.";
@@ -260,6 +297,40 @@ std::string formatHandleIntFeature(const SI_H handle, const wchar_t *feature)
         return "(n/a)";
 
     return std::to_string(static_cast<long long>(value));
+}
+
+std::string formatHandleFloatFeature(const SI_H handle, const wchar_t *feature)
+{
+    SI_BOOL implemented = SI_FALSE;
+    if (!SI_SUCCEEDED(SI_IsImplemented(handle, feature, &implemented)) || !implemented)
+        return "(n/a)";
+
+    double value = 0.0;
+    if (!SI_SUCCEEDED(SI_GetFloat(handle, feature, &value)))
+        return "(n/a)";
+
+    return std::to_string(value);
+}
+
+std::string formatHandleEnumFeature(const SI_H handle, const wchar_t *feature)
+{
+    SI_BOOL implemented = SI_FALSE;
+    if (!SI_SUCCEEDED(SI_IsImplemented(handle, feature, &implemented)) || !implemented)
+        return "(n/a)";
+
+    int index = 0;
+    if (!SI_SUCCEEDED(SI_GetEnumIndex(handle, feature, &index)))
+        return "(n/a)";
+
+    wchar_t buffer[512] = {};
+    if (!SI_SUCCEEDED(SI_GetEnumStringByIndex(handle,
+                                              feature,
+                                              index,
+                                              buffer,
+                                              static_cast<int>(sizeof(buffer) / sizeof(buffer[0])))))
+        return "(n/a)";
+
+    return wideToUtf8(buffer);
 }
 
 bool applySwirNiSetupBeforeInitialize(const SI_H handle,
@@ -394,7 +465,8 @@ std::string LumoCamera::swirNiConnectionSummary() const
            + ", BPR.MapAvailable=" + formatHandleBoolFeature(handle, L"Camera.BPR.MapAvailable")
            + ", BPR=" + formatHandleBoolFeature(handle, L"Camera.BPR")
            + ", BPR.BadPixelCount=" + formatHandleIntFeature(handle, L"Camera.BPR.BadPixelCount")
-           + (bprStatusSummary_.empty() ? std::string() : std::string(", ") + bprStatusSummary_);
+           + (bprStatusSummary_.empty() ? std::string() : std::string(", ") + bprStatusSummary_)
+           + (nucStatusSummary_.empty() ? std::string() : std::string(", ") + nucStatusSummary_);
 #else
     return {};
 #endif
@@ -1003,31 +1075,152 @@ bool LumoCamera::configureBprAfterInitialize(void *handlePtr, CameraError &error
     if (!useSoftwareBpr)
         return true;
 
+    swirSoftwareBpr_.reset();
+    swirAdaptiveBpr_.reset();
+
+    const auto &preprocess = hf::hardwareConfig().preprocessing;
+    if (preprocess.swir3AdaptiveBpr)
+    {
+        if (!disableSdkBpr(handle, error))
+            return false;
+
+        swirAdaptiveBpr_ = std::make_unique<hf::processing::SwirAdaptiveBprCorrector>();
+        hf::processing::SwirAdaptiveBprSettings adaptiveSettings;
+        adaptiveSettings.gainMin = preprocess.swir3AdaptiveBprGainMin;
+        adaptiveSettings.gainMax = preprocess.swir3AdaptiveBprGainMax;
+        adaptiveSettings.minNeighborMeanDn = preprocess.swir3AdaptiveBprMinNeighborDn;
+        adaptiveSettings.minConsecutiveHits =
+            preprocess.swir3AdaptiveBprMinHits < 1 ? 1 : preprocess.swir3AdaptiveBprMinHits;
+        adaptiveSettings.maxAdaptivePixels =
+            preprocess.swir3AdaptiveBprMaxPixels < 0 ? 0 : preprocess.swir3AdaptiveBprMaxPixels;
+        swirAdaptiveBpr_->setSettings(adaptiveSettings);
+
+        QString loadError;
+        if (!swirAdaptiveBpr_->loadFromCalpack(QString::fromStdString(settings_.lumoCalibrationPackPath),
+                                                 &loadError))
+        {
+            error.code = CameraErrorCode::SdkError;
+            error.message = tag() + ": " + loadError.toStdString();
+            error.fatal = false;
+            swirAdaptiveBpr_.reset();
+            return false;
+        }
+
+        bprStatusSummary_ = "AdaptiveBPR=on, baseline=" + std::to_string(swirAdaptiveBpr_->baselineBadPixelCount())
+                            + ", SDK.BPR=off";
+        return true;
+    }
+
+    if (!enableSdkBpr(handle, error))
+        return false;
+
+    bool sdkBprEnabled = false;
+    const bool sdkBprReadable = readSdkBprEnabled(handle, sdkBprEnabled);
+
     swirSoftwareBpr_ = std::make_unique<hf::processing::SwirBprCorrector>();
     QString loadError;
-    if (!swirSoftwareBpr_->loadFromCalpack(QString::fromStdString(settings_.lumoCalibrationPackPath),
-                                           &loadError))
-    {
-        error.code = CameraErrorCode::SdkError;
-        error.message = tag() + ": " + loadError.toStdString();
-        error.fatal = false;
-        swirSoftwareBpr_.reset();
-        return false;
-    }
+    const bool mapLoaded =
+        swirSoftwareBpr_->loadFromCalpack(QString::fromStdString(settings_.lumoCalibrationPackPath),
+                                          &loadError);
 
-    if (!disableSdkBpr(handle, error))
-    {
-        swirSoftwareBpr_.reset();
-        return false;
-    }
-
-    bprStatusSummary_ = "SoftwareBPR=on, loaded=" + std::to_string(swirSoftwareBpr_->badPixelCount())
-                        + " (mask " + std::to_string(swirSoftwareBpr_->fullSampleCount()) + "x"
-                        + std::to_string(swirSoftwareBpr_->fullBandCount()) + ")";
+    bprStatusSummary_ = "SDK.BPR=" + std::string(sdkBprReadable && sdkBprEnabled ? "on" : "off");
     const std::string sdkCount = formatHandleIntFeature(handle, L"Camera.BPR.BadPixelCount");
     if (sdkCount != "(n/a)")
         bprStatusSummary_ += ", SDK.BadPixelCount=" + sdkCount;
-    bprStatusSummary_ += ", SDK.BPR=off";
+
+    if (mapLoaded)
+    {
+        bprStatusSummary_ += ", SoftwareBPR.map=" + std::to_string(swirSoftwareBpr_->badPixelCount())
+                            + " (mask " + std::to_string(swirSoftwareBpr_->fullSampleCount()) + "x"
+                            + std::to_string(swirSoftwareBpr_->fullBandCount()) + ")";
+        if (sdkCount != "(n/a)")
+        {
+            try
+            {
+                const int sdkBadCount = std::stoi(sdkCount);
+                if (sdkBadCount >= 0
+                    && static_cast<int>(swirSoftwareBpr_->badPixelCount()) != sdkBadCount)
+                {
+                    bprStatusSummary_ += ", mapCountMismatch";
+                }
+            }
+            catch (...)
+            {
+            }
+        }
+    }
+    else
+    {
+        swirSoftwareBpr_.reset();
+        bprStatusSummary_ += ", SoftwareBPR.map=load_failed";
+    }
+
+    if (sdkBprReadable && sdkBprEnabled)
+        swirSoftwareBpr_.reset();
+
+    return true;
+}
+
+bool LumoCamera::configureSwirAutoNucAfterApplySettings(void *handlePtr, CameraError &error)
+{
+    const SI_H handle = static_cast<SI_H>(handlePtr);
+    nucStatusSummary_.clear();
+
+    if (sensorKind_ != LumoSensorKind::Swir3Ni)
+        return true;
+
+    if (!hf::hardwareConfig().preprocessing.swir3AutoNuc)
+    {
+        nucStatusSummary_ = "AutoNUC=cfg-off";
+        return true;
+    }
+
+    SI_BOOL implemented = SI_FALSE;
+    if (SI_SUCCEEDED(SI_IsImplemented(handle, L"Camera.CheckTemperatures", &implemented)) && implemented)
+        (void)SI_Command(handle, L"Camera.CheckTemperatures");
+
+    implemented = SI_FALSE;
+    if (!SI_SUCCEEDED(SI_IsImplemented(handle, L"Camera.AutoNUC", &implemented)) || !implemented)
+    {
+        nucStatusSummary_ = "AutoNUC=(n/a)";
+        return true;
+    }
+
+    SI_BOOL writable = SI_FALSE;
+    if (!SI_SUCCEEDED(SI_IsWritable(handle, L"Camera.AutoNUC", &writable)) || !writable)
+    {
+        nucStatusSummary_ = "AutoNUC=(not-writable)";
+        return true;
+    }
+
+    if (!checkSiCode(SI_SetBool(handle, L"Camera.AutoNUC", SI_TRUE),
+                     "SI_SetBool(Camera.AutoNUC,true)",
+                     error))
+        return false;
+
+    double exposureMs = settings_.exposureMs;
+    if (SI_SUCCEEDED(SI_GetFloat(handle, L"Camera.ExposureTime", &exposureMs)))
+    {
+        if (!checkSiCode(SI_SetFloat(handle, L"Camera.ExposureTime", exposureMs),
+                         "SI_SetFloat(Camera.ExposureTime,auto-nuc-refresh)",
+                         error))
+            return false;
+    }
+
+    SI_BOOL autoNucEnabled = SI_FALSE;
+    if (readHandleBoolFeature(handle, L"Camera.AutoNUC", autoNucEnabled))
+        nucStatusSummary_ = std::string("AutoNUC=") + (autoNucEnabled == SI_TRUE ? "on" : "off");
+    else
+        nucStatusSummary_ = "AutoNUC=on";
+
+    const std::string nucTable = formatHandleEnumFeature(handle, L"Camera.NUC");
+    if (nucTable != "(n/a)")
+        nucStatusSummary_ += ", NUC=" + nucTable;
+
+    const std::string sensorTemp = formatHandleFloatFeature(handle, L"Camera.Temperature");
+    if (sensorTemp != "(n/a)")
+        nucStatusSummary_ += ", TempC=" + sensorTemp;
+
     return true;
 }
 
@@ -1200,6 +1393,9 @@ bool LumoCamera::applySettings(const CameraSettings &settings,
     if (!refreshImageGeometry(error))
         return false;
 
+    if (!configureSwirAutoNucAfterApplySettings(handle_, error))
+        return false;
+
     state_ = CameraState::Configured;
     return true;
 }
@@ -1368,7 +1564,9 @@ void LumoCamera::disconnect()
         handleToClose = handle_;
         handle_ = nullptr;
         swirSoftwareBpr_.reset();
+        swirAdaptiveBpr_.reset();
         bprStatusSummary_.clear();
+        nucStatusSummary_.clear();
         state_ = CameraState::Disconnected;
     }
 
@@ -1460,17 +1658,32 @@ bool LumoCamera::pollFrame(FramePacket &frame, const std::uint32_t timeoutMs, Ca
     frameReady_ = false;
     frameLock.unlock();
 
+    hf::processing::SwirAdaptiveBprCorrector *adaptiveBpr = nullptr;
     hf::processing::SwirBprCorrector *softwareBpr = nullptr;
     int spatialBinning = 1;
     int spectralBinning = 1;
     {
         std::lock_guard<std::mutex> stateLock(mutex_);
+        adaptiveBpr = swirAdaptiveBpr_.get();
         softwareBpr = swirSoftwareBpr_.get();
         spatialBinning = settings_.spatialBinning;
         spectralBinning = settings_.spectralBinning;
     }
 
-    if (softwareBpr != nullptr && softwareBpr->isLoaded())
+    if (adaptiveBpr != nullptr && adaptiveBpr->isLoaded())
+    {
+        adaptiveBpr->processFrame(frame, spatialBinning, spectralBinning);
+        if (frame.frameIndex % 150U == 0U)
+        {
+            std::lock_guard<std::mutex> stateLock(mutex_);
+            bprStatusSummary_ = "AdaptiveBPR=on, baseline="
+                                + std::to_string(adaptiveBpr->baselineBadPixelCount())
+                                + ", adaptive=" + std::to_string(adaptiveBpr->adaptiveBadPixelCount())
+                                + ", active=" + std::to_string(adaptiveBpr->activeBadPixelCount())
+                                + ", SDK.BPR=off";
+        }
+    }
+    else if (softwareBpr != nullptr && softwareBpr->isLoaded())
         softwareBpr->apply(frame, spatialBinning, spectralBinning);
 
     return true;

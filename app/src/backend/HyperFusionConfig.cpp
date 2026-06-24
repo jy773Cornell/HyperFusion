@@ -623,6 +623,63 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 else
                     config.preprocessing.swirFalseColorBlue.maxNm = numericValue;
             }
+            else if (key == QStringLiteral("swir3_auto_nuc"))
+            {
+                if (value == QStringLiteral("true") || value == QStringLiteral("1")
+                    || value == QStringLiteral("yes") || value == QStringLiteral("on"))
+                    config.preprocessing.swir3AutoNuc = true;
+                else if (value == QStringLiteral("false") || value == QStringLiteral("0")
+                         || value == QStringLiteral("no") || value == QStringLiteral("off"))
+                    config.preprocessing.swir3AutoNuc = false;
+                else
+                    warnings.push_back(QStringLiteral("Invalid swir3_auto_nuc (use true/false): %1").arg(value));
+            }
+            else if (key == QStringLiteral("swir3_adaptive_bpr"))
+            {
+                if (value == QStringLiteral("true") || value == QStringLiteral("1")
+                    || value == QStringLiteral("yes") || value == QStringLiteral("on"))
+                    config.preprocessing.swir3AdaptiveBpr = true;
+                else if (value == QStringLiteral("false") || value == QStringLiteral("0")
+                         || value == QStringLiteral("no") || value == QStringLiteral("off"))
+                    config.preprocessing.swir3AdaptiveBpr = false;
+                else
+                    warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr (use true/false): %1").arg(value));
+            }
+            else if (key == QStringLiteral("swir3_adaptive_bpr_gain_min"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_gain_min: %1").arg(value));
+                else
+                    config.preprocessing.swir3AdaptiveBprGainMin = numericValue;
+            }
+            else if (key == QStringLiteral("swir3_adaptive_bpr_gain_max"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_gain_max: %1").arg(value));
+                else
+                    config.preprocessing.swir3AdaptiveBprGainMax = numericValue;
+            }
+            else if (key == QStringLiteral("swir3_adaptive_bpr_min_neighbor_dn"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_min_neighbor_dn: %1").arg(value));
+                else
+                    config.preprocessing.swir3AdaptiveBprMinNeighborDn = numericValue;
+            }
+            else if (key == QStringLiteral("swir3_adaptive_bpr_min_hits"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_min_hits: %1").arg(value));
+                else
+                    config.preprocessing.swir3AdaptiveBprMinHits = static_cast<int>(numericValue);
+            }
+            else if (key == QStringLiteral("swir3_adaptive_bpr_max_pixels"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_max_pixels: %1").arg(value));
+                else
+                    config.preprocessing.swir3AdaptiveBprMaxPixels = static_cast<int>(numericValue);
+            }
             else
             {
                 warnings.push_back(QStringLiteral("Unknown key in [preprocessing]: %1").arg(key));
@@ -773,6 +830,15 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "swir_false_color_green_nm_max = 1300\n"
         << "swir_false_color_blue_nm_min = 950\n"
         << "swir_false_color_blue_nm_max = 1050\n"
+        << "# SWIR3: Camera.AutoNUC after connect/apply (SDK NUC table for current exposure).\n"
+        << "swir3_auto_nuc = true\n"
+        << "# SWIR3: stream-adaptive software BPR (disables SDK Camera.BPR when true).\n"
+        << "swir3_adaptive_bpr = false\n"
+        << "swir3_adaptive_bpr_gain_min = 0.3\n"
+        << "swir3_adaptive_bpr_gain_max = 1.5\n"
+        << "swir3_adaptive_bpr_min_neighbor_dn = 64\n"
+        << "swir3_adaptive_bpr_min_hits = 3\n"
+        << "swir3_adaptive_bpr_max_pixels = 4096\n"
         << "\n"
         << "[segmentation]\n"
         << "# GSAM2 sidecar (WSL). sam2_repo_linux empty = auto from resources/sam2.\n"

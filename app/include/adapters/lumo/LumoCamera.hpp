@@ -13,6 +13,7 @@
 
 namespace hf::processing
 {
+class SwirAdaptiveBprCorrector;
 class SwirBprCorrector;
 }
 
@@ -89,6 +90,7 @@ private:
     /// Stop acquisition and wake any blocked pollFrame (must not hold mutex_ while waiting on frameMutex_).
     void haltAcquisition();
     bool configureBprAfterInitialize(void *handle, CameraError &error);
+    bool configureSwirAutoNucAfterApplySettings(void *handle, CameraError &error);
 #endif
 
     const CameraBackendId backendId_;
@@ -115,5 +117,7 @@ private:
     bool frameReady_ = false;
 
     std::unique_ptr<hf::processing::SwirBprCorrector> swirSoftwareBpr_;
+    std::unique_ptr<hf::processing::SwirAdaptiveBprCorrector> swirAdaptiveBpr_;
     std::string bprStatusSummary_;
+    std::string nucStatusSummary_;
 };

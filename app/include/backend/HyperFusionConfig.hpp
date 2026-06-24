@@ -47,6 +47,15 @@ struct HardwareConfig
         WavelengthRangeNm swirFalseColorRed{1550.0, 1700.0};
         WavelengthRangeNm swirFalseColorGreen{1100.0, 1300.0};
         WavelengthRangeNm swirFalseColorBlue{950.0, 1050.0};
+        /// SWIR3: enable Camera.AutoNUC after timing apply (SDK picks NUC table for exposure).
+        bool swir3AutoNuc = true;
+        /// SWIR3: stream-adaptive software BPR (disables SDK Camera.BPR when true).
+        bool swir3AdaptiveBpr = false;
+        double swir3AdaptiveBprGainMin = 0.3;
+        double swir3AdaptiveBprGainMax = 1.5;
+        double swir3AdaptiveBprMinNeighborDn = 64.0;
+        int swir3AdaptiveBprMinHits = 3;
+        int swir3AdaptiveBprMaxPixels = 4096;
     };
 
     PreprocessingConfig preprocessing;
