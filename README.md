@@ -7,13 +7,10 @@ HyperFusion is a multimodal hyperspectral imaging platform for food and agricult
 Designed for research and high-throughput phenotyping, HyperFusion integrates live visualization, synchronized dual-camera acquisition, automated calibration, and streamlined data export into a unified workflow. From acquisition to analysis-ready datasets, the platform supports optional flat-field correction, ENVI export, and AI-powered segmentation for downstream quality assessment and phenotyping.
 
 <p align="center">
-  <img src="./assets/HyperFusionCAD.png" alt="HyperFusion system CAD rendering" width="500"/>
+  <img src="assets/HyperFusionCAD.png" alt="HyperFusion system CAD rendering" width="500"/>
 </p>
 
-<p align="center">
-  <video src="./assets/HyperFusionDemo.mp4" controls width="800">
-  </video>
-</p>
+![HyperFusion demo — dual-camera streaming and capture workflow](assets/HyperFusionDemo-readme.mp4)
 
 ---
 
