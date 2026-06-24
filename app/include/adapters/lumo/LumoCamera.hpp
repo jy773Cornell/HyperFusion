@@ -6,9 +6,15 @@
 
 #include <condition_variable>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <vector>
+
+namespace hf::processing
+{
+class SwirBprCorrector;
+}
 
 class LumoCamera : public ICameraController
 {
@@ -82,6 +88,7 @@ private:
     void onFrame(const std::uint8_t *buffer, std::int64_t frameSize, std::int64_t frameNumber);
     /// Stop acquisition and wake any blocked pollFrame (must not hold mutex_ while waiting on frameMutex_).
     void haltAcquisition();
+    bool configureBprAfterInitialize(void *handle, CameraError &error);
 #endif
 
     const CameraBackendId backendId_;
@@ -106,4 +113,7 @@ private:
     std::vector<std::uint8_t> latestFrameBytes_;
     std::int64_t latestFrameNumber_ = 0;
     bool frameReady_ = false;
+
+    std::unique_ptr<hf::processing::SwirBprCorrector> swirSoftwareBpr_;
+    std::string bprStatusSummary_;
 };

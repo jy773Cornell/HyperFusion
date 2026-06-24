@@ -228,7 +228,7 @@ bool saveRoiSpectrumMeanStdPlotPng(const std::vector<double> &wavelengthsNm,
     }
 
     painter.setPen(Qt::black);
-    painter.drawText(QRect(kMarginLeft, kPlotHeight - kMarginBottom + 8, static_cast<int>(plotRect.width()), 24),
+    painter.drawText(QRect(kMarginLeft, kPlotHeight - kMarginBottom + 28, static_cast<int>(plotRect.width()), 24),
                      Qt::AlignHCenter | Qt::AlignTop,
                      QStringLiteral("Wavelength (nm)"));
     painter.save();

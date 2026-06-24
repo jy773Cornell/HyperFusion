@@ -114,6 +114,7 @@ public:
     void maybeApplyInitialDualCameraSync();
 
     [[nodiscard]] bool isDualCameraSyncHardwareApplyPending() const;
+    [[nodiscard]] bool shouldSuppressCameraTimingDialogs() const;
     void notifyDualCameraSyncSettingsApplied(const CameraSettingsApplyReport &report);
     void notifyDualCameraSyncApplyFailed(const QString &message);
     void dismissDualCameraSyncWaitDialog();
@@ -141,7 +142,7 @@ private:
     void initializeCaptureModeQueue();
     bool confirmCaptureStart(const LighthouseControllerPowerStatus &powerStatus) const;
     bool confirmCaptureHoodPreparation(CaptureIlluminationMode mode,
-                                       bool betweenReflectanceAndTransmittance) const;
+                                       bool betweenReflectanceAndTransmittance);
     bool confirmContinuousCaptureWithoutStage() const;
     void startCurrentCaptureMode();
     void beginCaptureModeMotion();
@@ -235,6 +236,12 @@ private:
     void homeStageAfterCapture();
     void handleCapturePreviewFrame(const SharedFramePacket &frame);
     LumoCameraUi *cameraUiForIndex(std::size_t cameraIndex);
+    [[nodiscard]] bool hasReflectanceAndTransmittanceCaptureModes() const;
+    void saveReflectanceExposuresForDualModeCapture();
+    void applyTransmittanceExposuresFromConfig();
+    void restoreReflectanceExposuresAfterCapture();
+    void applyCaptureExposureForCamera(std::size_t cameraIndex, double exposureMs);
+    QString buildTransmittanceExposureChangeNotice() const;
 
     MainWindow *host_ = nullptr;
 
@@ -271,6 +278,10 @@ private:
     bool dualCameraSyncHardwareApplyPending_ = false;
     double lastAppliedSwir3SyncFrameRateHz_ = -1.0;
     OperationWaitDialog *dualCameraSyncWaitDialog_ = nullptr;
+    bool dualModeExposureSwitchEnabled_ = false;
+    bool captureUsingTransmittanceExposure_ = false;
+    bool captureIlluminationExposureSwitchActive_ = false;
+    std::array<double, 2> savedReflectanceExposureMs_ = {0.0, 0.0};
 
     struct DualCameraSyncSummaryContext
     {

@@ -216,14 +216,19 @@ void CapturePanelController::handleCapturePreviewFrame(const SharedFramePacket &
     if (!frame)
         return;
 
+    std::vector<std::size_t> selected;
+    if (!selectedCaptureCameraIndices(selected))
+        return;
+
     const std::size_t cameraIndex = frame->source == CameraBackendId::Camera1 ? 0 : 1;
+    if (std::find(selected.begin(), selected.end(), cameraIndex) == selected.end())
+        return;
+
+    const LumoCameraUi &cameraUi = cameraIndex == 0 ? host_->camera1Ui_ : host_->camera2Ui_;
 
     if (captureScanPhase_ == CaptureScanPhase::BlackReference)
     {
-        std::vector<std::size_t> selected;
-        if (selectedCaptureCameraIndices(selected)
-            && std::find(selected.begin(), selected.end(), cameraIndex) != selected.end()
-            && shouldAcceptBlackReferenceFrame(cameraIndex))
+        if (shouldAcceptBlackReferenceFrame(cameraIndex))
         {
             ++captureBlackRefFramesCollected_[cameraIndex];
             if (selectedCamerasReachedBlackReferenceTarget())
@@ -231,12 +236,90 @@ void CapturePanelController::handleCapturePreviewFrame(const SharedFramePacket &
             else
                 updateRecorderStatus();
         }
+        return;
     }
-    else if (captureScanPhase_ == CaptureScanPhase::WhiteReferenceScan
-             || captureScanPhase_ == CaptureScanPhase::CombinedRecordScan)
+
+    if (captureScanPhase_ == CaptureScanPhase::WhiteReferenceScan)
     {
         if (shouldAcceptWhiteReferenceFrame(cameraIndex))
             onWhiteReferenceFrameCollected(cameraIndex);
+        return;
+    }
+
+    if (captureScanPhase_ == CaptureScanPhase::CombinedRecordScan)
+    {
+        const std::size_t stageCameraIndex = stageCameraIndexForUi(cameraUi, cameraIndex);
+
+        if (shouldRecordWhiteReferenceFrameForCamera(stageCameraIndex,
+                                                     cameraIndex,
+                                                     currentStageScanPositionMm()))
+        {
+            const double windowEnd =
+                whiteRefStartMmForStageCamera(captureScanPlan_,
+                                              captureRecordingIlluminationMode_,
+                                              stageCameraIndex)
+                + captureScanPlan_.whiteRefScanDistanceMm[stageCameraIndex];
+            if (currentStageScanPositionMm() + 0.05 >= windowEnd)
+                captureWhiteRefWindowComplete_[stageCameraIndex] = true;
+
+            onWhiteReferenceFrameCollected(cameraIndex);
+            return;
+        }
+
+        if (!captureSampleRecordingActive_)
+            return;
+
+        const std::optional<double> stagePositionMm = knownStageScanPositionMm();
+        if (!stagePositionMm)
+            return;
+
+        updateSampleScanWindowProgress(*stagePositionMm);
+
+        if (!shouldRecordSampleFrameForCamera(stageCameraIndex, *stagePositionMm))
+            return;
+
+        captureSampleWindowEntered_[stageCameraIndex] = true;
+        ++captureSampleFramesCollected_[cameraIndex];
+
+        const double windowEnd =
+            captureScanPlan_.sampleScanStartMm[stageCameraIndex] + captureScanPlan_.sampleScanLengthMm;
+        if (*stagePositionMm + 0.05 >= windowEnd)
+            captureSampleWindowComplete_[stageCameraIndex] = true;
+
+        updateRecorderStatus();
+
+        if (allSelectedCamerasPastSampleWindow(*stagePositionMm) && canCompleteCombinedRecordScan())
+            onCaptureCombinedRecordScanComplete();
+        return;
+    }
+
+    if (captureScanPhase_ == CaptureScanPhase::SampleScan)
+    {
+        if (!captureSampleRecordingActive_)
+            return;
+
+        const std::size_t stageCameraIndex = stageCameraIndexForUi(cameraUi, cameraIndex);
+        const std::optional<double> stagePositionMm = knownStageScanPositionMm();
+        if (!stagePositionMm)
+            return;
+
+        updateSampleScanWindowProgress(*stagePositionMm);
+
+        if (!shouldRecordSampleFrameForCamera(stageCameraIndex, *stagePositionMm))
+            return;
+
+        captureSampleWindowEntered_[stageCameraIndex] = true;
+        ++captureSampleFramesCollected_[cameraIndex];
+
+        const double windowEnd =
+            captureScanPlan_.sampleScanStartMm[stageCameraIndex] + captureScanPlan_.sampleScanLengthMm;
+        if (*stagePositionMm + 0.05 >= windowEnd)
+            captureSampleWindowComplete_[stageCameraIndex] = true;
+
+        updateRecorderStatus();
+
+        if (allSelectedCamerasPastSampleWindow(*stagePositionMm) && canCompleteSampleScan())
+            onCaptureSampleScanComplete();
     }
 }
 
@@ -653,6 +736,11 @@ void hf::capture::CapturePanelController::applyDualCameraScanSync(const bool app
 bool hf::capture::CapturePanelController::isDualCameraSyncHardwareApplyPending() const
 {
     return dualCameraSyncHardwareApplyPending_;
+}
+
+bool hf::capture::CapturePanelController::shouldSuppressCameraTimingDialogs() const
+{
+    return captureIlluminationExposureSwitchActive_;
 }
 
 void hf::capture::CapturePanelController::showDualCameraSyncWaitDialog()
@@ -1617,6 +1705,11 @@ void hf::capture::CapturePanelController::initializeCaptureModeQueue()
     captureCurrentModeIndex_ = 0;
     if (!capturePendingIlluminationModes_.empty())
         captureRecordingIlluminationMode_ = capturePendingIlluminationModes_.front();
+
+    dualModeExposureSwitchEnabled_ = hasReflectanceAndTransmittanceCaptureModes();
+    captureUsingTransmittanceExposure_ = false;
+    if (dualModeExposureSwitchEnabled_)
+        saveReflectanceExposuresForDualModeCapture();
 }
 
 bool hf::capture::CapturePanelController::confirmCaptureStart(const LighthouseControllerPowerStatus &powerStatus) const
@@ -1661,7 +1754,7 @@ bool hf::capture::CapturePanelController::confirmCaptureStart(const LighthouseCo
 }
 
 bool hf::capture::CapturePanelController::confirmCaptureHoodPreparation(const CaptureIlluminationMode mode,
-                                               const bool betweenReflectanceAndTransmittance) const
+                                               const bool betweenReflectanceAndTransmittance)
 {
     QMessageBox box(host_);
     box.setIcon(QMessageBox::Information);
@@ -1674,9 +1767,14 @@ bool hf::capture::CapturePanelController::confirmCaptureHoodPreparation(const Ca
     {
         box.setWindowTitle(QStringLiteral("Prepare transmittance scan"));
         box.setText(QStringLiteral("Reflectance scan finished."));
-        box.setInformativeText(
+        QString informativeText =
             QStringLiteral("Cover the reflectance light guide hood, open the transmittance light "
-                           "guide hood, then click Continue to start the transmittance scan."));
+                           "guide hood, then click Continue to start the transmittance scan.");
+        if (dualModeExposureSwitchEnabled_ && captureUsingTransmittanceExposure_)
+        {
+            informativeText += QStringLiteral("\n\n%1").arg(buildTransmittanceExposureChangeNotice());
+        }
+        box.setInformativeText(informativeText);
     }
     else if (mode == CaptureIlluminationMode::Reflectance)
     {
@@ -1915,6 +2013,12 @@ void hf::capture::CapturePanelController::onCaptureAbsoluteMoveComplete(const bo
 
     if (completedPhase == CaptureScanPhase::MoveToTempStopPosition)
     {
+        if (dualModeExposureSwitchEnabled_)
+        {
+            applyTransmittanceExposuresFromConfig();
+            captureUsingTransmittanceExposure_ = true;
+        }
+
         if (!confirmCaptureHoodPreparation(CaptureIlluminationMode::Transmittance, true))
         {
             failCaptureSequence(QStringLiteral("%1: cancelled by operator at hood preparation.")
@@ -2599,6 +2703,7 @@ void hf::capture::CapturePanelController::onCaptureCombinedRecordScanComplete()
 void hf::capture::CapturePanelController::failCaptureSequence(const QString &message)
 {
     host_->appendLog(message);
+    restoreReflectanceExposuresAfterCapture();
     stopRecorder();
 }
 
@@ -2640,6 +2745,7 @@ void hf::capture::CapturePanelController::completeCaptureModeSequence()
         return;
     }
 
+    restoreReflectanceExposuresAfterCapture();
     completeCaptureSequence();
 }
 
@@ -2649,6 +2755,7 @@ void hf::capture::CapturePanelController::completeCaptureSequence()
         captureScanTimer_->stop();
     captureRelativeScanTimerActiveToken_ = 0;
 
+    restoreReflectanceExposuresAfterCapture();
     resetCaptureSequenceState();
     capturePendingIlluminationModes_.clear();
     captureCurrentModeIndex_ = 0;
@@ -3769,6 +3876,8 @@ void hf::capture::CapturePanelController::stopRecorder()
     if (captureScanPhase_ == CaptureScanPhase::BlackReference)
         setSelectedCameraShutters(true);
 
+    restoreReflectanceExposuresAfterCapture();
+
     const bool wasRecord = captureRecorderMode_ == CaptureRecorderMode::Record;
     const bool wasPreview = captureRecorderMode_ == CaptureRecorderMode::Preview;
     captureRecorderMode_ = CaptureRecorderMode::Idle;
@@ -3981,3 +4090,123 @@ void hf::capture::CapturePanelController::updateCaptureCameraPositionRows()
     }
 }
 
+bool hf::capture::CapturePanelController::hasReflectanceAndTransmittanceCaptureModes() const
+{
+    bool hasReflectance = false;
+    bool hasTransmittance = false;
+    for (const CaptureIlluminationMode mode : capturePendingIlluminationModes_)
+    {
+        if (mode == CaptureIlluminationMode::Reflectance)
+            hasReflectance = true;
+        else if (mode == CaptureIlluminationMode::Transmittance)
+            hasTransmittance = true;
+    }
+    return hasReflectance && hasTransmittance;
+}
+
+void hf::capture::CapturePanelController::saveReflectanceExposuresForDualModeCapture()
+{
+    for (std::size_t cameraIndex = 0; cameraIndex < 2; ++cameraIndex)
+    {
+        LumoCameraUi &ui = cameraIndex == 0 ? host_->camera1Ui_ : host_->camera2Ui_;
+        savedReflectanceExposureMs_[cameraIndex] =
+            ui.exposureSpin != nullptr ? ui.exposureSpin->value() : 0.0;
+    }
+
+    host_->appendLog(QStringLiteral("%1: saved reflectance exposures \u2014 %2: %3 ms, %4: %5 ms")
+                        .arg(captureSequenceLogPrefix())
+                        .arg(host_->cameraPanel()->profileTabNameForUi(host_->camera1Ui_))
+                        .arg(savedReflectanceExposureMs_[0], 0, 'f', 2)
+                        .arg(host_->cameraPanel()->profileTabNameForUi(host_->camera2Ui_))
+                        .arg(savedReflectanceExposureMs_[1], 0, 'f', 2));
+}
+
+void hf::capture::CapturePanelController::applyCaptureExposureForCamera(const std::size_t cameraIndex,
+                                                                        const double exposureMs)
+{
+    LumoCameraUi &ui = cameraIndex == 0 ? host_->camera1Ui_ : host_->camera2Ui_;
+    if (ui.exposureSpin != nullptr)
+    {
+        QSignalBlocker blocker(ui.exposureSpin);
+        ui.exposureSpin->setValue(exposureMs);
+    }
+
+    if (host_->coordinator() == nullptr || !host_->isCameraSessionActive(ui.state))
+        return;
+
+    CameraSettings settings = host_->cameraPanel()->buildSettings(ui);
+    settings.exposureMs = exposureMs;
+    host_->coordinator()->applySettings(cameraIndex, settings);
+}
+
+void hf::capture::CapturePanelController::applyTransmittanceExposuresFromConfig()
+{
+    const hf::HardwareConfig &hw = hf::hardwareConfig();
+    std::vector<std::size_t> selectedCameras;
+    if (!selectedCaptureCameraIndices(selectedCameras))
+        return;
+
+    captureIlluminationExposureSwitchActive_ = true;
+
+    for (const std::size_t cameraIndex : selectedCameras)
+    {
+        const double exposureMs = hw.transmittanceExposureMs[cameraIndex];
+        applyCaptureExposureForCamera(cameraIndex, exposureMs);
+        host_->appendLog(QStringLiteral("%1: transmittance exposure \u2014 %2 set to %3 ms (from hyperfusion.cfg)")
+                            .arg(captureSequenceLogPrefix())
+                            .arg(host_->cameraPanel()->profileTabNameForUi(
+                                cameraIndex == 0 ? host_->camera1Ui_ : host_->camera2Ui_))
+                            .arg(exposureMs, 0, 'f', 2));
+    }
+}
+
+void hf::capture::CapturePanelController::restoreReflectanceExposuresAfterCapture()
+{
+    if (!captureUsingTransmittanceExposure_)
+    {
+        dualModeExposureSwitchEnabled_ = false;
+        captureIlluminationExposureSwitchActive_ = false;
+        return;
+    }
+
+    captureIlluminationExposureSwitchActive_ = true;
+    std::vector<std::size_t> selectedCameras;
+    if (selectedCaptureCameraIndices(selectedCameras))
+    {
+        for (const std::size_t cameraIndex : selectedCameras)
+        {
+            applyCaptureExposureForCamera(cameraIndex, savedReflectanceExposureMs_[cameraIndex]);
+            host_->appendLog(QStringLiteral("%1: restored reflectance exposure \u2014 %2 set to %3 ms")
+                                .arg(captureSequenceLogPrefix())
+                                .arg(host_->cameraPanel()->profileTabNameForUi(
+                                    cameraIndex == 0 ? host_->camera1Ui_ : host_->camera2Ui_))
+                                .arg(savedReflectanceExposureMs_[cameraIndex], 0, 'f', 2));
+        }
+    }
+
+    captureUsingTransmittanceExposure_ = false;
+    dualModeExposureSwitchEnabled_ = false;
+    captureIlluminationExposureSwitchActive_ = false;
+}
+
+QString hf::capture::CapturePanelController::buildTransmittanceExposureChangeNotice() const
+{
+    const hf::HardwareConfig &hw = hf::hardwareConfig();
+    QStringList lines;
+    lines << QStringLiteral("Camera exposure updated for transmittance (from hyperfusion.cfg):");
+
+    std::vector<std::size_t> selectedCameras;
+    if (!selectedCaptureCameraIndices(selectedCameras))
+        return lines.join(QStringLiteral("\n"));
+
+    for (const std::size_t cameraIndex : selectedCameras)
+    {
+        const LumoCameraUi &ui = cameraIndex == 0 ? host_->camera1Ui_ : host_->camera2Ui_;
+        lines << QStringLiteral("  %1: %2 ms \u2192 %3 ms")
+                     .arg(host_->cameraPanel()->profileTabNameForUi(ui))
+                     .arg(savedReflectanceExposureMs_[cameraIndex], 0, 'f', 2)
+                     .arg(hw.transmittanceExposureMs[cameraIndex], 0, 'f', 2);
+    }
+
+    return lines.join(QStringLiteral("\n"));
+}

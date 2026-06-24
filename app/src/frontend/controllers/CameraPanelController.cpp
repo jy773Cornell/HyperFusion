@@ -650,6 +650,9 @@ void CameraPanelController::onSettingsApplied(LumoCameraUi &ui, const CameraSett
     if (dualSyncCompleted)
         return;
 
+    if (host_->capturePanel() != nullptr && host_->capturePanel()->shouldSuppressCameraTimingDialogs())
+        return;
+
     if (!frameRateDiffers && !exposureDiffers)
         return;
 

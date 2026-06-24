@@ -23,6 +23,8 @@ struct HardwareConfig
     int blackReferenceFrames = 100;
     /// Spatial scale along the scan axis (mm per detector pixel). Index 0 = FX10e, 1 = SWIR3.
     double spatialMmPerPixel[2] = {0.205, 0.4};
+    /// Exposure (ms) for transmittance scans when both illumination modes are selected. Index 0 = FX10e, 1 = SWIR3.
+    double transmittanceExposureMs[2] = {12.0, 8.0};
     int lighthouseIdleIntensityPercent = 0;
     int lighthouseReflectancePercent = 100;
     int lighthouseTransmittancePercent = 40;

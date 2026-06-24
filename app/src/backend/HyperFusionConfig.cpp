@@ -430,6 +430,25 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
             else if (parseSpatialMmPerPixelKey(key, value, hasNumber, numericValue, config, warnings))
             {
             }
+            else if (key == QStringLiteral("fx10e_transmittance_exp"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid fx10e_transmittance_exp: %1").arg(value));
+                else if (numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral("fx10e_transmittance_exp must be > 0"));
+                else
+                    config.transmittanceExposureMs[0] = numericValue;
+            }
+            else if (key == QStringLiteral("swir_transmittance_exp")
+                     || key == QStringLiteral("swir3_transmittance_exp"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid swir_transmittance_exp: %1").arg(value));
+                else if (numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral("swir_transmittance_exp must be > 0"));
+                else
+                    config.transmittanceExposureMs[1] = numericValue;
+            }
             else
             {
                 warnings.push_back(QStringLiteral("Unknown key in [scanning_settings]: %1").arg(key));
@@ -728,6 +747,9 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "# Spatial scale along the scan axis (mm per detector pixel at spatial binning 1).\n"
         << "fx10e_spatial_mm_per_pixel = 0.205\n"
         << "swir3_spatial_mm_per_pixel = 0.4\n"
+        << "# Exposure (ms) applied during transmittance when both reflectance and transmittance are selected.\n"
+        << "fx10e_transmittance_exp = 12\n"
+        << "swir_transmittance_exp = 8\n"
         << "\n"
         << "[lighthouse]\n"
         << "idle_intensity_percent = 0\n"
