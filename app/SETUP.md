@@ -1,6 +1,6 @@
 # HyperFusion — setup guide
 
-HyperFusion is a Windows desktop app for multimodal hyperspectral imaging with Specim FX10e + SWIR3 cameras, Zaber scan stage, and MCC lighthouse control. This guide covers **developer setup** on a build machine.
+This guide covers **developer setup** on a build machine.
 
 ---
 
@@ -27,7 +27,7 @@ Install on the machine where you build HyperFusion
 | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Visual Studio 2022 or 2026** | Workload: *Desktop development with C++* (MSVC **x64** + Windows SDK). Installer: `docs/VisualStudioSetup.exe`                                                                                                        |
 | **CMake**                      | On PATH (VS component or [cmake.org](https://cmake.org)). Version 3.16+.                                                                                                                                              |
-| **Qt 6.11.1**                  | Via Qt Maintenance Tool[https://doc.qt.io/qt-6/qt-online-installation.htm](https://doc.qt.io/qt-6/qt-online-installation.htm)l → **MSVC 2022 64-bit** kit.                                                            |
+| **Qt 6.11.1**                  | [Qt Online Installer](https://www.qt.io/download-qt-installer): Qt **6.11.1**, **MSVC 2022 64-bit**, **Qt Widgets**.                                                                                                  |
 | **VC++ Redistributable (x64)** | Required on **every** PC that runs `app.exe`, including deploy targets. Install [Microsoft Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist) (VS 2015–2022, x64). |
 
 
@@ -76,8 +76,7 @@ At this point you can operate the **full-spectrum module** (FX10e + SWIR3) for s
 
 ### 3.1 Zaber Motion Library (scan stage)
 
-- Install **Zaber Motion Library (ZML)** → default: `C:\Program Files\Zaber Motion Library`  
-(Use the ZML installer, not only the C++ headers package in `docs/Zaber/` unless you are developing the adapter.)
+- Install **Zaber Motion Library (ZML)**
 - One-time stage setup: use **Zaber Launcher** (LC40B profile, motor orientation). HyperFusion re-applies travel limits and lockstep on each connect.
 - Docs: `docs/Zaber/documentation_index.md`
 
@@ -85,7 +84,6 @@ At this point you can operate the **full-spectrum module** (FX10e + SWIR3) for s
 
 - Hardware: **Measurement Computing USB-1208FS-Plus** (or compatible 1208 FS Plus family).
 - Install **MCC UL** from Measurement Computing (provides `cbw64.dll`).
-- Default path: `C:\Program Files (x86)\Measurement Computing\DAQ`
 - Run **InstaCal** if the lighthouse board is new or not detected.
 
 ---
@@ -104,13 +102,14 @@ At this point you can operate the **full-spectrum module** (FX10e + SWIR3) for s
 Copied next to `app.exe` on build. **Reloaded on every app start.** Edit for each bench:
 
 
-| Section                   | Purpose                                                                                                        |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `[sample_stage_position]` | White/bright/sample scan positions (mm), dual-camera offset                                                    |
-| `[scanning_settings]`     | Scan speed, acceleration, ref frame counts, `fx10e_spatial_mm_per_pixel`, `swir3_spatial_mm_per_pixel`, `fx10e_transmittance_exp`, `swir_transmittance_exp` (dual-mode capture) |
-| `[lighthouse]`            | Idle / reflectance / transmittance intensity (%)                                                               |
-| `[preprocessing]`         | FFC and SWIR false-color wavelength ranges                                                                     |
-| `[segmentation]`          | GSAM2 sidecar (optional)                                                                                       |
+| Section                   | Purpose                                                                                                             |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `[camera_calibration]`    | Spatial scale, spectral metadata (record-only FWHM keys), SWIR3 AutoNUC and adaptive BPR                            |
+| `[sample_stage_position]` | White/bright/sample scan positions (mm), dual-camera offset                                                         |
+| `[scanning_settings]`     | Scan speed, acceleration, ref frame counts, `fx10e_transmittance_exp`, `swir_transmittance_exp` (dual-mode capture) |
+| `[lighthouse]`            | Idle / reflectance / transmittance intensity (%)                                                                    |
+| `[preprocessing]`         | FFC and SWIR false-color export settings                                                                            |
+| `[segmentation]`          | GSAM2 sidecar (optional)                                                                                            |
 
 
 Camera exposure, frame rate, binning, and RGB band picks are stored in **app settings** (QSettings), not in this file.
@@ -146,69 +145,3 @@ The script configures CMake, builds **Release**, runs `windeployqt`, and copies 
 
 
 Use **Release** builds for lab deployment; Debug is for development only.
-
----
-
-## 7. Run the application
-
-### On the build machine
-
-After a normal build, run:
-
-```text
-app\build\Release\app.exe
-```
-
-Close any running `app.exe` before rebuilding (otherwise the linker may fail with LNK1104).
-
-### On another lab PC (portable deploy)
-
-1. Build with `.\build_app.ps1 -Config Release -NoRun`
-2. Copy or zip the entire folder `**app\build\Release\**` (~100 MB)
-3. Unzip on the target PC (e.g. `C:\HyperFusion\`) and run `**app.exe**`
-4. On the target PC, still install: **VC++ Redistributable x64**, **Lumo license**, **NI drivers** (SWIR3), **Pleora/eBUS** (FX10e) as needed
-5. Edit `**hyperfusion.cfg`** beside `app.exe` for that bench
-
-Bundled with the app folder:
-
-- `hyperfusion.cfg` — hardware parameters  
-- `calibration/fx10e/` and `calibration/swir/` — `.scp` calibration packs  
-- `external/NI/` — NI camera ICD files (including `Specim_SWIR3.icd`)  
-- Qt, Lumo, Zaber, and MCC runtime DLLs (see build output listing)
-
-Optional: remove `tbb_*debug*.dll` from the zip before deploy (not needed at runtime).
-
----
-
-## 8. First-run checklist
-
-- [ ] VC++ Redistributable x64 installed  
-- [ ] Lumo license active  
-- [ ] FX10e: Pleora/eBUS OK; SWIR3: NI MAX snap/grab OK, then **close MAX**  
-- [ ] Calibration pack selected in Camera settings **before connect** (matches sensor serial)  
-- [ ] `hyperfusion.cfg` matches this bench (stage positions, spatial mm/px, scan speed)  
-- [ ] Stage and lighthouse connected if using Capture tab scanning  
-- [ ] SWIR cooled and stable before long recordings  
-
----
-
-## 9. Troubleshooting
-
-
-| Symptom                            | Things to check                                                                                                  |
-| ---------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Build: Lumo / SpecSensor not found | Install SDK; set `LUMO_SDK_ROOT`                                                                                 |
-| Build: LNK1104 on `app.exe`        | Close running HyperFusion                                                                                        |
-| SWIR3 connect fails                | NI MAX grab stopped; FX10e disconnected; ICD at `external/NI/Specim_SWIR3.icd`                                   |
-| Vertical stripes on SWIR           | Correct `.scp` loaded; exposure matches cal; BPR map current                                                     |
-| Dual-camera sync wrong rates       | `fx10e_spatial_mm_per_pixel` / `swir3_spatial_mm_per_pixel` in `[scanning_settings]`; restart app after cfg edit |
-| Stage does not move                | ZML installed; correct COM port in Stage tab                                                                     |
-| Lighthouse not found               | MCC UL + InstaCal; USB-1208FS-Plus connected                                                                     |
-| GSAM fails                         | WSL running; `resources/sam2/envsetup.md`; `[segmentation]` in cfg                                               |
-
-
----
-
-## Source layout
-
-See `README.md` for repository structure (`adapters` / `backend` / `frontend`).

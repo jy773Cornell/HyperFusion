@@ -19,7 +19,7 @@ struct CaptureWriterStreamConfig
     CameraBackendId source = CameraBackendId::Camera1;
     QString streamName;
     CaptureIlluminationMode illuminationMode = CaptureIlluminationMode::Reflectance;
-    /// Relative path under the dataset root, e.g. "reflectance/fx10e".
+    /// Relative path under the dataset root, e.g. "reflectance/fx10e" or "recording/fx10e".
     QString relativeRoot;
     CameraSettings settings;
     std::vector<SpectralBand> spectralBands;

@@ -3473,8 +3473,9 @@ QString hf::capture::CapturePanelController::captureCameraFolderName(const LumoC
 QString hf::capture::CapturePanelController::captureStreamRelativeRoot(const CaptureIlluminationMode mode,
                                               const LumoCameraUi &ui) const
 {
-    return captureIlluminationFolderName(mode) + QLatin1Char('/')
-           + captureCameraFolderName(ui);
+    const QString modeFolder = useStageForCapture() ? captureIlluminationFolderName(mode)
+                                                    : QStringLiteral("recording");
+    return modeFolder + QLatin1Char('/') + captureCameraFolderName(ui);
 }
 
 bool hf::capture::CapturePanelController::resolveCaptureRecordingIlluminationMode(CaptureIlluminationMode &mode,

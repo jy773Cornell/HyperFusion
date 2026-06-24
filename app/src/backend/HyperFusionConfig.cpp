@@ -304,6 +304,168 @@ bool parseSpatialMmPerPixelKey(const QString &key,
     return false;
 }
 
+bool parseSwir3PreprocessingKey(const QString &key,
+                                const QString &value,
+                                const bool hasNumber,
+                                const double numericValue,
+                                hf::HardwareConfig::PreprocessingConfig &preprocess,
+                                QStringList &warnings)
+{
+    if (key == QStringLiteral("swir3_auto_nuc"))
+    {
+        if (value == QStringLiteral("true") || value == QStringLiteral("1")
+            || value == QStringLiteral("yes") || value == QStringLiteral("on"))
+            preprocess.swir3AutoNuc = true;
+        else if (value == QStringLiteral("false") || value == QStringLiteral("0")
+                 || value == QStringLiteral("no") || value == QStringLiteral("off"))
+            preprocess.swir3AutoNuc = false;
+        else
+            warnings.push_back(QStringLiteral("Invalid swir3_auto_nuc (use true/false): %1").arg(value));
+        return true;
+    }
+
+    if (key == QStringLiteral("swir3_adaptive_bpr"))
+    {
+        if (value == QStringLiteral("true") || value == QStringLiteral("1")
+            || value == QStringLiteral("yes") || value == QStringLiteral("on"))
+            preprocess.swir3AdaptiveBpr = true;
+        else if (value == QStringLiteral("false") || value == QStringLiteral("0")
+                 || value == QStringLiteral("no") || value == QStringLiteral("off"))
+            preprocess.swir3AdaptiveBpr = false;
+        else
+            warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr (use true/false): %1").arg(value));
+        return true;
+    }
+
+    if (key == QStringLiteral("swir3_adaptive_bpr_gain_min"))
+    {
+        if (!hasNumber)
+            warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_gain_min: %1").arg(value));
+        else
+            preprocess.swir3AdaptiveBprGainMin = numericValue;
+        return true;
+    }
+
+    if (key == QStringLiteral("swir3_adaptive_bpr_gain_max"))
+    {
+        if (!hasNumber)
+            warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_gain_max: %1").arg(value));
+        else
+            preprocess.swir3AdaptiveBprGainMax = numericValue;
+        return true;
+    }
+
+    if (key == QStringLiteral("swir3_adaptive_bpr_min_neighbor_dn"))
+    {
+        if (!hasNumber)
+            warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_min_neighbor_dn: %1").arg(value));
+        else
+            preprocess.swir3AdaptiveBprMinNeighborDn = numericValue;
+        return true;
+    }
+
+    if (key == QStringLiteral("swir3_adaptive_bpr_min_hits"))
+    {
+        if (!hasNumber)
+            warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_min_hits: %1").arg(value));
+        else
+            preprocess.swir3AdaptiveBprMinHits = static_cast<int>(numericValue);
+        return true;
+    }
+
+    if (key == QStringLiteral("swir3_adaptive_bpr_max_pixels"))
+    {
+        if (!hasNumber)
+            warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_max_pixels: %1").arg(value));
+        else
+            preprocess.swir3AdaptiveBprMaxPixels = static_cast<int>(numericValue);
+        return true;
+    }
+
+    return false;
+}
+
+bool parseCameraCalibrationRecordKey(const QString &key,
+                                     const QString &value,
+                                     const bool hasNumber,
+                                     const double numericValue,
+                                     hf::HardwareConfig::CameraCalibrationConfig &calib,
+                                     QStringList &warnings)
+{
+    const auto assignPositive = [&](const QString &label, double &target) {
+        if (!hasNumber)
+            warnings.push_back(QStringLiteral("Invalid %1: %2").arg(label, value));
+        else if (numericValue <= 0.0)
+            warnings.push_back(QStringLiteral("%1 must be > 0").arg(label));
+        else
+            target = numericValue;
+    };
+
+    if (key == QStringLiteral("fx10e_spatial_fwhm_mm"))
+    {
+        assignPositive(QStringLiteral("fx10e_spatial_fwhm_mm"), calib.spatialFwhmMm[0]);
+        return true;
+    }
+
+    if (key == QStringLiteral("swir3_spatial_fwhm_mm"))
+    {
+        assignPositive(QStringLiteral("swir3_spatial_fwhm_mm"), calib.spatialFwhmMm[1]);
+        return true;
+    }
+
+    if (key == QStringLiteral("fx10e_spectral_nm_per_pixel"))
+    {
+        assignPositive(QStringLiteral("fx10e_spectral_nm_per_pixel"), calib.spectralNmPerPixel[0]);
+        return true;
+    }
+
+    if (key == QStringLiteral("swir3_spectral_nm_per_pixel"))
+    {
+        assignPositive(QStringLiteral("swir3_spectral_nm_per_pixel"), calib.spectralNmPerPixel[1]);
+        return true;
+    }
+
+    if (key == QStringLiteral("fx10e_spectral_fwhm_nm"))
+    {
+        assignPositive(QStringLiteral("fx10e_spectral_fwhm_nm"), calib.spectralFwhmNm[0]);
+        return true;
+    }
+
+    if (key == QStringLiteral("swir3_spectral_fwhm_nm"))
+    {
+        assignPositive(QStringLiteral("swir3_spectral_fwhm_nm"), calib.spectralFwhmNm[1]);
+        return true;
+    }
+
+    return false;
+}
+
+bool parseCameraCalibrationSectionKey(const QString &key,
+                                    const QString &value,
+                                    const bool hasNumber,
+                                    const double numericValue,
+                                    hf::HardwareConfig &config,
+                                    QStringList &warnings)
+{
+    if (parseSpatialMmPerPixelKey(key, value, hasNumber, numericValue, config, warnings))
+        return true;
+
+    if (parseSwir3PreprocessingKey(key, value, hasNumber, numericValue, config.preprocessing, warnings))
+        return true;
+
+    if (parseCameraCalibrationRecordKey(key, value, hasNumber, numericValue, config.cameraCalibration, warnings))
+        return true;
+
+    return false;
+}
+
+bool isCameraCalibrationSection(const QString &section)
+{
+    return section == QStringLiteral("camera_calibration")
+           || section == QStringLiteral("camera_calibraiton")
+           || section == QStringLiteral("calibration");
+}
+
 bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStringList &warnings)
 {
     QString section;
@@ -471,15 +633,10 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
             warnings.push_back(
                 QStringLiteral("[swir3] section is deprecated \u2014 SWIR3 always uses SDK serial autoconnect"));
         }
-        else if (section == QStringLiteral("calibration"))
+        else if (isCameraCalibrationSection(section))
         {
-            if (parseSpatialMmPerPixelKey(key, value, hasNumber, numericValue, config, warnings))
-            {
-            }
-            else
-            {
-                warnings.push_back(QStringLiteral("Unknown key in [calibration]: %1").arg(key));
-            }
+            if (!parseCameraCalibrationSectionKey(key, value, hasNumber, numericValue, config, warnings))
+                warnings.push_back(QStringLiteral("Unknown key in [%1]: %2").arg(section, key));
         }
         else if (section == QStringLiteral("lighthouse"))
         {
@@ -623,62 +780,8 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 else
                     config.preprocessing.swirFalseColorBlue.maxNm = numericValue;
             }
-            else if (key == QStringLiteral("swir3_auto_nuc"))
+            else if (parseSwir3PreprocessingKey(key, value, hasNumber, numericValue, config.preprocessing, warnings))
             {
-                if (value == QStringLiteral("true") || value == QStringLiteral("1")
-                    || value == QStringLiteral("yes") || value == QStringLiteral("on"))
-                    config.preprocessing.swir3AutoNuc = true;
-                else if (value == QStringLiteral("false") || value == QStringLiteral("0")
-                         || value == QStringLiteral("no") || value == QStringLiteral("off"))
-                    config.preprocessing.swir3AutoNuc = false;
-                else
-                    warnings.push_back(QStringLiteral("Invalid swir3_auto_nuc (use true/false): %1").arg(value));
-            }
-            else if (key == QStringLiteral("swir3_adaptive_bpr"))
-            {
-                if (value == QStringLiteral("true") || value == QStringLiteral("1")
-                    || value == QStringLiteral("yes") || value == QStringLiteral("on"))
-                    config.preprocessing.swir3AdaptiveBpr = true;
-                else if (value == QStringLiteral("false") || value == QStringLiteral("0")
-                         || value == QStringLiteral("no") || value == QStringLiteral("off"))
-                    config.preprocessing.swir3AdaptiveBpr = false;
-                else
-                    warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr (use true/false): %1").arg(value));
-            }
-            else if (key == QStringLiteral("swir3_adaptive_bpr_gain_min"))
-            {
-                if (!hasNumber)
-                    warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_gain_min: %1").arg(value));
-                else
-                    config.preprocessing.swir3AdaptiveBprGainMin = numericValue;
-            }
-            else if (key == QStringLiteral("swir3_adaptive_bpr_gain_max"))
-            {
-                if (!hasNumber)
-                    warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_gain_max: %1").arg(value));
-                else
-                    config.preprocessing.swir3AdaptiveBprGainMax = numericValue;
-            }
-            else if (key == QStringLiteral("swir3_adaptive_bpr_min_neighbor_dn"))
-            {
-                if (!hasNumber)
-                    warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_min_neighbor_dn: %1").arg(value));
-                else
-                    config.preprocessing.swir3AdaptiveBprMinNeighborDn = numericValue;
-            }
-            else if (key == QStringLiteral("swir3_adaptive_bpr_min_hits"))
-            {
-                if (!hasNumber)
-                    warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_min_hits: %1").arg(value));
-                else
-                    config.preprocessing.swir3AdaptiveBprMinHits = static_cast<int>(numericValue);
-            }
-            else if (key == QStringLiteral("swir3_adaptive_bpr_max_pixels"))
-            {
-                if (!hasNumber)
-                    warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_max_pixels: %1").arg(value));
-                else
-                    config.preprocessing.swir3AdaptiveBprMaxPixels = static_cast<int>(numericValue);
             }
             else
             {
@@ -785,6 +888,25 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "# Edit this file manually. Values are reloaded on every app start.\n"
         << "# Distances are in millimetres unless noted.\n"
         << "\n"
+        << "[camera_calibration]\n"
+        << "fx10e_spatial_mm_per_pixel = 0.205\n"
+        << "swir3_spatial_mm_per_pixel = 0.4\n"
+        << "fx10e_spatial_fwhm_mm = 0.982\n"
+        << "swir3_spatial_fwhm_mm = 1.1\n"
+        << "fx10e_spectral_nm_per_pixel = 1.35\n"
+        << "swir3_spectral_nm_per_pixel = 5.6\n"
+        << "fx10e_spectral_fwhm_nm = 5.5\n"
+        << "swir3_spectral_fwhm_nm = 12\n"
+        << "# SWIR3: enable Camera.AutoNUC when timing is applied.\n"
+        << "swir3_auto_nuc = true\n"
+        << "# SWIR3: stream-adaptive software BPR (turns off SDK Camera.BPR when true).\n"
+        << "swir3_adaptive_bpr = false\n"
+        << "swir3_adaptive_bpr_gain_min = 0.3\n"
+        << "swir3_adaptive_bpr_gain_max = 1.5\n"
+        << "swir3_adaptive_bpr_min_neighbor_dn = 64\n"
+        << "swir3_adaptive_bpr_min_hits = 3\n"
+        << "swir3_adaptive_bpr_max_pixels = 4096\n"
+        << "\n"
         << "[sample_stage_position]\n"
         << "distance_dual_camera_mm = 190\n"
         << "white_ref_fx10e_mm = 735\n"
@@ -801,10 +923,7 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "white_reference_frames = 100\n"
         << "black_reference_frames = 100\n"
         << "sample_window_max_length_mm = 500\n"
-        << "# Spatial scale along the scan axis (mm per detector pixel at spatial binning 1).\n"
-        << "fx10e_spatial_mm_per_pixel = 0.205\n"
-        << "swir3_spatial_mm_per_pixel = 0.4\n"
-        << "# Exposure (ms) applied during transmittance when both reflectance and transmittance are selected.\n"
+        << "# Exposure (ms) for transmittance scan when both reflectance and transmittance are recorded.\n"
         << "fx10e_transmittance_exp = 12\n"
         << "swir_transmittance_exp = 8\n"
         << "\n"
@@ -830,15 +949,6 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "swir_false_color_green_nm_max = 1300\n"
         << "swir_false_color_blue_nm_min = 950\n"
         << "swir_false_color_blue_nm_max = 1050\n"
-        << "# SWIR3: Camera.AutoNUC after connect/apply (SDK NUC table for current exposure).\n"
-        << "swir3_auto_nuc = true\n"
-        << "# SWIR3: stream-adaptive software BPR (disables SDK Camera.BPR when true).\n"
-        << "swir3_adaptive_bpr = false\n"
-        << "swir3_adaptive_bpr_gain_min = 0.3\n"
-        << "swir3_adaptive_bpr_gain_max = 1.5\n"
-        << "swir3_adaptive_bpr_min_neighbor_dn = 64\n"
-        << "swir3_adaptive_bpr_min_hits = 3\n"
-        << "swir3_adaptive_bpr_max_pixels = 4096\n"
         << "\n"
         << "[segmentation]\n"
         << "# GSAM2 sidecar (WSL). sam2_repo_linux empty = auto from resources/sam2.\n"

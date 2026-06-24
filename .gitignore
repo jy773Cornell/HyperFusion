@@ -87,6 +87,10 @@ resources/sam2/.cache/
 # --- HyperFusion local runtime / capture data ---
 /processing/
 
+# Large source media (README uses compressed copy)
+assets/HyperFusionDemo.mp4
+assets/HyperFusion Demo.mp4
+
 # Logs / temp
 *.log
 *.tmp

@@ -30,6 +30,18 @@ struct HardwareConfig
     int lighthouseTransmittancePercent = 40;
     double stageMotionAccelerationMmPerSec2 = 30.0;
 
+    struct CameraCalibrationConfig
+    {
+        /// Spatial resolution FWHM along scan axis (mm). Index 0 = FX10e, 1 = SWIR3. Record only (not applied yet).
+        double spatialFwhmMm[2] = {0.982, 1.1};
+        /// Spectral sampling (nm per band at binning 1). Record only (not applied yet).
+        double spectralNmPerPixel[2] = {1.35, 5.6};
+        /// Spectral band FWHM (nm). Record only (not applied yet).
+        double spectralFwhmNm[2] = {5.5, 12.0};
+    };
+
+    CameraCalibrationConfig cameraCalibration;
+
     struct WavelengthRangeNm
     {
         double minNm = 0.0;
