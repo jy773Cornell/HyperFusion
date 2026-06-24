@@ -78,11 +78,13 @@ CMakeLists.txt.user*
 **/.cache/huggingface/
 **/.cache/torch/
 
-# SAM2 / GSAM2 model weights (large; see resources/sam2/envsetup.md)
-resources/sam2/checkpoints/*.pt
-resources/sam2/checkpoints/*.pth
-resources/sam2/checkpoints/*.ckpt
-resources/sam2/.cache/
+# SAM2 / GSAM2 model weights (large; see resources/gsam2/envsetup.md)
+resources/gsam2/checkpoints/*.pt
+resources/gsam2/checkpoints/*.pth
+resources/gsam2/checkpoints/*.ckpt
+resources/gsam2/.cache/
+resources/gsam2/venv/
+resources/sam2/
 
 # --- HyperFusion local runtime / capture data ---
 /processing/

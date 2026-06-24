@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create resources/sam2/venv for the HyperFusion GSAM2 WSL sidecar.
+# Create resources/gsam2/venv for the HyperFusion GSAM2 WSL sidecar.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

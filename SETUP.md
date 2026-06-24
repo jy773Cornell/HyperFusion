@@ -11,7 +11,7 @@ This guide covers **developer setup** on a build machine.
 | -------------------- | ---------------------------------------- | --------------------------------------------- |
 | **1 — Cameras only** | Lumo SDK, Pleora eBUS, NI Vision (SWIR3) | Connect FX10e and/or SWIR3; stream and record |
 | **2 — Full bench**   | + Zaber Motion Library, MCC UL           | Stage scanning, lighthouse, capture workflows |
-| **3 — Optional**     | WSL + GSAM (see `resources/sam2/`)       | Post-capture segmentation                     |
+| **3 — Optional**     | WSL + GSAM (see `resources/gsam2/`)       | Post-capture segmentation                     |
 
 
 Install **Stage 1** first and verify cameras in Lumo/NI MAX before adding stage and light hardware.
@@ -90,8 +90,8 @@ At this point you can operate the **full-spectrum module** (FX10e + SWIR3) for s
 
 ## 4. Optional — GSAM segmentation
 
-- Requires **WSL2 + Ubuntu** and the Python env under `resources/sam2/`.
-- See `resources/sam2/envsetup.md`.
+- Requires **WSL2 + Ubuntu** and the Python env under `resources/gsam2/`.
+- See `resources/gsam2/envsetup.md`.
 - Tune `[segmentation]` in `hyperfusion.cfg` (WSL distro, port, model paths).
 - Not required for camera streaming or capture.
 

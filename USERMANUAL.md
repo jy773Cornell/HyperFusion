@@ -299,7 +299,7 @@ Idle, reflectance, and transmittance intensity percentages.
 
 ### `[segmentation]` (optional GSAM)
 
-WSL distro, port, and model paths for the GSAM2 sidecar. See `resources/sam2/envsetup.md`.
+WSL distro, port, and model paths for the GSAM2 sidecar. See `resources/gsam2/envsetup.md`.
 
 ---
 
@@ -341,7 +341,7 @@ Connect log shows `baseline=`, `adaptive=`, and `active=` counts while streaming
 
 Post-capture object segmentation via a **WSL Python server** (similar pattern to a sidecar service).
 
-1. Set up WSL per `resources/sam2/envsetup.md`.
+1. Set up WSL per `resources/gsam2/envsetup.md`.
 2. Configure `[segmentation]` in `hyperfusion.cfg`.
 3. HyperFusion can auto-start the server on launch when `warmup_on_start = true`.
 

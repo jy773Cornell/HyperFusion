@@ -1057,7 +1057,7 @@ void hf::capture::CapturePanelController::updateRecorderControls()
         {
             host_->captureRunGsamCheck_->setToolTip(
                 tr("Requires a connected GSAM2 server. The app tries to start the server automatically "
-                   "at launch when WSL and resources/sam2 are available."));
+                   "at launch when WSL and resources/gsam2 are available."));
         }
         else
         {

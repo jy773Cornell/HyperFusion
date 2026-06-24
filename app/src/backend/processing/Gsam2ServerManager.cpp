@@ -145,7 +145,7 @@ void Gsam2ServerManager::startServer()
         if (silentMode_)
             markUnavailable();
         else
-            setState(State::Failed, QStringLiteral("Could not locate resources/sam2 for WSL."));
+            setState(State::Failed, QStringLiteral("Could not locate resources/gsam2 for WSL."));
         return;
     }
 

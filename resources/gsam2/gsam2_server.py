@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 ROOT = Path(__file__).resolve().parent
-# Package layout: resources/sam2/ is the `sam2` Python package.
+# Package layout: resources/gsam2/ is the `sam2` Python package.
 sys.path.insert(0, str(ROOT.parent))
 
 import cv2  # noqa: E402

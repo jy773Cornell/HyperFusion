@@ -951,7 +951,7 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "swir_false_color_blue_nm_max = 1050\n"
         << "\n"
         << "[segmentation]\n"
-        << "# GSAM2 sidecar (WSL). sam2_repo_linux empty = auto from resources/sam2.\n"
+        << "# GSAM2 sidecar (WSL). sam2_repo_linux empty = auto from resources/gsam2.\n"
         << "wsl_distro = Ubuntu\n"
         << "wsl_bash_command = source ./venv/bin/activate\n"
         << "sam2_repo_linux = \n"

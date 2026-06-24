@@ -19,10 +19,10 @@ Optional: CUDA toolkit (`nvcc`) only if you build SAM2 CUDA extensions. HyperFus
 
 ## One-time setup
 
-From **WSL**, in this directory (`resources/sam2`):
+From **WSL**, in this directory (`resources/gsam2`):
 
 ```bash
-cd /mnt/d/Pototypy/HyperFusion/resources/sam2   # adjust drive/path if needed
+cd /mnt/d/Pototypy/HyperFusion/resources/gsam2   # adjust drive/path if needed
 chmod +x install_venv.sh
 ./install_venv.sh
 ```
@@ -57,7 +57,7 @@ In `app/hyperfusion.cfg` → `[segmentation]`:
 ```ini
 wsl_distro = Ubuntu
 wsl_bash_command = source ./venv/bin/activate
-sam2_repo_linux =                          ; empty = auto (/mnt/d/.../resources/sam2)
+sam2_repo_linux =                          ; empty = auto (/mnt/d/.../resources/gsam2)
 server_port = 8765
 ```
 
@@ -66,7 +66,7 @@ The app runs: `cd <sam2_repo_linux> && source ./venv/bin/activate && python gsam
 **Start the server** from the Capture tab → Preprocessing → **Start GSAM server**, or test manually:
 
 ```bash
-cd /mnt/d/Pototypy/HyperFusion/resources/sam2
+cd /mnt/d/Pototypy/HyperFusion/resources/gsam2
 source ./venv/bin/activate
 export PYTHONPATH="/mnt/d/Pototypy/HyperFusion/resources:$PYTHONPATH"
 python gsam2_server.py --host 0.0.0.0 --port 8765 --warmup
@@ -84,7 +84,7 @@ curl http://127.0.0.1:8765/health
 
 | Windows | WSL |
 |---------|-----|
-| `D:\Pototypy\HyperFusion\resources\sam2` | `/mnt/d/Pototypy/HyperFusion/resources/sam2` |
+| `D:\Pototypy\HyperFusion\resources\gsam2` | `/mnt/d/Pototypy/HyperFusion/resources/gsam2` |
 | Scan output `D:\data\capture\...` | `/mnt/d/data/capture/...` |
 
 - **Code + venv** can live on `/mnt/d/...` (same git tree as the app).
