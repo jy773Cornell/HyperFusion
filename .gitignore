@@ -89,11 +89,6 @@ resources/sam2/
 # --- HyperFusion local runtime / capture data ---
 /processing/
 
-# Large full-resolution demo (keep local only; README uses HyperFusionDemo-readme.mp4)
-assets/HyperFusionDemo.mp4
-assets/HyperFusion Demo.mp4
-!assets/HyperFusionDemo-readme.mp4
-
 # Logs / temp
 *.log
 *.tmp
