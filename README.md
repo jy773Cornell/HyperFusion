@@ -11,7 +11,7 @@ Designed for research and high-throughput phenotyping, HyperFusion integrates li
 </p>
 
 <p align="center">
-  <img src="assets/HyperFusion.jpg" alt="HyperFusion system" width="650"/>
+  <img src="assets/HyperFusion.jpg" alt="HyperFusion system" width="500"/>
 </p>
 
 
