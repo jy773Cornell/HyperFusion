@@ -49,6 +49,16 @@ QString sampleCaptureBaseName(const QString &datasetName, const CaptureIlluminat
     return QStringLiteral("%1_%2").arg(datasetName, illuminationModeLabel(mode));
 }
 
+QString captureMetadataDir(const QString &streamRoot)
+{
+    return QDir(streamRoot).filePath(QStringLiteral("capture/metadata"));
+}
+
+QString captureMetadataRelativePrefix()
+{
+    return QStringLiteral("capture/metadata/");
+}
+
 QString referenceCaptureBaseName(const QString &prefix,
                                  const QString &datasetName,
                                  const CaptureIlluminationMode mode)
@@ -246,7 +256,7 @@ bool LumoDatasetWriter::begin(const CaptureWriterSessionConfig &config, QString 
         state.summary.baseName = state.baseName;
 
         if (!root.mkpath(QDir(state.streamRoot).filePath(QStringLiteral("capture")))
-            || !root.mkpath(QDir(state.streamRoot).filePath(QStringLiteral("metadata"))))
+            || !root.mkpath(captureMetadataDir(state.streamRoot)))
         {
             if (errorMessage != nullptr)
                 *errorMessage = QStringLiteral("Could not create capture directories under %1.")
@@ -267,7 +277,7 @@ bool LumoDatasetWriter::begin(const CaptureWriterSessionConfig &config, QString 
         state.summary.hdrPath =
             QDir(state.streamRoot).filePath(QStringLiteral("capture/%1.hdr").arg(state.baseName));
         state.summary.logPath =
-            QDir(state.streamRoot).filePath(QStringLiteral("metadata/%1.log").arg(state.baseName));
+            QDir(captureMetadataDir(state.streamRoot)).filePath(state.baseName + QStringLiteral(".log"));
 
         streams_.emplace(streamConfig.relativeRoot, std::move(state));
     }
@@ -279,7 +289,7 @@ bool LumoDatasetWriter::begin(const CaptureWriterSessionConfig &config, QString 
 bool LumoDatasetWriter::copyMetadataStylesheet(const QString &streamRoot, QString *errorMessage)
 {
     const QString destination =
-        QDir(streamRoot).filePath(QStringLiteral("metadata/%1.xsl").arg(datasetName_));
+        QDir(captureMetadataDir(streamRoot)).filePath(datasetName_ + QStringLiteral(".xsl"));
 
 #ifdef HF_APP_SOURCE_DIR
     const QString templatePath = QStringLiteral(HF_APP_SOURCE_DIR)
@@ -591,7 +601,7 @@ void LumoDatasetWriter::writePropertiesXml() const
 void LumoDatasetWriter::writeMetadataXml(const StreamState &stream) const
 {
     const QString path =
-        QDir(stream.streamRoot).filePath(QStringLiteral("metadata/%1.xml").arg(datasetName_));
+        QDir(captureMetadataDir(stream.streamRoot)).filePath(datasetName_ + QStringLiteral(".xml"));
     QSaveFile file(path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
         return;
@@ -736,7 +746,8 @@ void LumoDatasetWriter::writeManifestXml() const
         if (!state.summary.logPath.isEmpty())
         {
             const QString logName = QFileInfo(state.summary.logPath).fileName();
-            writeEntry(QStringLiteral("log"), QStringLiteral("capture"), prefix + QStringLiteral("metadata/") + logName);
+            writeEntry(QStringLiteral("log"), QStringLiteral("capture"),
+                       prefix + captureMetadataRelativePrefix() + logName);
         }
     }
 
@@ -746,9 +757,9 @@ void LumoDatasetWriter::writeManifestXml() const
         const QString prefix =
             state.config.relativeRoot.isEmpty() ? QString() : state.config.relativeRoot + QLatin1Char('/');
         writeEntry(QStringLiteral("xml"), QStringLiteral("properties"),
-                   prefix + QStringLiteral("metadata/%1.xml").arg(datasetName_));
+                   prefix + captureMetadataRelativePrefix() + datasetName_ + QStringLiteral(".xml"));
         writeEntry(QStringLiteral("xsl"), QStringLiteral("properties"),
-                   prefix + QStringLiteral("metadata/%1.xsl").arg(datasetName_));
+                   prefix + captureMetadataRelativePrefix() + datasetName_ + QStringLiteral(".xsl"));
     }
 
     xml.writeEndElement();

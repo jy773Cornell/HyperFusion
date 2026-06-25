@@ -78,6 +78,33 @@ def write_segmented_rgb_patch(rgb: np.ndarray, mask: np.ndarray, path: Path) -> 
 
     return {"x": x0, "y": y0, "width": x1 - x0, "height": y1 - y0}
 
+
+def z_order_sort_indices(boxes_xyxy: np.ndarray) -> List[int]:
+    """Sort detections top-to-bottom, then left-to-right (reading / Z order)."""
+
+    def sort_key(index: int) -> tuple[float, float]:
+        x1, y1, x2, y2 = (float(boxes_xyxy[index, 0]), float(boxes_xyxy[index, 1]),
+                            float(boxes_xyxy[index, 2]), float(boxes_xyxy[index, 3]))
+        return ((y1 + y2) * 0.5, (x1 + x2) * 0.5)
+
+    return sorted(range(int(boxes_xyxy.shape[0])), key=sort_key)
+
+
+def reorder_detections(
+    boxes_xyxy: np.ndarray,
+    scores: np.ndarray,
+    phrases: List[str],
+) -> tuple[np.ndarray, np.ndarray, List[str]]:
+    if boxes_xyxy.shape[0] <= 1:
+        return boxes_xyxy, scores, phrases
+
+    order = z_order_sort_indices(boxes_xyxy)
+    if order == list(range(boxes_xyxy.shape[0])):
+        return boxes_xyxy, scores, phrases
+
+    return boxes_xyxy[order], scores[order], [phrases[i] for i in order]
+
+
 def run_segment(body: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
     input_rgb = Path(str(body["input_rgb"]))
     out_dir = Path(str(body["out_dir"]))
@@ -91,9 +118,9 @@ def run_segment(body: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any
 
     segmenter = get_segmenter(args)
     det = segmenter._gdino_detect_hf(rgb, prompt, box_threshold, max_dets)
-    boxes = det["boxes_xyxy"]
-    scores = det["scores"]
-    phrases = det["phrases"]
+    boxes, scores, phrases = reorder_detections(
+        det["boxes_xyxy"], det["scores"], det["phrases"]
+    )
     masks = segmenter._sam2_masks_from_boxes(
         segmenter.sam2_predictor, rgb, boxes, args.multimask_output
     )

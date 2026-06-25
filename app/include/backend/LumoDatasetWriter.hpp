@@ -11,7 +11,7 @@
 
 class QFile;
 
-/// Writes Lumo Scanner-style dataset folders (capture/, metadata/, manifest.xml, ENVI .raw/.hdr).
+/// Writes Lumo Scanner-style dataset folders (capture/, capture/metadata/, manifest.xml, ENVI .raw/.hdr).
 class LumoDatasetWriter
 {
 public:

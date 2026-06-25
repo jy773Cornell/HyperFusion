@@ -178,7 +178,7 @@ bool copyCaptureMetadataStylesheet(const QString &sessionDirectory,
 {
     const QString captureStylesheet =
         QDir(sessionDirectory).filePath(streamPathPrefix(relativeRoot)
-                                      + QStringLiteral("metadata/%1.xsl").arg(datasetName));
+                                      + QStringLiteral("capture/metadata/%1.xsl").arg(datasetName));
     if (QFileInfo::exists(captureStylesheet))
     {
         if (QFile::exists(destinationPath))
