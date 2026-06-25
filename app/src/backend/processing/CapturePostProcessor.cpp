@@ -18,6 +18,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QXmlStreamWriter>
 
 #include <algorithm>
 
@@ -159,7 +160,250 @@ FlatFieldParams flatFieldParamsFromConfig()
     return params;
 }
 
-bool writeManifest(const QString &preprocessedDir,
+QString manifestRelativePath(const QString &sessionDirectory, const QString &absolutePath)
+{
+    QString relative = QDir(sessionDirectory).relativeFilePath(absolutePath);
+    return relative.replace(QLatin1Char('\\'), QLatin1Char('/'));
+}
+
+QString streamPathPrefix(const QString &relativeRoot)
+{
+    return relativeRoot.isEmpty() ? QString() : relativeRoot + QLatin1Char('/');
+}
+
+bool copyCaptureMetadataStylesheet(const QString &sessionDirectory,
+                                   const QString &relativeRoot,
+                                   const QString &datasetName,
+                                   const QString &destinationPath)
+{
+    const QString captureStylesheet =
+        QDir(sessionDirectory).filePath(streamPathPrefix(relativeRoot)
+                                      + QStringLiteral("metadata/%1.xsl").arg(datasetName));
+    if (QFileInfo::exists(captureStylesheet))
+    {
+        if (QFile::exists(destinationPath))
+            QFile::remove(destinationPath);
+        return QFile::copy(captureStylesheet, destinationPath);
+    }
+
+    QSaveFile fallback(destinationPath);
+    if (!fallback.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+
+    fallback.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                   "<xsl:stylesheet version=\"1.0\" xmlns:xsl=\"http://www.w3.org/1999/XSL/Transform\">\n"
+                   "<xsl:template match=\"/\">\n"
+                   "<html><body><h1>HyperFusion preprocessing report</h1>"
+                   "<pre><xsl:value-of select=\"/\"/></pre></body></html>\n"
+                   "</xsl:template></xsl:stylesheet>\n");
+    return fallback.commit();
+}
+
+void writePreprocessedMetadataXml(const QString &metadataXmlPath,
+                                  const QString &datasetName,
+                                  const StreamProcessReport &report,
+                                  const CapturePostProcessOptions &options)
+{
+    QSaveFile file(metadataXmlPath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return;
+
+    QXmlStreamWriter xml(&file);
+    xml.setAutoFormatting(true);
+    xml.writeStartDocument();
+    xml.writeProcessingInstruction("xml-stylesheet",
+                                   QStringLiteral("type=\"text/xsl\" href=\"%1.xsl\"").arg(datasetName));
+    xml.writeStartElement(QStringLiteral("properties"));
+
+    const auto writeKey = [&xml](const QString &field, const QString &value) {
+        xml.writeStartElement(QStringLiteral("key"));
+        xml.writeAttribute(QStringLiteral("field"), field);
+        xml.writeCharacters(value);
+        xml.writeEndElement();
+    };
+
+    xml.writeStartElement(QStringLiteral("header"));
+    writeKey(QStringLiteral("generated utc"),
+             QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs));
+    writeKey(QStringLiteral("save ffc image"), options.saveFfcImage ? QStringLiteral("yes")
+                                                                    : QStringLiteral("no"));
+    writeKey(QStringLiteral("run gsam segmentation"),
+             options.runGsamSegmentation ? QStringLiteral("yes") : QStringLiteral("no"));
+    if (!options.gsamPrompt.trimmed().isEmpty())
+        writeKey(QStringLiteral("gsam prompt"), options.gsamPrompt.trimmed());
+    if (options.runGsamSegmentation)
+        writeKey(QStringLiteral("gsam sample count"), QString::number(options.gsamSampleCount));
+    if (!report.rgbExportMode.isEmpty())
+        writeKey(QStringLiteral("rgb export mode"), report.rgbExportMode);
+
+    const auto writeArtifact = [&writeKey](const QString &label, const bool ok, const QString &path) {
+        writeKey(label + QStringLiteral(" status"), ok ? QStringLiteral("ok") : QStringLiteral("missing"));
+        if (!path.isEmpty())
+            writeKey(label, QFileInfo(path).fileName());
+    };
+
+    writeArtifact(QStringLiteral("dark reference plot"), report.darkPlotOk, report.darkPlotPath);
+    writeArtifact(QStringLiteral("white reference plot"), report.whitePlotOk, report.whitePlotPath);
+    writeArtifact(QStringLiteral("flat-field corrected cube"), report.ffcOk, report.ffcHdrPath);
+    writeArtifact(QStringLiteral("rgb preview"), report.rgbOk, report.rgbPath);
+    writeArtifact(QStringLiteral("segmentation"), report.segmentationOk, report.segmentationCsvPath);
+    if (!report.segmentationPlotPath.isEmpty())
+        writeKey(QStringLiteral("segmentation spectrum plot"),
+                 QFileInfo(report.segmentationPlotPath).fileName());
+    xml.writeEndElement();
+
+    xml.writeEndElement();
+    xml.writeEndDocument();
+    file.commit();
+}
+
+bool writePreprocessedPropertiesFiles(const QString &sessionDirectory,
+                                      const QString &datasetName,
+                                      const StreamProcessReport &report,
+                                      const CapturePostProcessOptions &options)
+{
+    if (!report.darkPlotOk && !report.whitePlotOk && !report.ffcOk && !report.rgbOk
+        && !report.segmentationOk)
+        return false;
+
+    const QString prefix = streamPathPrefix(report.relativeRoot);
+    const QString metadataDir =
+        QDir(sessionDirectory).filePath(prefix + QStringLiteral("preprocessed/metadata"));
+    if (!QDir().mkpath(metadataDir))
+        return false;
+
+    const QString xmlPath = QDir(metadataDir).filePath(datasetName + QStringLiteral(".xml"));
+    const QString xslPath = QDir(metadataDir).filePath(datasetName + QStringLiteral(".xsl"));
+    writePreprocessedMetadataXml(xmlPath, datasetName, report, options);
+    copyCaptureMetadataStylesheet(sessionDirectory, report.relativeRoot, datasetName, xslPath);
+    return QFileInfo::exists(xmlPath) && QFileInfo::exists(xslPath);
+}
+
+struct ManifestFileEntry
+{
+    QString extension;
+    QString type;
+    QString relativePath;
+};
+
+bool appendManifestFileEntries(const QString &manifestPath,
+                               const std::vector<ManifestFileEntry> &entries)
+{
+    if (entries.empty())
+        return true;
+
+    QFile file(manifestPath);
+    if (!file.open(QIODevice::ReadOnly))
+        return false;
+
+    QString content = QString::fromUtf8(file.readAll());
+    file.close();
+
+    QStringList lines;
+    for (const ManifestFileEntry &entry : entries)
+    {
+        if (content.contains(QStringLiteral(">") + entry.relativePath + QStringLiteral("<")))
+            continue;
+
+        lines.push_back(QStringLiteral("    <file extension=\"%1\" type=\"%2\">%3</file>")
+                            .arg(entry.extension, entry.type, entry.relativePath));
+    }
+
+    if (lines.isEmpty())
+        return true;
+
+    const int closingTag = content.lastIndexOf(QStringLiteral("</manifest>"));
+    if (closingTag < 0)
+        return false;
+
+    content.insert(closingTag, lines.join(QLatin1Char('\n')) + QLatin1Char('\n'));
+
+    QSaveFile out(manifestPath);
+    if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+
+    out.write(content.toUtf8());
+    return out.commit();
+}
+
+std::vector<ManifestFileEntry>
+preprocessedManifestEntries(const QString &sessionDirectory,
+                            const QString &datasetName,
+                            const StreamProcessReport &report)
+{
+    std::vector<ManifestFileEntry> entries;
+    const QString prefix = streamPathPrefix(report.relativeRoot);
+
+    const auto addEntry = [&entries, &sessionDirectory](const QString &type,
+                                                        const QString &absolutePath) {
+        if (absolutePath.isEmpty() || !QFileInfo::exists(absolutePath))
+            return;
+
+        const QFileInfo info(absolutePath);
+        entries.push_back({info.suffix().toLower(), type,
+                           manifestRelativePath(sessionDirectory, absolutePath)});
+    };
+
+    entries.push_back({QStringLiteral("xml"), QStringLiteral("properties"),
+                       prefix + QStringLiteral("preprocessed/metadata/%1.xml").arg(datasetName)});
+    entries.push_back({QStringLiteral("xsl"), QStringLiteral("properties"),
+                       prefix + QStringLiteral("preprocessed/metadata/%1.xsl").arg(datasetName)});
+
+    addEntry(QStringLiteral("preprocessed"), report.darkPlotPath);
+    addEntry(QStringLiteral("preprocessed"), report.whitePlotPath);
+    addEntry(QStringLiteral("preprocessed"), report.ffcRawPath);
+    addEntry(QStringLiteral("preprocessed"), report.ffcHdrPath);
+    addEntry(QStringLiteral("preprocessed"), report.rgbPath);
+    addEntry(QStringLiteral("properties"),
+             QDir(sessionDirectory)
+                 .filePath(prefix + QStringLiteral("preprocessed/processing_manifest.json")));
+
+    if (!report.segmentationDir.isEmpty() && QFileInfo::exists(report.segmentationDir))
+    {
+        const QDir segmentationDir(report.segmentationDir);
+        const QStringList segmentationFiles =
+            segmentationDir.entryList(QDir::Files | QDir::NoDotAndDotDot);
+        for (const QString &name : segmentationFiles)
+            addEntry(QStringLiteral("preprocessed"), segmentationDir.filePath(name));
+
+        const QStringList subdirs = segmentationDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        for (const QString &subdir : subdirs)
+        {
+            const QDir nestedDir(segmentationDir.filePath(subdir));
+            const QStringList nestedFiles =
+                nestedDir.entryList(QDir::Files | QDir::NoDotAndDotDot);
+            for (const QString &name : nestedFiles)
+                addEntry(QStringLiteral("preprocessed"), nestedDir.filePath(name));
+        }
+    }
+
+    return entries;
+}
+
+void updateDatasetManifestForPreprocessing(const QString &sessionDirectory,
+                                           const QString &datasetName,
+                                           const std::vector<StreamProcessReport> &reports,
+                                           const CapturePostProcessOptions &options)
+{
+    const QString manifestPath = QDir(sessionDirectory).filePath(QStringLiteral("manifest.xml"));
+    if (!QFileInfo::exists(manifestPath))
+        return;
+
+    std::vector<ManifestFileEntry> entries;
+    for (const StreamProcessReport &report : reports)
+    {
+        if (!writePreprocessedPropertiesFiles(sessionDirectory, datasetName, report, options))
+            continue;
+
+        const std::vector<ManifestFileEntry> streamEntries =
+            preprocessedManifestEntries(sessionDirectory, datasetName, report);
+        entries.insert(entries.end(), streamEntries.begin(), streamEntries.end());
+    }
+
+    appendManifestFileEntries(manifestPath, entries);
+}
+
+bool writeProcessingManifestJson(const QString &preprocessedDir,
                    const CaptureWriterSessionSummary &summary,
                    const std::vector<StreamProcessReport> &reports,
                    const CapturePostProcessOptions &options,
@@ -358,7 +602,7 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
     if (!canProcessSample)
     {
         QString manifestError;
-        writeManifest(preprocessedDir, summary, {report}, options, &manifestError);
+        writeProcessingManifestJson(preprocessedDir, summary, {report}, options, &manifestError);
         return report;
     }
 
@@ -538,7 +782,7 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
     }
 
     QString manifestError;
-    writeManifest(preprocessedDir, summary, {report}, options, &manifestError);
+    writeProcessingManifestJson(preprocessedDir, summary, {report}, options, &manifestError);
 
     return report;
 }
@@ -583,7 +827,20 @@ CapturePostProcessResult processCaptureSession(const CaptureWriterSessionSummary
     else
         result.logLines.push_front(QStringLiteral("Capture post-process: completed with errors."));
 
-    Q_UNUSED(reports);
+    if (!reports.empty())
+    {
+        QString datasetName;
+        for (auto it = summary.streams.cbegin(); it != summary.streams.cend(); ++it)
+        {
+            datasetName = datasetStemFromStreamBaseName(it.value().baseName);
+            break;
+        }
+
+        if (!datasetName.isEmpty())
+            updateDatasetManifestForPreprocessing(summary.sessionDirectory, datasetName, reports,
+                                                  options);
+    }
+
     return result;
 }
 

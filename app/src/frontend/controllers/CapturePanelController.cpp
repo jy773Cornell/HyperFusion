@@ -190,7 +190,9 @@ void CapturePanelController::onStageHomedForCapture() {
 
 void CapturePanelController::onStageHomedAfterCapture() {
   captureRecordCompleteHomingPending_ = false;
+  capturePreviewCompleteHomingPending_ = false;
   tryNotifyRecordComplete();
+  tryNotifyPreviewComplete();
 }
 
 void CapturePanelController::onCaptureStageHomingFailed(
@@ -1419,6 +1421,32 @@ void hf::capture::CapturePanelController::notifyRecordComplete() {
   box.exec();
 }
 
+void hf::capture::CapturePanelController::notifyPreviewComplete() {
+  QStringList detailLines;
+  if (!lastPreviewCompleteModeFolders_.isEmpty()) {
+    detailLines.push_back(
+        tr("Illumination: %1")
+            .arg(lastPreviewCompleteModeFolders_.join(QStringLiteral(", "))));
+  }
+  for (const std::size_t cameraIndex : lastPreviewCompleteCameraIndices_) {
+    const LumoCameraUi &ui =
+        cameraIndex == 0 ? host_->camera1Ui_ : host_->camera2Ui_;
+    detailLines.push_back(
+        QStringLiteral("%1 \u2014 %2 sample frames")
+            .arg(host_->cameraPanel()->profileTabNameForUi(ui))
+            .arg(lastPreviewCompleteSampleFrames_[cameraIndex]));
+  }
+  detailLines.push_back(tr("No data was saved."));
+
+  QMessageBox box(host_);
+  box.setIcon(QMessageBox::Information);
+  box.setWindowTitle(tr("Preview complete"));
+  box.setText(tr("Capture preview scan sequence finished successfully."));
+  box.setInformativeText(detailLines.join(QLatin1Char('\n')));
+  box.setStandardButtons(QMessageBox::Ok);
+  box.exec();
+}
+
 void hf::capture::CapturePanelController::beginRecordCompleteNotify() {
   pendingCaptureRecordCompleteNotify_ = true;
 
@@ -1446,6 +1474,27 @@ void hf::capture::CapturePanelController::tryNotifyRecordComplete() {
 
   pendingCaptureRecordCompleteNotify_ = false;
   notifyRecordComplete();
+}
+
+void hf::capture::CapturePanelController::beginPreviewCompleteNotify() {
+  pendingCapturePreviewCompleteNotify_ = true;
+
+  capturePreviewCompleteHomingPending_ =
+      !host_->performingGracefulShutdown_ && host_->stageWorker() != nullptr &&
+      host_->stageWorker()->currentState() == StageState::Connected;
+
+  tryNotifyPreviewComplete();
+}
+
+void hf::capture::CapturePanelController::tryNotifyPreviewComplete() {
+  if (!pendingCapturePreviewCompleteNotify_)
+    return;
+
+  if (capturePreviewCompleteHomingPending_)
+    return;
+
+  pendingCapturePreviewCompleteNotify_ = false;
+  notifyPreviewComplete();
 }
 
 bool hf::capture::CapturePanelController::buildCaptureScanPlan(
@@ -2649,6 +2698,22 @@ void hf::capture::CapturePanelController::failCaptureSequence(
 }
 
 void hf::capture::CapturePanelController::completeCaptureModeSequence() {
+  if (captureRecorderMode_ == CaptureRecorderMode::Preview) {
+    for (std::size_t cameraIndex = 0; cameraIndex < 2; ++cameraIndex)
+      lastPreviewCompleteSampleFrames_[cameraIndex] +=
+          captureSampleFramesCollected_[cameraIndex];
+
+    std::vector<std::size_t> selectedCameras;
+    if (selectedCaptureCameraIndices(selectedCameras)) {
+      for (const std::size_t cameraIndex : selectedCameras) {
+        if (std::find(lastPreviewCompleteCameraIndices_.begin(),
+                      lastPreviewCompleteCameraIndices_.end(),
+                      cameraIndex) == lastPreviewCompleteCameraIndices_.end())
+          lastPreviewCompleteCameraIndices_.push_back(cameraIndex);
+      }
+    }
+  }
+
   resetCaptureSequenceState();
 
   const CaptureIlluminationMode completedMode =
@@ -2698,15 +2763,19 @@ void hf::capture::CapturePanelController::completeCaptureSequence() {
   captureRelativeScanTimerActiveToken_ = 0;
 
   restoreReflectanceExposuresAfterCapture();
+
+  const bool wasRecord = captureRecorderMode_ == CaptureRecorderMode::Record;
+  const bool wasPreview = captureRecorderMode_ == CaptureRecorderMode::Preview;
+  QStringList completedPreviewModeFolders;
+  for (const CaptureIlluminationMode mode : capturePendingIlluminationModes_)
+    completedPreviewModeFolders.push_back(captureIlluminationFolderName(mode));
+
   resetCaptureSequenceState();
   capturePendingIlluminationModes_.clear();
   captureCurrentModeIndex_ = 0;
 
   if (isStageRecordingEnabledInUi() && host_->stageWorker() != nullptr)
     host_->stageWorker()->requestStopMotion();
-
-  const bool wasRecord = captureRecorderMode_ == CaptureRecorderMode::Record;
-  const bool wasPreview = captureRecorderMode_ == CaptureRecorderMode::Preview;
 
   captureRecorderMode_ = CaptureRecorderMode::Idle;
   updateRecorderControls();
@@ -2722,7 +2791,9 @@ void hf::capture::CapturePanelController::completeCaptureSequence() {
   } else if (wasPreview) {
     host_->appendLog(
         QStringLiteral("Capture preview: scan sequence finished."));
+    lastPreviewCompleteModeFolders_ = std::move(completedPreviewModeFolders);
     homeStageAfterCapture();
+    beginPreviewCompleteNotify();
   }
 }
 
@@ -2830,6 +2901,8 @@ void hf::capture::CapturePanelController::startPreview() {
   }
 
   captureRecorderMode_ = CaptureRecorderMode::Preview;
+  lastPreviewCompleteSampleFrames_ = {0, 0};
+  lastPreviewCompleteCameraIndices_.clear();
   resetCaptureSequenceState();
   updateRecorderControls();
 
@@ -2856,9 +2929,13 @@ bool hf::capture::CapturePanelController::validateCaptureRecordMetadata(
                               ? host_->captureDatasetEdit_->text().trimmed()
                               : QString();
 
-  if (saveFolder.isEmpty() || dataset.isEmpty()) {
-    errorMessage =
-        QStringLiteral("Set dataset name and save folder in Metadata.");
+  if (dataset.isEmpty()) {
+    errorMessage = QStringLiteral("Enter a dataset name in Metadata.");
+    return false;
+  }
+
+  if (saveFolder.isEmpty()) {
+    errorMessage = QStringLiteral("Choose a save folder in Metadata.");
     return false;
   }
 
@@ -2869,7 +2946,22 @@ bool hf::capture::CapturePanelController::validateCaptureRecordMetadata(
     return false;
   }
 
+  const QString sessionDirectory = QDir(saveFolder).filePath(dataset);
+  if (QDir(sessionDirectory).exists()) {
+    errorMessage =
+        QStringLiteral("Dataset folder already exists — choose a different "
+                       "dataset name:\n%1")
+            .arg(sessionDirectory);
+    return false;
+  }
+
   return true;
+}
+
+void hf::capture::CapturePanelController::notifyRecordBlocked(
+    const QString &message) const {
+  host_->appendLog(QStringLiteral("Capture record: %1").arg(message));
+  QMessageBox::warning(host_, tr("Cannot start recording"), message);
 }
 
 bool hf::capture::CapturePanelController::selectedCaptureCameraIndices(
@@ -3719,18 +3811,37 @@ void hf::capture::CapturePanelController::startRecord() {
   if (captureRecorderMode_ != CaptureRecorderMode::Idle)
     return;
 
+  QString errorMessage;
+
   if (capturePostProcessorWorker_ != nullptr &&
       capturePostProcessorWorker_->queueStatus().outstandingTotal() > 0) {
-    host_->appendLog(QStringLiteral("Capture record: post-processing is still "
-                                    "running \u2014 wait for it to finish."));
+    notifyRecordBlocked(
+        tr("Post-processing is still running. Wait for it to finish before "
+           "starting a new recording."));
     return;
   }
 
-  QString errorMessage;
   std::vector<CaptureIlluminationMode> illuminationModes;
   if (!effectiveCaptureIlluminationModes(illuminationModes)) {
-    host_->appendLog(QStringLiteral(
-        "Capture record: Select reflectance and/or transmittance mode."));
+    notifyRecordBlocked(
+        tr("Select reflectance and/or transmittance mode in Position."));
+    return;
+  }
+
+  if (!validateCaptureRecordMetadata(errorMessage)) {
+    notifyRecordBlocked(errorMessage);
+    return;
+  }
+
+  std::vector<std::size_t> selectedCameras;
+  if (!selectedCaptureCameraIndices(selectedCameras)) {
+    notifyRecordBlocked(
+        tr("Select at least one connected camera in the Cameras list."));
+    return;
+  }
+
+  if (!selectedCaptureCameraStreaming(errorMessage)) {
+    notifyRecordBlocked(errorMessage);
     return;
   }
 
@@ -3740,8 +3851,16 @@ void hf::capture::CapturePanelController::startRecord() {
     return;
   }
 
+  if (useStage) {
+    applyDualCameraScanSync();
+    if (!buildCaptureScanPlan(captureScanPlan_, errorMessage)) {
+      notifyRecordBlocked(errorMessage);
+      return;
+    }
+  }
+
   if (!beginCaptureRawDumpSession(errorMessage)) {
-    host_->appendLog(QStringLiteral("Capture record: %1").arg(errorMessage));
+    notifyRecordBlocked(errorMessage);
     return;
   }
 
@@ -3771,24 +3890,15 @@ void hf::capture::CapturePanelController::startRecord() {
                                   "transmittance when both selected)")
                        .arg(modeFolders.join(QStringLiteral(", "))));
 
-  applyDualCameraScanSync();
-
-  CaptureScanPlan plan;
-  if (!buildCaptureScanPlan(plan, errorMessage)) {
-    host_->appendLog(QStringLiteral("Capture record: %1").arg(errorMessage));
-    stopRecorder();
-    return;
-  }
-
   host_->appendLog(QStringLiteral("Capture record: session %1 \u2014 "
                                   "per-camera white/bright ref from cfg, "
                                   "sample origin %2 mm, total scan %3 mm, "
                                   "target length %4 mm @ %5 mm/s.")
                        .arg(captureWriterWorker_->sessionDirectory())
-                       .arg(plan.sampleScanOriginMm, 0, 'f', 2)
-                       .arg(plan.sampleScanTotalDistanceMm, 0, 'f', 2)
-                       .arg(plan.sampleScanLengthMm, 0, 'f', 2)
-                       .arg(plan.recordScanSpeedMmPerSec, 0, 'f', 1));
+                       .arg(captureScanPlan_.sampleScanOriginMm, 0, 'f', 2)
+                       .arg(captureScanPlan_.sampleScanTotalDistanceMm, 0, 'f', 2)
+                       .arg(captureScanPlan_.sampleScanLengthMm, 0, 'f', 2)
+                       .arg(captureScanPlan_.recordScanSpeedMmPerSec, 0, 'f', 1));
 
   homeStageBeforeCapture();
 }

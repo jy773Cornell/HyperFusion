@@ -136,6 +136,9 @@ private:
     void notifyRecordComplete();
     void beginRecordCompleteNotify();
     void tryNotifyRecordComplete();
+    void notifyPreviewComplete();
+    void beginPreviewCompleteNotify();
+    void tryNotifyPreviewComplete();
     bool buildCaptureScanPlan(CaptureScanPlan &plan, QString &errorMessage) const;
     QString captureSequenceLogPrefix() const;
     void resetCaptureSequenceState();
@@ -185,6 +188,7 @@ private:
     bool selectedCamerasReachedBlackReferenceTarget() const;
     bool shouldAcceptBlackReferenceFrame(std::size_t cameraIndex) const;
     bool validateCaptureRecordMetadata(QString &errorMessage) const;
+    void notifyRecordBlocked(const QString &message) const;
     bool selectedCaptureCameraIndices(std::vector<std::size_t> &cameraIndices) const;
     std::size_t stageCameraIndexForUi(const LumoCameraUi &ui, std::size_t cameraIndex) const;
     double whiteRefStartMmForStageCamera(const CaptureScanPlan &plan,
@@ -273,6 +277,11 @@ private:
     bool pendingCaptureRecordCompleteNotify_ = false;
     bool captureRecordCompleteHomingPending_ = false;
     bool captureRecordCompletePostProcessPending_ = false;
+    bool pendingCapturePreviewCompleteNotify_ = false;
+    bool capturePreviewCompleteHomingPending_ = false;
+    QStringList lastPreviewCompleteModeFolders_;
+    std::array<int, 2> lastPreviewCompleteSampleFrames_ = {0, 0};
+    std::vector<std::size_t> lastPreviewCompleteCameraIndices_;
     bool applyingDualCameraScanSync_ = false;
     bool dualCameraScanSyncHardwareApplied_ = false;
     bool dualCameraSyncHardwareApplyPending_ = false;

@@ -2,6 +2,22 @@
 
 This guide covers **developer setup** on a build machine.
 
+## Contents
+
+1. [Overview](#overview)
+2. [Development environment](#1-development-environment)
+3. [Camera SDKs and drivers](#2-camera-sdks-and-drivers)
+  - [2.1 Specim Lumo Sensor SDK](#21-specim-lumo-sensor-sdk)
+  - [2.2 Pleora eBUS (FX10e)](#22-pleora-ebus-fx10e)
+  - [2.3 National Instruments (SWIR3)](#23-national-instruments-swir3)
+  - [2.4 Dual-camera operation](#24-dual-camera-operation)
+4. [Stage and lighthouse (full bench)](#3-stage-and-lighthouse-full-bench)
+  - [3.1 Zaber Motion Library](#31-zaber-motion-library-scan-stage)
+  - [3.2 MCC Universal Library](#32-measurement-computing-universal-library-lighthouse)
+5. [Optional — GSAM segmentation](#4-optional--gsam-segmentation)
+6. [Configuration — `hyperfusion.cfg`](#5-configuration--hyperfusioncfg)
+7. [Build HyperFusion](#6-build-hyperfusion)
+
 ---
 
 ## Overview
@@ -118,9 +134,10 @@ Camera exposure, frame rate, binning, and RGB band picks are stored in **app set
 
 ## 6. Build HyperFusion
 
-From the **repository root**:
+From the **`app`** folder:
 
 ```powershell
+cd app
 .\build_app.ps1
 ```
 
@@ -133,7 +150,7 @@ Common variants:
 
 The script configures CMake, builds **Release**, runs `windeployqt`, and copies Lumo / MCC / Zaber runtime DLLs next to the executable.
 
-**Output folder:** `app\build\Release\`
+**Output folder:** `build\Release\` (under `app\`)
 
 
 | Override | Environment variable |

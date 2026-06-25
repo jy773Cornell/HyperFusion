@@ -4,6 +4,7 @@
   Configure, build, and optionally run the HyperFusion Qt app on Windows (MSVC + Qt 6.11 MSVC kit).
 
 .EXAMPLE
+  cd app
   .\build_app.ps1
 
 .EXAMPLE
@@ -70,8 +71,7 @@ if (-not (Test-Path -LiteralPath $qtConfig)) {
     Write-Error "Qt6Config.cmake not found at: $qtConfig`nSet -QtPrefixPath or QT_PREFIX_PATH (e.g. C:\Qt\6.11.1\msvc2022_64)."
 }
 
-$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
-$AppDir = Join-Path $Root "app"
+$AppDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BuildDir = Join-Path $AppDir "build"
 
 $qtBin = Join-Path $QtPrefixPath "bin"
