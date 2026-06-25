@@ -33,6 +33,8 @@ This creates **`./venv`** and installs:
 - GroundingDINO deps (`transformers`, …)
 - SAM2 runtime deps (`hydra-core`, `opencv-python`, `supervision`, …)
 
+**Note:** HyperFusion starts the server with `./venv/bin/python` directly (not `source activate`). If you moved this folder from `resources/sam2` to `resources/gsam2`, re-run `./install_venv.sh` if manual `source ./venv/bin/activate` fails.
+
 **Note:** Installing on `/mnt/d/...` can look frozen for several minutes while pip writes large wheels (PyTorch ~3 GB total). That is normal. If you interrupted it, resume with:
 
 ```bash
@@ -61,7 +63,7 @@ sam2_repo_linux =                          ; empty = auto (/mnt/d/.../resources/
 server_port = 8765
 ```
 
-The app runs: `cd <sam2_repo_linux> && source ./venv/bin/activate && python gsam2_server.py ...`
+The app runs: `cd <sam2_repo_linux> && ./venv/bin/python gsam2_server.py ...`
 
 **Start the server** from the Capture tab → Preprocessing → **Start GSAM server**, or test manually:
 

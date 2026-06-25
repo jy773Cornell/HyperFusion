@@ -18,7 +18,7 @@
 #include "SI_types.h"
 #include "backend/HyperFusionConfig.hpp"
 #include "backend/processing/SwirBprCorrector.hpp"
-#include "backend/processing/SwirAdaptiveBprCorrector.hpp"
+#include "backend/processing/SwirColumnProfileCorrector.hpp"
 
 #include <QString>
 #endif
@@ -1076,38 +1076,27 @@ bool LumoCamera::configureBprAfterInitialize(void *handlePtr, CameraError &error
         return true;
 
     swirSoftwareBpr_.reset();
-    swirAdaptiveBpr_.reset();
+    swirColumnProfileCorrector_.reset();
 
     const auto &preprocess = hf::hardwareConfig().preprocessing;
-    if (preprocess.swir3AdaptiveBpr)
+    if (preprocess.swir3ColumnProfileCorrect)
     {
         if (!disableSdkBpr(handle, error))
             return false;
 
-        swirAdaptiveBpr_ = std::make_unique<hf::processing::SwirAdaptiveBprCorrector>();
-        hf::processing::SwirAdaptiveBprSettings adaptiveSettings;
-        adaptiveSettings.gainMin = preprocess.swir3AdaptiveBprGainMin;
-        adaptiveSettings.gainMax = preprocess.swir3AdaptiveBprGainMax;
-        adaptiveSettings.minNeighborMeanDn = preprocess.swir3AdaptiveBprMinNeighborDn;
-        adaptiveSettings.minConsecutiveHits =
-            preprocess.swir3AdaptiveBprMinHits < 1 ? 1 : preprocess.swir3AdaptiveBprMinHits;
-        adaptiveSettings.maxAdaptivePixels =
-            preprocess.swir3AdaptiveBprMaxPixels < 0 ? 0 : preprocess.swir3AdaptiveBprMaxPixels;
-        swirAdaptiveBpr_->setSettings(adaptiveSettings);
+        swirColumnProfileCorrector_ = std::make_unique<hf::processing::SwirColumnProfileCorrector>();
+        hf::processing::SwirColumnProfileSettings columnSettings;
+        columnSettings.baselineRadius =
+            preprocess.swir3ColumnProfileBaselineRadius < 1 ? 1 : preprocess.swir3ColumnProfileBaselineRadius;
+        columnSettings.valleyGainMin = preprocess.swir3ColumnProfileValleyGainMin;
+        columnSettings.minBandDn = preprocess.swir3ColumnProfileMinBandDn;
+        columnSettings.minConsecutiveHits =
+            preprocess.swir3ColumnProfileMinHits < 1 ? 1 : preprocess.swir3ColumnProfileMinHits;
+        columnSettings.minValleyDn = preprocess.swir3ColumnProfileMinValleyDn;
+        swirColumnProfileCorrector_->setSettings(columnSettings);
+        swirColumnProfileCorrector_->resetState();
 
-        QString loadError;
-        if (!swirAdaptiveBpr_->loadFromCalpack(QString::fromStdString(settings_.lumoCalibrationPackPath),
-                                                 &loadError))
-        {
-            error.code = CameraErrorCode::SdkError;
-            error.message = tag() + ": " + loadError.toStdString();
-            error.fatal = false;
-            swirAdaptiveBpr_.reset();
-            return false;
-        }
-
-        bprStatusSummary_ = "AdaptiveBPR=on, baseline=" + std::to_string(swirAdaptiveBpr_->baselineBadPixelCount())
-                            + ", SDK.BPR=off";
+        bprStatusSummary_ = "ColumnProfile=on, SDK.BPR=off";
         return true;
     }
 
@@ -1564,7 +1553,7 @@ void LumoCamera::disconnect()
         handleToClose = handle_;
         handle_ = nullptr;
         swirSoftwareBpr_.reset();
-        swirAdaptiveBpr_.reset();
+        swirColumnProfileCorrector_.reset();
         bprStatusSummary_.clear();
         nucStatusSummary_.clear();
         state_ = CameraState::Disconnected;
@@ -1658,28 +1647,28 @@ bool LumoCamera::pollFrame(FramePacket &frame, const std::uint32_t timeoutMs, Ca
     frameReady_ = false;
     frameLock.unlock();
 
-    hf::processing::SwirAdaptiveBprCorrector *adaptiveBpr = nullptr;
+    hf::processing::SwirColumnProfileCorrector *columnProfileCorrector = nullptr;
     hf::processing::SwirBprCorrector *softwareBpr = nullptr;
     int spatialBinning = 1;
     int spectralBinning = 1;
     {
         std::lock_guard<std::mutex> stateLock(mutex_);
-        adaptiveBpr = swirAdaptiveBpr_.get();
+        columnProfileCorrector = swirColumnProfileCorrector_.get();
         softwareBpr = swirSoftwareBpr_.get();
         spatialBinning = settings_.spatialBinning;
         spectralBinning = settings_.spectralBinning;
     }
 
-    if (adaptiveBpr != nullptr && adaptiveBpr->isLoaded())
+    if (columnProfileCorrector != nullptr)
     {
-        adaptiveBpr->processFrame(frame, spatialBinning, spectralBinning);
+        (void)spatialBinning;
+        (void)spectralBinning;
+        columnProfileCorrector->processFrame(frame);
         if (frame.frameIndex % 150U == 0U)
         {
             std::lock_guard<std::mutex> stateLock(mutex_);
-            bprStatusSummary_ = "AdaptiveBPR=on, baseline="
-                                + std::to_string(adaptiveBpr->baselineBadPixelCount())
-                                + ", adaptive=" + std::to_string(adaptiveBpr->adaptiveBadPixelCount())
-                                + ", active=" + std::to_string(adaptiveBpr->activeBadPixelCount())
+            bprStatusSummary_ = "ColumnProfile=on, bad_columns="
+                                + std::to_string(columnProfileCorrector->badColumnCount())
                                 + ", SDK.BPR=off";
         }
     }

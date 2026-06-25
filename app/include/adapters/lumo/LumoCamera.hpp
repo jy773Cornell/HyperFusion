@@ -13,7 +13,7 @@
 
 namespace hf::processing
 {
-class SwirAdaptiveBprCorrector;
+class SwirColumnProfileCorrector;
 class SwirBprCorrector;
 }
 
@@ -117,7 +117,7 @@ private:
     bool frameReady_ = false;
 
     std::unique_ptr<hf::processing::SwirBprCorrector> swirSoftwareBpr_;
-    std::unique_ptr<hf::processing::SwirAdaptiveBprCorrector> swirAdaptiveBpr_;
+    std::unique_ptr<hf::processing::SwirColumnProfileCorrector> swirColumnProfileCorrector_;
     std::string bprStatusSummary_;
     std::string nucStatusSummary_;
 };

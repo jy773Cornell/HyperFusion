@@ -27,11 +27,10 @@ echo "==> Installing GSAM2 Python dependencies..."
 python -m pip install -r requirements.txt
 
 echo "==> Verifying imports..."
-PYTHONPATH="$(dirname "$SCRIPT_DIR")" python - <<'PY'
-import sys
-from pathlib import Path
+python - <<'PY'
+from _sam2_bootstrap import ensure_sam2_package
 
-sys.path.insert(0, str(Path.cwd().parent))
+ensure_sam2_package()
 import torch
 import cv2
 import transformers

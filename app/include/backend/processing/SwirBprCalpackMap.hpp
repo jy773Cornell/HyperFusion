@@ -16,8 +16,15 @@ struct SwirBprCalpackMap
     std::vector<std::uint8_t> mask;
 
     [[nodiscard]] bool isLoaded() const { return bands > 0 && samples > 0 && !mask.empty(); }
+    [[nodiscard]] bool hasGeometry() const { return bands > 0 && samples > 0; }
     [[nodiscard]] std::size_t badPixelCount() const;
+    [[nodiscard]] std::size_t pixelCount() const
+    {
+        return static_cast<std::size_t>(bands) * static_cast<std::size_t>(samples);
+    }
 
     bool loadFromCalpack(const QString &calpackPath, QString *errorMessage = nullptr);
+    /// Bands/samples from calpack BPR header only (no static mask).
+    bool loadGeometryFromCalpack(const QString &calpackPath, QString *errorMessage = nullptr);
 };
 } // namespace hf::processing

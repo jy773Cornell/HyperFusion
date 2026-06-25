@@ -28,9 +28,9 @@ This document guides how to use the HyperFusion software prototype.
   - `[[lighthouse]](#lighthouse)`
   - `[[preprocessing]](#preprocessing)`
   - `[[segmentation]` (GSAM)](#segmentation-optional-gsam)
-9. [SWIR3 image quality — NUC and adaptive BPR](#9-swir3-image-quality--nuc-and-adaptive-bpr)
+9. [SWIR3 image quality — NUC and column profile destripe](#9-swir3-image-quality--nuc-and-column-profile-destripe)
   - [Auto NUC](#auto-nuc-swir3_auto_nuc--true)
-  - [Adaptive BPR](#adaptive-bpr-swir3_adaptive_bpr--true)
+  - [Column profile destripe](#column-profile-destripe-swir3_column_profile_correct--true)
 10. [Optional — GSAM2 segmentation](#10-optional--gsam2-segmentation)
 11. [Quick reference — daily operator flow](#11-quick-reference--daily-operator-flow)
 
@@ -89,7 +89,7 @@ Each camera has its own sub-tab.
 - Close **NI MAX Grab** before connecting from HyperFusion.
 - Allow the SWIR head to **warm up** after power-on before critical work.
 - After connect, the log may show NI channel readback and BPR/NUC status, for example:  
-`SDK.BPR=…`, `AdaptiveBPR=…`, `AutoNUC=on`, `NUC=…`
+`SDK.BPR=…`, `ColumnProfile=…`, `AutoNUC=on`, `NUC=…`
 
 **FX10e notes**
 
@@ -265,11 +265,12 @@ Expressions like `white_ref_swir3_mm = white_ref_fx10e_mm - distance_dual_camera
 | `fx10e_spectral_nm_per_pixel` / `swir3_spectral_nm_per_pixel` | Spectral sampling (record only)                                      |
 | `fx10e_spectral_fwhm_nm` / `swir3_spectral_fwhm_nm`           | Spectral band FWHM (record only)                                     |
 | `swir3_auto_nuc`                                              | Enable SDK **AutoNUC** after timing apply (recommended `true`)       |
-| `swir3_adaptive_bpr`                                          | **Adaptive software BPR** (see §9). When `true`, **SDK BPR is off**. |
-| `swir3_adaptive_bpr_gain_min` / `gain_max`                    | Outlier ratio thresholds (default 0.3 / 1.5)                         |
-| `swir3_adaptive_bpr_min_neighbor_dn`                          | Minimum neighbor brightness to run detection                         |
-| `swir3_adaptive_bpr_min_hits`                                 | Consecutive bad frames before adding a pixel                         |
-| `swir3_adaptive_bpr_max_pixels`                               | Safety cap on new adaptive bad pixels                                |
+| `swir3_column_profile_correct`                                  | **Column profile destripe** (see §9). When `true`, **SDK BPR is off**. |
+| `swir3_column_profile_baseline_radius`                        | ±columns for spatial baseline median when detecting valleys          |
+| `swir3_column_profile_valley_gain_min`                        | Valley threshold: profile/baseline below this marks a bad column     |
+| `swir3_column_profile_min_band_dn`                            | Ignore bands below this DN when building the spatial profile         |
+| `swir3_column_profile_min_hits`                               | Consecutive valley frames before marking a column                      |
+| `swir3_column_profile_min_valley_dn`                          | Optional absolute valley depth (0 = off)                             |
 
 
 ### `[scanning_settings]`
@@ -303,37 +304,32 @@ WSL distro, port, and model paths for the GSAM2 sidecar. See `resources/gsam2/en
 
 ---
 
-## 9. SWIR3 image quality — NUC and adaptive BPR
+## 9. SWIR3 image quality — NUC and column profile destripe
 
 ### Auto NUC (`swir3_auto_nuc = true`)
 
 The Lumo SDK selects the best **NUC table** for the current exposure. Helps stabilize **column offset/gain drift** as the sensor temperature changes. Not a substitute for adequate **warm-up** time.
 
-### Adaptive BPR (`swir3_adaptive_bpr = true`)
+### Column profile destripe (`swir3_column_profile_correct = true`)
 
-HyperFusion’s **stream-adaptive** bad-pixel replacement:
+HyperFusion’s **column comb** correction for vertical striping:
 
-1. Loads the factory **BPR map** from the calpack (~120 pixels).
-2. Each frame, compares every pixel to left/right neighbors (same spectral band).
-3. If the ratio is outside `gain_min`…`gain_max` for several consecutive frames, the pixel is added to an **adaptive** mask.
-4. Bad pixels (baseline + adaptive) are replaced with neighbor means in space and wavelength.
+1. Each frame, computes the **median DN across all bands** at each spatial column → spatial profile `P[x]`.
+2. Compares `P[x]` to a local baseline (median of `P` within ±`baseline_radius` columns).
+3. Columns where `P[x] / baseline` falls below `valley_gain_min` are marked bad.
+4. All bands at bad columns are replaced with the mean of the nearest good left/right columns.
 5. **SDK `Camera.BPR` is disabled** while this mode is on.
 
-**When to use**
+**When to use SDK BPR instead** (`swir3_column_profile_correct = false`)
 
-- Vertical striping / column comb not fully covered by the static calpack map.
-- Defects that **drift** during a session.
-
-**When to use SDK BPR instead** (`swir3_adaptive_bpr = false`)
-
-- Stable sensor, static map sufficient, prefer vendor-default processing.
+- Stable sensor, static calpack map sufficient, prefer vendor-default processing.
 
 **Tuning**
 
-- More aggressive: widen `gain_min`/`gain_max`, lower `min_hits`.
-- More conservative: narrow gains, raise `min_hits`, lower `max_pixels`.
+- More aggressive: lower `valley_gain_min` (e.g. 0.85), widen `baseline_radius`.
+- More conservative: raise `valley_gain_min`, raise `min_hits`, set `min_valley_dn`.
 
-Connect log shows `baseline=`, `adaptive=`, and `active=` counts while streaming.
+Connect log shows `ColumnProfile=on, bad_columns=…` while streaming.
 
 ---
 

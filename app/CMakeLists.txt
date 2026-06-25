@@ -46,7 +46,7 @@ else()
     message(STATUS "Lumo SDK not found (LUMO_SDK_ROOT). Lumo adapter will build as stub.")
 endif()
 
-qt_add_executable(app
+qt_add_executable(app WIN32
     src/main.cpp
     # frontend/widgets — QWidget subclasses only
     src/frontend/widgets/MainWindow.cpp
@@ -138,7 +138,7 @@ qt_add_executable(app
     src/backend/processing/SwirBprCorrector.cpp
     src/backend/processing/SwirBprCalpackMap.cpp
     src/backend/processing/SwirBprApply.cpp
-    src/backend/processing/SwirAdaptiveBprCorrector.cpp
+    src/backend/processing/SwirColumnProfileCorrector.cpp
     include/backend/CameraTypes.hpp
     include/backend/ICameraController.hpp
     include/backend/CameraWorker.hpp
@@ -164,7 +164,7 @@ qt_add_executable(app
     include/backend/processing/SwirBprCorrector.hpp
     include/backend/processing/SwirBprCalpackMap.hpp
     include/backend/processing/SwirBprApply.hpp
-    include/backend/processing/SwirAdaptiveBprCorrector.hpp
+    include/backend/processing/SwirColumnProfileCorrector.hpp
     # adapters — vendor SDK / hardware
     src/adapters/zaber/ZaberStageController.cpp
     src/adapters/zaber/ZaberStageConfigurator.cpp

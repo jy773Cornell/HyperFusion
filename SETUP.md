@@ -104,7 +104,7 @@ Copied next to `app.exe` on build. **Reloaded on every app start.** Edit for eac
 
 | Section                   | Purpose                                                                                                             |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `[camera_calibration]`    | Spatial scale, spectral metadata (record-only FWHM keys), SWIR3 AutoNUC and adaptive BPR                            |
+| `[camera_calibration]`    | Spatial scale, spectral metadata (record-only FWHM keys), SWIR3 AutoNUC and column profile destripe                  |
 | `[sample_stage_position]` | White/bright/sample scan positions (mm), dual-camera offset                                                         |
 | `[scanning_settings]`     | Scan speed, acceleration, ref frame counts, `fx10e_transmittance_exp`, `swir_transmittance_exp` (dual-mode capture) |
 | `[lighthouse]`            | Idle / reflectance / transmittance intensity (%)                                                                    |

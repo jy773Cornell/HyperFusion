@@ -61,13 +61,13 @@ struct HardwareConfig
         WavelengthRangeNm swirFalseColorBlue{950.0, 1050.0};
         /// SWIR3: enable Camera.AutoNUC after timing apply (SDK picks NUC table for exposure).
         bool swir3AutoNuc = true;
-        /// SWIR3: stream-adaptive software BPR (disables SDK Camera.BPR when true).
-        bool swir3AdaptiveBpr = false;
-        double swir3AdaptiveBprGainMin = 0.3;
-        double swir3AdaptiveBprGainMax = 1.5;
-        double swir3AdaptiveBprMinNeighborDn = 64.0;
-        int swir3AdaptiveBprMinHits = 3;
-        int swir3AdaptiveBprMaxPixels = 4096;
+        /// SWIR3: band-median spatial profile column destripe (disables SDK Camera.BPR when true).
+        bool swir3ColumnProfileCorrect = true;
+        int swir3ColumnProfileBaselineRadius = 12;
+        double swir3ColumnProfileValleyGainMin = 0.88;
+        double swir3ColumnProfileMinBandDn = 64.0;
+        int swir3ColumnProfileMinHits = 1;
+        double swir3ColumnProfileMinValleyDn = 0.0;
     };
 
     PreprocessingConfig preprocessing;
@@ -75,7 +75,7 @@ struct HardwareConfig
     struct SegmentationConfig
     {
         QString wslDistro = QStringLiteral("Ubuntu");
-        QString wslBashCommand = QStringLiteral("source ~/venvs/gsam2/bin/activate");
+        QString wslBashCommand;
         QString sam2RepoLinux;
         int serverPort = 8765;
         double boxThreshold = 0.30;

@@ -1,5 +1,5 @@
 // SWIR3 software bad-pixel replacement from Specim calpack bpr/bprmap.bpr (backend/processing).
-// Static calpack mask only. For stream-adaptive BPR see SwirAdaptiveBprCorrector.
+// Static calpack mask only. For SWIR3 column destripe see SwirColumnProfileCorrector.
 #pragma once
 
 #include "backend/CameraTypes.hpp"

@@ -105,10 +105,9 @@ QString Gsam2ServerManager::buildLaunchCommand() const
 {
     const hf::HardwareConfig::SegmentationConfig &cfg = hf::hardwareConfig().segmentation;
     const QString repoLinux = resolveSam2RepoLinuxPath();
-    const QString activate = cfg.wslBashCommand.trimmed();
     const QString warmupFlag = cfg.warmupOnStart ? QStringLiteral(" --warmup") : QString();
 
-    QString serverArgs = QStringLiteral("python gsam2_server.py --host 0.0.0.0 --port %1")
+    QString serverArgs = QStringLiteral("./venv/bin/python gsam2_server.py --host 0.0.0.0 --port %1")
                              .arg(cfg.serverPort);
     serverArgs += QStringLiteral(" --box-threshold %1").arg(cfg.boxThreshold, 0, 'g', 6);
     serverArgs += QStringLiteral(" --hf-model-id %1").arg(cfg.hfModelId);
@@ -120,8 +119,17 @@ QString Gsam2ServerManager::buildLaunchCommand() const
         serverArgs += QStringLiteral(" --multimask-output");
     serverArgs += warmupFlag;
 
-    QString inner = QStringLiteral("cd '%1' && %2 && %3")
-                        .arg(repoLinux, activate, serverArgs);
+    const QString extraShell = cfg.wslBashCommand.trimmed();
+    const bool skipExtraShell =
+        extraShell.isEmpty()
+        || extraShell == QStringLiteral("source ./venv/bin/activate")
+        || extraShell == QStringLiteral("source ~/venvs/gsam2/bin/activate");
+
+    QString inner;
+    if (skipExtraShell)
+        inner = QStringLiteral("cd '%1' && %2").arg(repoLinux, serverArgs);
+    else
+        inner = QStringLiteral("cd '%1' && %2 && %3").arg(repoLinux, extraShell, serverArgs);
     return inner;
 }
 

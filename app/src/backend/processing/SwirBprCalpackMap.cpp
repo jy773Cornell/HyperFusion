@@ -123,6 +123,52 @@ std::size_t SwirBprCalpackMap::badPixelCount() const
         std::count(mask.begin(), mask.end(), static_cast<std::uint8_t>(1)));
 }
 
+bool SwirBprCalpackMap::loadGeometryFromCalpack(const QString &calpackPath, QString *errorMessage)
+{
+    bands = 0;
+    samples = 0;
+    mask.clear();
+
+    QFile file(calpackPath);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("Could not open calibration pack: %1").arg(calpackPath);
+        return false;
+    }
+
+    const QByteArray zipBytes = file.readAll();
+    if (zipBytes.isEmpty())
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("Calibration pack is empty: %1").arg(calpackPath);
+        return false;
+    }
+
+    QString localError;
+    std::string headerText;
+    if (!extractStoredZipEntry(zipBytes, kBprHeaderEntry, headerText, localError))
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = localError;
+        return false;
+    }
+
+    int headerBands = 0;
+    int headerSamples = 0;
+    if (!parseEnviHeaderInt(headerText, "bands", headerBands) || headerBands <= 0
+        || !parseEnviHeaderInt(headerText, "samples", headerSamples) || headerSamples <= 0)
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("Invalid BPR ENVI header in calibration pack.");
+        return false;
+    }
+
+    bands = headerBands;
+    samples = headerSamples;
+    return true;
+}
+
 bool SwirBprCalpackMap::loadFromCalpack(const QString &calpackPath, QString *errorMessage)
 {
     bands = 0;

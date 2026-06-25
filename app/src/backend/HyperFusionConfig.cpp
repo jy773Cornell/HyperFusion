@@ -324,61 +324,66 @@ bool parseSwir3PreprocessingKey(const QString &key,
         return true;
     }
 
-    if (key == QStringLiteral("swir3_adaptive_bpr"))
+    if (key == QStringLiteral("swir3_column_profile_correct"))
     {
         if (value == QStringLiteral("true") || value == QStringLiteral("1")
             || value == QStringLiteral("yes") || value == QStringLiteral("on"))
-            preprocess.swir3AdaptiveBpr = true;
+            preprocess.swir3ColumnProfileCorrect = true;
         else if (value == QStringLiteral("false") || value == QStringLiteral("0")
                  || value == QStringLiteral("no") || value == QStringLiteral("off"))
-            preprocess.swir3AdaptiveBpr = false;
+            preprocess.swir3ColumnProfileCorrect = false;
         else
-            warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr (use true/false): %1").arg(value));
+            warnings.push_back(
+                QStringLiteral("Invalid swir3_column_profile_correct (use true/false): %1").arg(value));
         return true;
     }
 
-    if (key == QStringLiteral("swir3_adaptive_bpr_gain_min"))
+    if (key == QStringLiteral("swir3_column_profile_baseline_radius"))
     {
         if (!hasNumber)
-            warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_gain_min: %1").arg(value));
+            warnings.push_back(
+                QStringLiteral("Invalid swir3_column_profile_baseline_radius: %1").arg(value));
         else
-            preprocess.swir3AdaptiveBprGainMin = numericValue;
+            preprocess.swir3ColumnProfileBaselineRadius = static_cast<int>(numericValue);
         return true;
     }
 
-    if (key == QStringLiteral("swir3_adaptive_bpr_gain_max"))
+    if (key == QStringLiteral("swir3_column_profile_valley_gain_min"))
     {
         if (!hasNumber)
-            warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_gain_max: %1").arg(value));
+            warnings.push_back(
+                QStringLiteral("Invalid swir3_column_profile_valley_gain_min: %1").arg(value));
         else
-            preprocess.swir3AdaptiveBprGainMax = numericValue;
+            preprocess.swir3ColumnProfileValleyGainMin = numericValue;
         return true;
     }
 
-    if (key == QStringLiteral("swir3_adaptive_bpr_min_neighbor_dn"))
+    if (key == QStringLiteral("swir3_column_profile_min_band_dn"))
     {
         if (!hasNumber)
-            warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_min_neighbor_dn: %1").arg(value));
+            warnings.push_back(
+                QStringLiteral("Invalid swir3_column_profile_min_band_dn: %1").arg(value));
         else
-            preprocess.swir3AdaptiveBprMinNeighborDn = numericValue;
+            preprocess.swir3ColumnProfileMinBandDn = numericValue;
         return true;
     }
 
-    if (key == QStringLiteral("swir3_adaptive_bpr_min_hits"))
+    if (key == QStringLiteral("swir3_column_profile_min_hits"))
     {
         if (!hasNumber)
-            warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_min_hits: %1").arg(value));
+            warnings.push_back(QStringLiteral("Invalid swir3_column_profile_min_hits: %1").arg(value));
         else
-            preprocess.swir3AdaptiveBprMinHits = static_cast<int>(numericValue);
+            preprocess.swir3ColumnProfileMinHits = static_cast<int>(numericValue);
         return true;
     }
 
-    if (key == QStringLiteral("swir3_adaptive_bpr_max_pixels"))
+    if (key == QStringLiteral("swir3_column_profile_min_valley_dn"))
     {
         if (!hasNumber)
-            warnings.push_back(QStringLiteral("Invalid swir3_adaptive_bpr_max_pixels: %1").arg(value));
+            warnings.push_back(
+                QStringLiteral("Invalid swir3_column_profile_min_valley_dn: %1").arg(value));
         else
-            preprocess.swir3AdaptiveBprMaxPixels = static_cast<int>(numericValue);
+            preprocess.swir3ColumnProfileMinValleyDn = numericValue;
         return true;
     }
 
@@ -899,13 +904,13 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "swir3_spectral_fwhm_nm = 12\n"
         << "# SWIR3: enable Camera.AutoNUC when timing is applied.\n"
         << "swir3_auto_nuc = true\n"
-        << "# SWIR3: stream-adaptive software BPR (turns off SDK Camera.BPR when true).\n"
-        << "swir3_adaptive_bpr = false\n"
-        << "swir3_adaptive_bpr_gain_min = 0.3\n"
-        << "swir3_adaptive_bpr_gain_max = 1.5\n"
-        << "swir3_adaptive_bpr_min_neighbor_dn = 64\n"
-        << "swir3_adaptive_bpr_min_hits = 3\n"
-        << "swir3_adaptive_bpr_max_pixels = 4096\n"
+        << "# SWIR3: column destripe from band-median spatial profile (disables SDK Camera.BPR).\n"
+        << "swir3_column_profile_correct = true\n"
+        << "swir3_column_profile_baseline_radius = 12\n"
+        << "swir3_column_profile_valley_gain_min = 0.88\n"
+        << "swir3_column_profile_min_band_dn = 64\n"
+        << "swir3_column_profile_min_hits = 1\n"
+        << "swir3_column_profile_min_valley_dn = 0\n"
         << "\n"
         << "[sample_stage_position]\n"
         << "distance_dual_camera_mm = 190\n"
@@ -953,7 +958,8 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "[segmentation]\n"
         << "# GSAM2 sidecar (WSL). sam2_repo_linux empty = auto from resources/gsam2.\n"
         << "wsl_distro = Ubuntu\n"
-        << "wsl_bash_command = source ./venv/bin/activate\n"
+        << "# Optional extra shell before server start. Leave empty — app uses ./venv/bin/python.\n"
+        << "wsl_bash_command = \n"
         << "sam2_repo_linux = \n"
         << "server_port = 8765\n"
         << "box_threshold = 0.30\n"
