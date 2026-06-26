@@ -172,7 +172,8 @@ QWidget *MainWindow::createCaptureSettingsTab()
     auto *positionBox = new QGroupBox(QStringLiteral("Position"), page);
     capturePositionBox_ = positionBox;
     positionBox->setToolTip(
-        tr("Requires a connected camera and stage. Configure scan position, target length, and speed."));
+        tr("Requires a connected camera and stage. Configure target length and scan speed. "
+           "Reference positions come from hyperfusion.cfg."));
     auto *positionLayout = new QVBoxLayout(positionBox);
     positionLayout->setContentsMargins(6, 4, 6, 6);
     positionLayout->setSpacing(6);
@@ -202,53 +203,6 @@ QWidget *MainWindow::createCaptureSettingsTab()
     auto *positionContentLayout = new QVBoxLayout(capturePositionContent_);
     positionContentLayout->setContentsMargins(0, 0, 0, 0);
     positionContentLayout->setSpacing(6);
-
-    for (std::size_t cameraIndex = 0; cameraIndex < 2; ++cameraIndex)
-    {
-        auto *rowWidget = new QWidget(capturePositionContent_);
-        auto *rowLayout = new QHBoxLayout(rowWidget);
-        rowLayout->setContentsMargins(0, 0, 0, 0);
-        rowLayout->setSpacing(6);
-
-        auto *rowLabel = new QLabel(rowWidget);
-        rowLabel->setMinimumWidth(120);
-        captureCameraPositionSpins_[cameraIndex] = new QDoubleSpinBox(rowWidget);
-        captureCameraPositionSpins_[cameraIndex]->setRange(zaber_stage::kTravelMinimumMm,
-                                                            zaber_stage::kTravelLengthMm);
-        captureCameraPositionSpins_[cameraIndex]->setDecimals(2);
-        captureCameraPositionSpins_[cameraIndex]->setSingleStep(1.0);
-        captureCameraPositionSpins_[cameraIndex]->setSuffix(QStringLiteral(" mm"));
-        captureCameraPositionSpins_[cameraIndex]->setValue(0.0);
-
-        auto *goBtn = ui::makeCaptureCompactWhiteButton(rowWidget, QStringLiteral("Go"));
-        rowLayout->addWidget(rowLabel);
-        rowLayout->addWidget(captureCameraPositionSpins_[cameraIndex], 1);
-        rowLayout->addWidget(goBtn);
-        positionContentLayout->addWidget(rowWidget);
-        captureCameraPositionRows_[cameraIndex] = rowWidget;
-        rowWidget->hide();
-
-        connect(goBtn, &QPushButton::clicked, this, [this, cameraIndex]() {
-            LumoCameraUi &cameraUi = cameraIndex == 0 ? camera1Ui_ : camera2Ui_;
-            if (stageWorker() == nullptr || captureCameraPositionSpins_[cameraIndex] == nullptr)
-                return;
-            if (stageWorker()->currentState() != StageState::Connected)
-            {
-                appendLog(QString("Capture: stage not connected \u2014 cannot go to %1 position")
-                              .arg(cameraPanel()->profileTabNameForUi(cameraUi)));
-                return;
-            }
-
-            const QString label = QStringLiteral("%1 position").arg(cameraPanel()->profileTabNameForUi(cameraUi));
-            const double targetMm = captureCameraPositionSpins_[cameraIndex]->value();
-            const double speedMmPerSec = hf::hardwareConfig().operationScanningSpeedMmPerSec;
-            appendLog(QString("Capture: go to %1 (%2 mm @ %3 mm/s)")
-                              .arg(label)
-                              .arg(targetMm, 0, 'f', 2)
-                              .arg(speedMmPerSec, 0, 'f', 1));
-            stageWorker()->requestMoveAbsoluteMm(targetMm, speedMmPerSec);
-        });
-    }
 
     auto *targetLengthRowLayout = new QHBoxLayout();
     targetLengthRowLayout->setSpacing(6);
@@ -368,6 +322,22 @@ QWidget *MainWindow::createCaptureSettingsTab()
     gsamPromptLayout->addRow(QStringLiteral("Max samples"), captureGsamSampleCountSpin_);
     preprocessingLayout->addWidget(gsamPromptRow);
 
+    captureRunHfFusionCheck_ =
+        new QCheckBox(QStringLiteral("Run spectral fusion (FX10e + SWIR3)"), preprocessingBox);
+    captureRunHfFusionCheck_->setEnabled(false);
+    captureRunHfFusionCheck_->setToolTip(
+        tr("After preprocessing, align and fuse FX10e + SWIR3 cubes per chip ROI "
+           "for each illumination mode in the session (reflectance, transmittance, …). "
+           "Requires GSAM segmentation on both cameras and the hf_fusion Python "
+           "environment beside the app."));
+    preprocessingLayout->addWidget(captureRunHfFusionCheck_);
+
+    captureRunFusionManualBtn_ =
+        new QPushButton(QStringLiteral("Run fusion on session\u2026"), page);
+    captureRunFusionManualBtn_->setToolTip(
+        tr("Re-run spectral fusion on a saved session (all illumination modes with "
+           "fx10e + swir3). Available anytime; does not require a new scan."));
+
     auto *metadataBox = new QGroupBox(QStringLiteral("Metadata"), page);
     captureMetadataBox_ = metadataBox;
     auto *metadataForm = new QFormLayout(metadataBox);
@@ -456,6 +426,7 @@ QWidget *MainWindow::createCaptureSettingsTab()
     layout->addWidget(captureModesBox_);
     layout->addWidget(positionBox);
     layout->addWidget(preprocessingBox);
+    layout->addWidget(captureRunFusionManualBtn_);
     if (capturePanel() != nullptr)
     {
         capturePanel()->wireSettingsTabConnections();

@@ -4,6 +4,7 @@
 #include "backend/processing/FlatFieldCorrector.hpp"
 #include "backend/processing/Gsam2RoiAnalysis.hpp"
 #include "backend/processing/Gsam2SegmentationClient.hpp"
+#include "backend/processing/HfFusionRunner.hpp"
 #include "backend/processing/HsiToColor.hpp"
 #include "backend/processing/IlluminantTables.hpp"
 #include "backend/processing/ReferenceBuilder.hpp"
@@ -229,6 +230,8 @@ void writePreprocessedMetadataXml(const QString &metadataXmlPath,
                                                                     : QStringLiteral("no"));
     writeKey(QStringLiteral("run gsam segmentation"),
              options.runGsamSegmentation ? QStringLiteral("yes") : QStringLiteral("no"));
+    writeKey(QStringLiteral("run hf fusion"),
+             options.runHfFusion ? QStringLiteral("yes") : QStringLiteral("no"));
     if (!options.gsamPrompt.trimmed().isEmpty())
         writeKey(QStringLiteral("gsam prompt"), options.gsamPrompt.trimmed());
     if (options.runGsamSegmentation)
@@ -415,6 +418,8 @@ bool writeProcessingManifestJson(const QString &preprocessedDir,
     root.insert(QStringLiteral("sessionDirectory"), summary.sessionDirectory);
     root.insert(QStringLiteral("saveFfcImage"), options.saveFfcImage);
     root.insert(QStringLiteral("runGsamSegmentation"), options.runGsamSegmentation);
+    root.insert(QStringLiteral("runHfFusion"), options.runHfFusion);
+    root.insert(QStringLiteral("hfFusionMode"), options.hfFusionMode);
     root.insert(QStringLiteral("gsamPrompt"), options.gsamPrompt);
     root.insert(QStringLiteral("gsamSampleCount"), options.gsamSampleCount);
 
@@ -615,8 +620,9 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
     const FlatFieldParams ffcParams = flatFieldParamsFromConfig();
 
     QString ffcHdrForRgb = report.ffcHdrPath;
-    const bool keepFfcForSegmentation = options.runGsamSegmentation && !options.saveFfcImage;
-    if (!options.saveFfcImage)
+    const bool writeFfcToSession = options.saveFfcImage || options.runHfFusion;
+    const bool keepFfcForSegmentation = options.runGsamSegmentation && !writeFfcToSession;
+    if (!writeFfcToSession)
     {
         ffcHdrForRgb = QDir(preprocessedDir).filePath(ffcBaseName + QStringLiteral("_tmp.hdr"));
         QFile::remove(QDir(preprocessedDir).filePath(ffcBaseName + QStringLiteral("_tmp.raw")));
@@ -642,8 +648,8 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
         return report;
     }
 
-    report.ffcOk = options.saveFfcImage;
-    if (options.saveFfcImage)
+    report.ffcOk = writeFfcToSession;
+    if (writeFfcToSession)
     {
         logLines.push_back(QStringLiteral("Capture post-process (%1): wrote %2")
                                .arg(streamLabel, QFileInfo(report.ffcRawPath).fileName()));
@@ -733,7 +739,7 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
             report.errorMessage =
                 segError.isEmpty() ? QStringLiteral("GSAM2 segmentation failed.") : segError;
             logLines.push_back(QStringLiteral("Capture post-process (%1): %2").arg(streamLabel, report.errorMessage));
-            if (!options.saveFfcImage && keepFfcForSegmentation)
+            if (!writeFfcToSession && keepFfcForSegmentation)
             {
                 QFile::remove(ffcHdrForRgb);
                 QFile::remove(QDir(preprocessedDir).filePath(ffcBaseName + QStringLiteral("_tmp.raw")));
@@ -760,7 +766,7 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
                                       ? QStringLiteral("GSAM2 ROI analysis failed.")
                                       : roiResult.errorMessage;
             logLines.push_back(QStringLiteral("Capture post-process (%1): %2").arg(streamLabel, report.errorMessage));
-            if (!options.saveFfcImage && keepFfcForSegmentation)
+            if (!writeFfcToSession && keepFfcForSegmentation)
             {
                 QFile::remove(ffcHdrForRgb);
                 QFile::remove(QDir(preprocessedDir).filePath(ffcBaseName + QStringLiteral("_tmp.raw")));
@@ -775,7 +781,7 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
                                .arg(streamLabel));
     }
 
-    if (!options.saveFfcImage)
+    if (!writeFfcToSession)
     {
         QFile::remove(ffcHdrForRgb);
         QFile::remove(QDir(preprocessedDir).filePath(ffcBaseName + QStringLiteral("_tmp.raw")));
@@ -839,6 +845,30 @@ CapturePostProcessResult processCaptureSession(const CaptureWriterSessionSummary
         if (!datasetName.isEmpty())
             updateDatasetManifestForPreprocessing(summary.sessionDirectory, datasetName, reports,
                                                   options);
+    }
+
+    if (options.runHfFusion)
+    {
+        if (!allOk)
+        {
+            result.logLines.push_back(
+                QStringLiteral("Capture fusion: skipped because per-camera post-process had errors."));
+        }
+        else
+        {
+            const HfFusionSessionResult fusionResult = runSessionFusion(summary.sessionDirectory);
+            result.logLines.append(fusionResult.logLines);
+            if (!fusionResult.success)
+            {
+                result.success = false;
+                if (!result.logLines.isEmpty()
+                    && result.logLines.front().contains(QStringLiteral("completed successfully")))
+                {
+                    result.logLines[0] =
+                        QStringLiteral("Capture post-process: completed with errors.");
+                }
+            }
+        }
     }
 
     return result;

@@ -13,6 +13,8 @@
 #include "backend/StageWorker.hpp"
 #include "backend/processing/CapturePostProcessorWorker.hpp"
 #include "backend/processing/Gsam2ServerManager.hpp"
+#include "backend/processing/HfFusionRunner.hpp"
+#include "backend/processing/HfFusionWorker.hpp"
 #include "frontend/controllers/CameraPanelController.hpp"
 #include "frontend/controllers/LightPanelController.hpp"
 #include "frontend/controllers/StagePanelController.hpp"
@@ -26,6 +28,7 @@
 #include <QCheckBox>
 #include <QDir>
 #include <QDoubleSpinBox>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QGridLayout>
 #include <QGroupBox>
@@ -98,6 +101,13 @@ void CapturePanelController::initializeWorkers() {
         this, [this]() { updateRecorderControls(); }, Qt::QueuedConnection);
   });
   capturePostProcessorWorker_->start();
+
+  hfFusionWorker_ = std::make_unique<HfFusionWorker>();
+  hfFusionWorker_->setStatusListener([this]() {
+    QMetaObject::invokeMethod(
+        this, [this]() { updateRecorderControls(); }, Qt::QueuedConnection);
+  });
+  hfFusionWorker_->start();
 
   gsam2ServerManager_ =
       std::make_unique<hf::processing::Gsam2ServerManager>(host_);
@@ -350,6 +360,10 @@ void CapturePanelController::wireSettingsTabConnections() {
   if (host_->captureRecorderRecordBtn_ != nullptr) {
     connect(host_->captureRecorderRecordBtn_, &QPushButton::clicked, this,
             &CapturePanelController::startRecord, Qt::UniqueConnection);
+  }
+  if (host_->captureRunFusionManualBtn_ != nullptr) {
+    connect(host_->captureRunFusionManualBtn_, &QPushButton::clicked, this,
+            &CapturePanelController::runManualFusion, Qt::UniqueConnection);
   }
 }
 
@@ -937,6 +951,9 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
   const bool postProcessActive =
       capturePostProcessorWorker_ != nullptr &&
       capturePostProcessorWorker_->queueStatus().outstandingTotal() > 0;
+  const bool fusionWorkerActive =
+      hfFusionWorker_ != nullptr && hfFusionWorker_->isBusy();
+  const bool backgroundJobActive = postProcessActive || fusionWorkerActive;
 
   const bool captureHardwareReady = stageConnected && anyCameraConnected;
   const bool positionBoxEnabled = captureHardwareReady && !scanActive;
@@ -994,7 +1011,7 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
     } else {
       host_->capturePreprocessingBox_->setToolTip(
           tr("Post-processing runs after a stage scan completes (FFC, optional "
-             "GSAM segmentation)."));
+             "GSAM segmentation, optional spectral fusion per illumination mode)."));
     }
   }
 
@@ -1028,6 +1045,43 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
              "and ROI spectra under preprocessed/segmentation/."));
     }
   }
+  const bool dualCameraReflectanceSelected =
+      bothFx10eAndSwir3CaptureCamerasConnected() &&
+      host_->captureCamera1Check_ != nullptr &&
+      host_->captureCamera2Check_ != nullptr &&
+      host_->captureCamera1Check_->isChecked() &&
+      host_->captureCamera2Check_->isChecked();
+  const bool fusionChildEnabled =
+      preprocessingEnabled && host_->capturePreprocessAfterScanCheck_ != nullptr &&
+      host_->capturePreprocessAfterScanCheck_->isChecked();
+  const bool fusionEnabled = fusionChildEnabled && dualCameraReflectanceSelected;
+  if (host_->captureRunHfFusionCheck_ != nullptr) {
+    host_->captureRunHfFusionCheck_->setEnabled(fusionEnabled);
+    if (!dualCameraReflectanceSelected) {
+      host_->captureRunHfFusionCheck_->setToolTip(
+          tr("Requires FX10e and SWIR3 connected and both selected for capture."));
+    } else {
+      host_->captureRunHfFusionCheck_->setToolTip(
+          tr("After preprocessing, align and fuse FX10e + SWIR3 cubes per chip ROI "
+             "for each illumination mode in the session (reflectance, transmittance, …). "
+             "Requires GSAM segmentation on both cameras and the hf_fusion Python environment "
+             "beside the app."));
+    }
+  }
+  if (host_->captureRunFusionManualBtn_ != nullptr) {
+    const bool fusionRunning =
+        hfFusionWorker_ != nullptr && hfFusionWorker_->isBusy();
+    host_->captureRunFusionManualBtn_->setEnabled(!fusionRunning);
+    host_->captureRunFusionManualBtn_->setText(
+        fusionRunning ? tr("Running\u2026")
+                      : tr("Run fusion on session\u2026"));
+    host_->captureRunFusionManualBtn_->setToolTip(
+        fusionRunning
+            ? tr("Spectral fusion is running in the background.")
+            : tr("Re-run spectral fusion on a saved capture session without scanning again. "
+                 "Runs fusion for every illumination folder that contains fx10e and swir3 "
+                 "(e.g. reflectance and transmittance)."));
+  }
   if (host_->captureGsamPromptEdit_ != nullptr)
     host_->captureGsamPromptEdit_->setEnabled(gsamSegmentationEnabled);
   if (host_->captureGsamSampleCountSpin_ != nullptr)
@@ -1053,14 +1107,14 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
 
   if (host_->captureRecorderRecordBtn_ != nullptr) {
     host_->captureRecorderRecordBtn_->setEnabled(
-        anyCameraConnected && !scanActive && !postProcessActive);
+        anyCameraConnected && !scanActive && !backgroundJobActive);
     if (!anyCameraConnected) {
       host_->captureRecorderRecordBtn_->setToolTip(tr(
           "Connect at least one camera on the Camera tab to enable recording"));
-    } else if (postProcessActive) {
+    } else if (backgroundJobActive) {
       host_->captureRecorderRecordBtn_->setToolTip(
-          tr("Wait for background post-processing to finish before starting a "
-             "new record"));
+          tr("Wait for background post-processing or fusion to finish before "
+             "starting a new record"));
     } else if (useStage) {
       host_->captureRecorderRecordBtn_->setToolTip(
           tr("Run full scan sequence (black ref, white ref, sample) and save "
@@ -1203,12 +1257,17 @@ void hf::capture::CapturePanelController::updateRecorderStatus() {
   const bool postProcessActive =
       capturePostProcessorWorker_ != nullptr &&
       capturePostProcessorWorker_->queueStatus().outstandingTotal() > 0;
+  const bool fusionWorkerActive =
+      hfFusionWorker_ != nullptr && hfFusionWorker_->isBusy();
+  const bool backgroundJobActive = postProcessActive || fusionWorkerActive;
 
   if (captureRecorderMode_ == CaptureRecorderMode::Idle) {
-    if (postProcessActive) {
+    if (backgroundJobActive) {
       setIndicator(QStringLiteral("#f39c12"));
       host_->captureRecorderStatusLabel_->setText(
-          tr("Processing previous capture in background\u2026"));
+          fusionWorkerActive && !postProcessActive
+              ? tr("Running spectral fusion in background\u2026")
+              : tr("Processing previous capture in background\u2026"));
       clearRecorderCameraStatusLabels();
       return;
     }
@@ -2797,6 +2856,62 @@ void hf::capture::CapturePanelController::completeCaptureSequence() {
   }
 }
 
+void hf::capture::CapturePanelController::runManualFusion() {
+  if (hfFusionWorker_ == nullptr)
+    return;
+
+  if (hfFusionWorker_->isBusy()) {
+    host_->appendLog(
+        QStringLiteral("Capture fusion: already running; wait for the current job to finish."));
+    return;
+  }
+
+  QString startDir = lastEndedCaptureSessionSummary_.sessionDirectory;
+  if (startDir.isEmpty() && host_->captureSaveFolderEdit_ != nullptr &&
+      host_->captureDatasetEdit_ != nullptr) {
+    const QString saveFolder = host_->captureSaveFolderEdit_->text().trimmed();
+    const QString dataset = host_->captureDatasetEdit_->text().trimmed();
+    if (!saveFolder.isEmpty() && !dataset.isEmpty())
+      startDir = QDir(saveFolder).filePath(dataset);
+  }
+
+  if (startDir.isEmpty() || !QDir(startDir).exists())
+    startDir = QDir::homePath();
+
+  const QString path = QFileDialog::getExistingDirectory(
+      host_, tr("Select capture session for fusion"), startDir);
+  if (path.isEmpty())
+    return;
+
+  const QStringList modes =
+      hf::processing::fusionIlluminationModesForSession(path);
+  if (modes.isEmpty()) {
+    QMessageBox::warning(
+        host_, tr("Spectral fusion"),
+        tr("No illumination folders with fx10e and swir3 were found under:\n%1")
+            .arg(path));
+    return;
+  }
+
+  host_->appendLog(
+      QStringLiteral("Capture fusion: manual run started for %1 (%2)")
+          .arg(path, modes.join(QStringLiteral(", "))));
+
+  hfFusionWorker_->requestFusion(
+      path, {},
+      [this](const hf::processing::HfFusionSessionResult &result) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, result]() {
+              for (const QString &line : result.logLines)
+                host_->appendLog(line);
+              updateRecorderControls();
+            },
+            Qt::QueuedConnection);
+      });
+  updateRecorderControls();
+}
+
 void hf::capture::CapturePanelController::runCapturePostProcessingIfEnabled() {
   if (host_->capturePreprocessAfterScanCheck_ == nullptr ||
       !host_->capturePreprocessAfterScanCheck_->isChecked())
@@ -2816,6 +2931,8 @@ void hf::capture::CapturePanelController::runCapturePostProcessingIfEnabled() {
                          host_->captureSaveFfcImageCheck_->isChecked();
   options.runGsamSegmentation = host_->captureRunGsamCheck_ != nullptr &&
                                 host_->captureRunGsamCheck_->isChecked();
+  options.runHfFusion = host_->captureRunHfFusionCheck_ != nullptr &&
+                        host_->captureRunHfFusionCheck_->isChecked();
   if (host_->captureGsamPromptEdit_ != nullptr)
     options.gsamPrompt = host_->captureGsamPromptEdit_->text().trimmed();
   if (host_->captureGsamSampleCountSpin_ != nullptr)
@@ -2831,6 +2948,12 @@ void hf::capture::CapturePanelController::runCapturePostProcessingIfEnabled() {
                          "server is not running \u2014 "
                          "start the GSAM server or disable segmentation."));
     }
+  }
+
+  if (options.runHfFusion && !options.runGsamSegmentation) {
+    host_->appendLog(
+        QStringLiteral("Capture post-process: spectral fusion enabled but GSAM "
+                       "segmentation is off \u2014 fusion needs chip masks on both cameras."));
   }
 
   host_->appendLog(
@@ -3372,68 +3495,6 @@ bool hf::capture::CapturePanelController::selectedCaptureCameraStreaming(
   }
 
   return true;
-}
-
-double
-hf::capture::CapturePanelController::closestSelectedCaptureCameraPositionMm(
-    bool *hasSelection) const {
-  if (hasSelection != nullptr)
-    *hasSelection = false;
-
-  std::vector<std::size_t> cameraIndices;
-  if (!selectedCaptureCameraIndices(cameraIndices))
-    return 0.0;
-
-  double closestMm = zaber_stage::kTravelLengthMm;
-  bool found = false;
-  for (const std::size_t index : cameraIndices) {
-    if (host_->captureCameraPositionSpins_[index] == nullptr)
-      continue;
-
-    found = true;
-    closestMm =
-        std::min(closestMm, host_->captureCameraPositionSpins_[index]->value());
-  }
-
-  if (hasSelection != nullptr)
-    *hasSelection = found;
-
-  return closestMm;
-}
-
-double hf::capture::CapturePanelController::closestCaptureCameraPositionMm(
-    bool *hasPosition) const {
-  bool hasSelected = false;
-  const double selectedClosest =
-      closestSelectedCaptureCameraPositionMm(&hasSelected);
-  if (hasSelected) {
-    if (hasPosition != nullptr)
-      *hasPosition = true;
-    return selectedClosest;
-  }
-
-  const auto isConnected = [](const LumoCameraUi &ui) {
-    return ui.state != CameraState::Disconnected &&
-           ui.state != CameraState::Fault;
-  };
-
-  double closestMm = zaber_stage::kTravelLengthMm;
-  bool found = false;
-  const LumoCameraUi *cameras[] = {&host_->camera1Ui_, &host_->camera2Ui_};
-  for (std::size_t index = 0; index < 2; ++index) {
-    if (!isConnected(*cameras[index]) ||
-        host_->captureCameraPositionSpins_[index] == nullptr)
-      continue;
-
-    found = true;
-    closestMm =
-        std::min(closestMm, host_->captureCameraPositionSpins_[index]->value());
-  }
-
-  if (hasPosition != nullptr)
-    *hasPosition = found;
-
-  return closestMm;
 }
 
 bool hf::capture::CapturePanelController::selectedCaptureIlluminationModes(
@@ -4009,7 +4070,6 @@ void hf::capture::CapturePanelController::updateCamerasList() {
     host_->captureCamerasEmptyLabel_->setHidden(anyConnected);
   }
 
-  updateCaptureCameraPositionRows();
   updateCaptureStreamLayout();
 }
 
@@ -4110,34 +4170,6 @@ void hf::capture::CapturePanelController::updateCaptureStreamLayout() {
 
   if (host_->cameraPanel() != nullptr)
     host_->cameraPanel()->refreshWaterfallDisplayTargets();
-}
-
-void hf::capture::CapturePanelController::updateCaptureCameraPositionRows() {
-  const auto isConnected = [](const LumoCameraUi &ui) {
-    return ui.state != CameraState::Disconnected &&
-           ui.state != CameraState::Fault;
-  };
-
-  LumoCameraUi *cameras[] = {&host_->camera1Ui_, &host_->camera2Ui_};
-
-  for (std::size_t cameraIndex = 0; cameraIndex < 2; ++cameraIndex) {
-    QWidget *row = host_->captureCameraPositionRows_[cameraIndex];
-    if (row == nullptr)
-      continue;
-
-    if (!isConnected(*cameras[cameraIndex])) {
-      row->hide();
-      continue;
-    }
-
-    const QString rowLabel = QStringLiteral("%1 position")
-                                 .arg(host_->cameraPanel()->profileTabNameForUi(
-                                     *cameras[cameraIndex]));
-    if (QLabel *label = row->findChild<QLabel *>())
-      label->setText(rowLabel);
-
-    row->show();
-  }
 }
 
 bool hf::capture::CapturePanelController::

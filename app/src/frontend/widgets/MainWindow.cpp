@@ -231,8 +231,6 @@ void MainWindow::onSettingsTabChanged(const int index)
     else if (index == kSettingsTabCapture)
     {
         capturePanel_->updateCamerasList();
-        if (capturePanel_ != nullptr)
-            capturePanel_->updateCaptureCameraPositionRows();
         if (stagePanel_->worker() != nullptr)
             capturePanel_->updatePositionControls(stagePanel_->worker()->currentState());
     }

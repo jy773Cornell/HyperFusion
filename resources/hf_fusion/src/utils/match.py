@@ -1,7 +1,6 @@
-# Object matching and median-shift estimation for dual-camera fusion alignment.
+# Object matching for dual-camera fusion alignment.
 from __future__ import annotations
 
-import statistics
 from dataclasses import dataclass
 
 
@@ -26,16 +25,12 @@ class MatchedPair:
 
 
 @dataclass(frozen=True)
-class ShiftEstimate:
+class PerRoiShift:
+    pair: MatchedPair
     dx_mm: float
     dy_mm: float
     dx_px: float
     dy_px: float
-    matched_count: int
-    residual_std_mm: tuple[float, float]
-    pairs: list[MatchedPair]
-    low_confidence: bool
-    review_required: bool
 
 
 def _sort_left_to_right(records: list[CentroidRecord]) -> list[CentroidRecord]:
@@ -68,8 +63,8 @@ def match_by_sorted_order(
             f"Object count mismatch: fx10e={len(fx_sorted)} swir3={len(sw_sorted)} "
             "(Hungarian matching not implemented yet; need equal counts)"
         )
-    if len(fx_sorted) < 2:
-        raise ValueError(f"Need at least 2 matched objects for median shift, got {len(fx_sorted)}")
+    if len(fx_sorted) < 1:
+        raise ValueError(f"Need at least 1 matched object, got {len(fx_sorted)}")
 
     pairs: list[MatchedPair] = []
     for index, (fx, sw) in enumerate(zip(fx_sorted, sw_sorted)):
@@ -92,31 +87,27 @@ def match_by_sorted_order(
     return pairs
 
 
-def estimate_median_shift(
-    pairs: list[MatchedPair],
-    fx_mm_per_pixel: float,
-    residual_std_review_mm: float = 5.0,
-) -> ShiftEstimate:
+def per_roi_shifts(pairs: list[MatchedPair], fx_mm_per_pixel: float) -> list[PerRoiShift]:
+    return [
+        PerRoiShift(
+            pair=pair,
+            dx_mm=pair.delta_mm[0],
+            dy_mm=pair.delta_mm[1],
+            dx_px=pair.delta_mm[0] / fx_mm_per_pixel,
+            dy_px=pair.delta_mm[1] / fx_mm_per_pixel,
+        )
+        for pair in pairs
+    ]
+
+
+def shift_spread_mm(pairs: list[MatchedPair]) -> dict[str, float]:
     dx_values = [pair.delta_mm[0] for pair in pairs]
     dy_values = [pair.delta_mm[1] for pair in pairs]
-    dx_mm = statistics.median(dx_values)
-    dy_mm = statistics.median(dy_values)
-
-    if len(pairs) >= 2:
-        residual_dx = statistics.stdev([value - dx_mm for value in dx_values])
-        residual_dy = statistics.stdev([value - dy_mm for value in dy_values])
-    else:
-        residual_dx = 0.0
-        residual_dy = 0.0
-
-    return ShiftEstimate(
-        dx_mm=dx_mm,
-        dy_mm=dy_mm,
-        dx_px=dx_mm / fx_mm_per_pixel,
-        dy_px=dy_mm / fx_mm_per_pixel,
-        matched_count=len(pairs),
-        residual_std_mm=(residual_dx, residual_dy),
-        pairs=pairs,
-        low_confidence=len(pairs) < 2,
-        review_required=residual_dx > residual_std_review_mm or residual_dy > residual_std_review_mm,
-    )
+    return {
+        "dx_min": min(dx_values),
+        "dx_max": max(dx_values),
+        "dy_min": min(dy_values),
+        "dy_max": max(dy_values),
+        "dx_spread": max(dx_values) - min(dx_values),
+        "dy_spread": max(dy_values) - min(dy_values),
+    }

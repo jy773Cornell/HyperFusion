@@ -14,6 +14,7 @@ struct PersistedCapturePosition
     bool preprocessAfterScan = true;
     bool saveFfcImage = true;
     bool runGsamSegmentation = false;
+    bool runHfFusion = false;
     QString gsamPrompt = QStringLiteral("sample.");
     int gsamSampleCount = 5;
     bool dualCameraAutoSync = true;

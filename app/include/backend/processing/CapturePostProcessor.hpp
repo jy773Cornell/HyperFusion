@@ -21,6 +21,8 @@ struct CapturePostProcessOptions
     QString gsamPrompt;
     int gsamSampleCount = 5;
     QString gsamServerUrl = QStringLiteral("http://127.0.0.1:8765");
+    bool runHfFusion = false;
+    QString hfFusionMode = QStringLiteral("reflectance");
 };
 
 CapturePostProcessResult processCaptureSession(const CaptureWriterSessionSummary &summary,

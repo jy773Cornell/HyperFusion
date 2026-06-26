@@ -19,20 +19,23 @@ This document guides how to use the HyperFusion software prototype.
   - [6.4 Position and scanning](#64-position-and-scanning)
   - [6.5 Typical staged Record workflow](#65-typical-staged-record-workflow)
   - [6.6 Output data](#66-output-data)
-  - [6.7 Capture stream tab](#67-capture-stream-tab)
+  - [6.7 Post-processing and spectral fusion](#67-post-processing-and-spectral-fusion)
+  - [6.8 Capture stream tab](#68-capture-stream-tab)
 7. [UR3e tab](#7-ur3e-tab)
-8. [Configuration — `hyperfusion.cfg](#8-configuration--hyperfusioncfg)`
+8. [Configuration — `hyperfusion.cfg`](#8-configuration--hyperfusioncfg)
   - `[[sample_stage_position]](#sample_stage_position-mm)`
   - `[[camera_calibration]](#camera_calibration)`
   - `[[scanning_settings]](#scanning_settings)`
   - `[[lighthouse]](#lighthouse)`
   - `[[preprocessing]](#preprocessing)`
   - `[[segmentation]` (GSAM)](#segmentation-optional-gsam)
+  - `[[fusion]`](#fusion-dual-camera)
 9. [SWIR3 image quality — NUC and column profile destripe](#9-swir3-image-quality--nuc-and-column-profile-destripe)
   - [Auto NUC](#auto-nuc-swir3_auto_nuc--true)
   - [Column profile destripe](#column-profile-destripe-swir3_column_profile_correct--true)
 10. [Optional — GSAM2 segmentation](#10-optional--gsam2-segmentation)
-11. [Quick reference — daily operator flow](#11-quick-reference--daily-operator-flow)
+11. [Dual-camera spectral fusion](#11-dual-camera-spectral-fusion)
+12. [Quick reference — daily operator flow](#12-quick-reference--daily-operator-flow)
 
 ---
 
@@ -225,7 +228,25 @@ Sessions are saved under **Save folder / Dataset name**:
 
 Each stream folder contains `**.raw`** line files (and reference files when a staged scan ran). Post-processing (FFC, ENVI export, SWIR false-color PNG) runs in the background after capture when configured. Open the session path from the log or recorder status label.
 
-### 6.7 Capture stream tab
+When **spectral fusion** is enabled (see §6.7), fused products are written under each illumination mode, e.g. `dataset/reflectance/fusion/` (see §11).
+
+### 6.7 Post-processing and spectral fusion
+
+In the **Preprocessing** group (Capture tab):
+
+
+| Control | Purpose |
+| ------- | ------- |
+| **Preprocess the image when the scanning is done** | Master switch for post-capture FFC, export, GSAM, and fusion. Requires a **staged stage scan** with dark/white references. |
+| **Save FFC image** | Write flat-field corrected ENVI cubes under `preprocessed/`. Fusion can run without this checked — FFC cubes are still produced internally when fusion is on. |
+| **Run GSAM segmentation** | Chip masks via GSAM2 WSL server → `preprocessed/segmentation/`. **Required for fusion.** |
+| **Run spectral fusion (FX10e + SWIR3)** | After FFC + GSAM, align and fuse VNIR + SWIR per chip ROI for **each illumination mode** in the session (reflectance, transmittance, …). Enabled only when **both cameras** are connected and selected for capture. |
+| **Run fusion on session…** | Re-run fusion offline on a saved session folder (all modes that contain `fx10e` and `swir3`). Does not require a new scan. |
+
+
+Fusion runs in the background after post-processing. Watch the **Log** for lines starting with `Capture fusion:`.
+
+### 6.8 Capture stream tab
 
 While recording, the **Capture** stream tab can show waterfalls for connected cameras to monitor scan progress.
 
@@ -302,6 +323,21 @@ Idle, reflectance, and transmittance intensity percentages.
 
 WSL distro, port, and model paths for the GSAM2 sidecar. See `resources/gsam2/envsetup.md`.
 
+### `[fusion]` (dual-camera)
+
+Offline **spatial registration** and **spectral fusion** of FX10e + SWIR3 (Python subprocess). See §11 and `resources/hf_fusion/README.md`.
+
+
+| Key | Meaning |
+| --- | ------- |
+| `fusion_margin_mm` | Crop margin around chip masks when fusing (default **5.0** mm) |
+| `fusion_timeout_ms` | Max wait for one fusion subprocess (default 3600000 ms) |
+
+Pipeline and Python venv are always `{app}/hf_fusion/` and `{app}/hf_fusion/.venv/` (run `setup_venv.ps1` once).
+
+
+Spatial scales for alignment come from `[camera_calibration]` (`fx10e_spatial_mm_per_pixel`, `swir3_spatial_mm_per_pixel`).
+
 ---
 
 ## 9. SWIR3 image quality — NUC and column profile destripe
@@ -345,7 +381,68 @@ Not required for camera operation or `.raw` recording.
 
 ---
 
-## 11. Quick reference — daily operator flow
+## 11. Dual-camera spectral fusion
+
+HyperFusion can combine **VNIR (FX10e)** and **SWIR (SWIR3)** into one spatially aligned, spectrally continuous dataset per detected chip. This runs **after capture** as an offline Python pipeline (`hf_fusion/`), launched by the app as a one-shot subprocess.
+
+### What it does
+
+1. **Spatial registration** — Upsample SWIR to the FX10e ground grid, match chip centroids, apply per-ROI shifts, then refine with overlap-band phase correlation (optional scale search).
+2. **Spectral fusion** — Stitch aligned cubes at a configurable wavelength split (default 1000 nm) into a single ENVI BIL cube per ROI.
+
+### Requirements
+
+Per camera, under `{session}/{mode}/{camera}/preprocessed/`:
+
+- `*_rgb.png` (from post-processing)
+- `*_ffc.hdr` / `.raw`
+- `segmentation/segmentation_results.json` and `segmentation/masks/` (from GSAM)
+
+Both **FX10e** and **SWIR3** must be present under the same illumination folder (e.g. `reflectance/`). Fusion runs **per mode** — if you captured reflectance and transmittance, both can be fused when prerequisites are met.
+
+### Automatic fusion (after Record)
+
+1. Enable **Preprocess the image when the scanning is done**.
+2. Enable **Run GSAM segmentation** (GSAM2 server connected).
+3. Enable **Run spectral fusion (FX10e + SWIR3)**.
+4. Record a **dual-camera staged scan**.
+
+Post-processing order: FFC → GSAM → fusion. If post-processing fails, fusion is skipped.
+
+### Manual fusion (saved sessions)
+
+Use **Run fusion on session…** in the Preprocessing group to pick a session folder and re-run fusion without scanning again. Useful after tuning GSAM, fixing masks, or deploying an updated `hf_fusion` pipeline.
+
+### Output layout
+
+```
+{session}/{mode}/fusion/
+  metadata/
+    alignment.json          # shifts, refine stats, per-ROI outputs
+    fx10e_centroids.png
+    swir3_centroids.png
+  roi_{NNN}_fx10e_swir3/
+    roi_{NNN}_fx10e_swir3.raw / .hdr   # fused hyperspectral cube
+    roi_{NNN}_rgb_overlay.png
+    roi_{NNN}_maskoverlay_outline.png
+    roi_{NNN}_mask.npy / .png
+```
+
+### Troubleshooting
+
+| Symptom | Check |
+| ------- | ----- |
+| Fusion checkbox greyed out | Both cameras connected and selected; preprocessing enabled; staged scan mode. |
+| `fusion_cli.py not found` | Rebuild/deploy app — `hf_fusion/` must sit beside `app.exe`. |
+| Python / venv missing | Run `{app}/hf_fusion/setup_venv.ps1` once beside `app.exe`. |
+| `Object count mismatch` | FX10e and SWIR3 must detect the **same number** of chips (sorted left-to-right pairing). |
+| Prerequisites error in log | Missing RGB, FFC, or segmentation under one or both cameras for that mode. |
+
+Developer setup: **SETUP.md** §5 and `resources/hf_fusion/README.md`.
+
+---
+
+## 12. Quick reference — daily operator flow
 
 ```
 Power hardware → Start HyperFusion
@@ -354,6 +451,8 @@ Power hardware → Start HyperFusion
   → Camera(s): Select calpack → Connect → check stream
   → Adjust exposure / FPS if needed
   → Capture: select cameras & modes → Preview (optional) → Record
+  → (Optional) enable preprocessing, GSAM, spectral fusion before Record
   → Stop when done → note session path in Log
+  → Check Log for post-process and fusion status; fused data under …/fusion/
 ```
 

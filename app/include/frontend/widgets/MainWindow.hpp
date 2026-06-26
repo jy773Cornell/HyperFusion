@@ -211,8 +211,6 @@ private:
     QCheckBox *captureCamera1Check_ = nullptr;
     QCheckBox *captureCamera2Check_ = nullptr;
     QCheckBox *captureDualCameraAutoCheck_ = nullptr;
-    QWidget *captureCameraPositionRows_[2] = {nullptr, nullptr};
-    QDoubleSpinBox *captureCameraPositionSpins_[2] = {nullptr, nullptr};
     QDoubleSpinBox *captureTargetLengthSpin_ = nullptr;
     QDoubleSpinBox *captureScanningSpeedSpin_ = nullptr;
     QCheckBox *captureScanningSpeedAutoCheck_ = nullptr;
@@ -221,6 +219,8 @@ private:
     QCheckBox *capturePreprocessAfterScanCheck_ = nullptr;
     QCheckBox *captureSaveFfcImageCheck_ = nullptr;
     QCheckBox *captureRunGsamCheck_ = nullptr;
+    QCheckBox *captureRunHfFusionCheck_ = nullptr;
+    QPushButton *captureRunFusionManualBtn_ = nullptr;
     QLabel *captureGsamServerStatusLabel_ = nullptr;
     QLineEdit *captureGsamPromptEdit_ = nullptr;
     QSpinBox *captureGsamSampleCountSpin_ = nullptr;

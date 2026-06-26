@@ -22,7 +22,7 @@ def find_hyperfusion_cfg(start: Path | None = None) -> Path:
         for parent in [start, *start.parents]:
             candidates.append(parent / "app" / "hyperfusion.cfg")
             candidates.append(parent / "hyperfusion.cfg")
-    repo_root = Path(__file__).resolve().parents[3]
+    repo_root = Path(__file__).resolve().parents[4]
     candidates.extend(
         [
             repo_root / "app" / "hyperfusion.cfg",

@@ -78,6 +78,44 @@ def union_masks(masks: list[np.ndarray]) -> np.ndarray:
     return union
 
 
+def mask_bounding_box(masks: list[np.ndarray]) -> CropRect | None:
+    if not masks:
+        return None
+    ys: list[np.ndarray] = []
+    xs: list[np.ndarray] = []
+    for mask in masks:
+        foreground = np.nonzero(mask > 0)
+        if foreground[0].size == 0:
+            continue
+        ys.append(foreground[0])
+        xs.append(foreground[1])
+    if not xs:
+        return None
+    y_all = np.concatenate(ys)
+    x_all = np.concatenate(xs)
+    return CropRect(int(x_all.min()), int(y_all.min()), int(x_all.max()) + 1, int(y_all.max()) + 1)
+
+
+def compute_roi_crop(
+    object_masks: list[np.ndarray],
+    fov_rect: CropRect,
+    margin_mm: float,
+    mm_per_pixel: float,
+    canvas_width: int,
+    canvas_height: int,
+) -> CropRect:
+    object_bbox = mask_bounding_box(object_masks)
+    if object_bbox is None:
+        raise ValueError("No foreground pixels in object masks")
+    margin_px = int(np.ceil(margin_mm / mm_per_pixel))
+    expanded = object_bbox.expand(margin_px).clamp(canvas_width, canvas_height)
+    fov_clamped = fov_rect.clamp(canvas_width, canvas_height)
+    crop = expanded.intersect(fov_clamped)
+    if crop is None or not crop.is_valid():
+        raise ValueError("ROI crop does not intersect valid FOV overlap")
+    return crop
+
+
 def crop_image(image: np.ndarray, rect: CropRect) -> np.ndarray:
     if image.ndim == 2:
         return image[rect.y0 : rect.y1, rect.x0 : rect.x1].copy()

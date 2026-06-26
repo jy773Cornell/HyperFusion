@@ -53,13 +53,6 @@ def upsample_mask(
     return (resized > 0).astype(np.uint8)
 
 
-def upsample_mask_stack(masks: list[np.ndarray], target_width: int, target_height: int) -> np.ndarray:
-    if not masks:
-        raise ValueError("No masks to upsample")
-    stacked = np.stack([upsample_mask(mask, target_width, target_height) for mask in masks], axis=0)
-    return np.max(stacked, axis=0)
-
-
 def shift_mask_to_canvas(
     mask: np.ndarray,
     dx_px: float,
@@ -139,6 +132,90 @@ def shift_hsi_to_canvas(
             borderValue=0.0,
         )
     return out
+
+
+def shift_hsi_cube(cube: np.ndarray, dx_px: float, dy_px: float) -> np.ndarray:
+    """Apply sub-pixel translation to a (lines, samples, bands) cube in place dimensions."""
+    if cube.ndim != 3:
+        raise ValueError(f"Expected HxWxB cube, got shape {cube.shape}")
+    height, width, bands = cube.shape
+    matrix = np.float32([[1.0, 0.0, dx_px], [0.0, 1.0, dy_px]])
+    out = np.zeros((height, width, bands), dtype=np.float32)
+    for band in range(bands):
+        out[:, :, band] = cv2.warpAffine(
+            cube[:, :, band],
+            matrix,
+            (width, height),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0.0,
+        )
+    return out
+
+
+def similarity_matrix(
+    center_x: float,
+    center_y: float,
+    scale: float,
+    dx_px: float = 0.0,
+    dy_px: float = 0.0,
+) -> np.ndarray:
+    """2x3 affine for uniform scale about (center_x, center_y) plus translation."""
+    matrix = cv2.getRotationMatrix2D((center_x, center_y), 0.0, scale)
+    matrix = matrix.astype(np.float32)
+    matrix[0, 2] += dx_px
+    matrix[1, 2] += dy_px
+    return matrix
+
+
+def similarity_warp_hsi_cube(
+    cube: np.ndarray,
+    scale: float,
+    dx_px: float,
+    dy_px: float,
+    center_x: float,
+    center_y: float,
+) -> np.ndarray:
+    """Uniform scale + translation on (lines, samples, bands)."""
+    if cube.ndim != 3:
+        raise ValueError(f"Expected HxWxB cube, got shape {cube.shape}")
+    height, width, bands = cube.shape
+    matrix = similarity_matrix(center_x, center_y, scale, dx_px, dy_px)
+    out = np.zeros((height, width, bands), dtype=np.float32)
+    for band in range(bands):
+        out[:, :, band] = cv2.warpAffine(
+            cube[:, :, band],
+            matrix,
+            (width, height),
+            flags=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0.0,
+        )
+    return out
+
+
+def similarity_warp_mask(
+    mask: np.ndarray,
+    scale: float,
+    dx_px: float,
+    dy_px: float,
+    center_x: float,
+    center_y: float,
+) -> np.ndarray:
+    """Uniform scale + translation on a binary mask (nearest-neighbor)."""
+    if mask.ndim != 2:
+        raise ValueError(f"Expected HxW mask, got shape {mask.shape}")
+    height, width = mask.shape
+    matrix = similarity_matrix(center_x, center_y, scale, dx_px, dy_px)
+    warped = cv2.warpAffine(
+        mask.astype(np.uint8),
+        matrix,
+        (width, height),
+        flags=cv2.INTER_NEAREST,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
+    return (warped > 0).astype(np.uint8)
 
 
 def crop_hsi_cube(cube: np.ndarray, x0: int, y0: int, x1: int, y1: int) -> np.ndarray:

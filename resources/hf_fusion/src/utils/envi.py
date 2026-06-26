@@ -129,6 +129,7 @@ def write_envi_hdr(
     bands: int,
     raw_basename: str,
     description: str,
+    wavelengths_nm: list[float] | None = None,
 ) -> None:
     lines_out: list[str] = ["ENVI", f"description = {{{description}}}", "file type = ENVI", ""]
     if metadata.extra_lines:
@@ -148,10 +149,11 @@ def write_envi_hdr(
             "",
         ]
     )
-    if metadata.wavelengths_nm:
+    wl_list = wavelengths_nm if wavelengths_nm is not None else metadata.wavelengths_nm
+    if wl_list:
         lines_out.append("Wavelength = {")
-        for index, value in enumerate(metadata.wavelengths_nm):
-            suffix = "," if index + 1 < len(metadata.wavelengths_nm) else ""
+        for index, value in enumerate(wl_list):
+            suffix = "," if index + 1 < len(wl_list) else ""
             lines_out.append(f"{value:.6f}{suffix}")
         lines_out.append("}")
     lines_out.append("")
@@ -167,21 +169,8 @@ def write_bil_cube(raw_path: Path, cube: np.ndarray) -> None:
     bil.tofile(raw_path)
 
 
-def crop_bil_memmap_to_file(
-    metadata: EnviMetadata,
-    raw_out: Path,
-    x0: int,
-    y0: int,
-    x1: int,
-    y1: int,
-) -> tuple[int, int, int]:
-    """Crop samples/lines from source BIL memmap without loading the full cube."""
+def read_bil_crop(metadata: EnviMetadata, x0: int, y0: int, x1: int, y1: int) -> np.ndarray:
+    """Read a samples/lines crop from BIL memmap as (lines, samples, bands) float32."""
     src = open_bil_memmap(metadata).reshape(metadata.lines, metadata.bands, metadata.samples)
-    out_lines = y1 - y0
-    out_samples = x1 - x0
-    raw_out.parent.mkdir(parents=True, exist_ok=True)
-    with raw_out.open("wb") as handle:
-        for line_idx in range(y0, y1):
-            line_bil = np.asarray(src[line_idx, :, x0:x1], dtype=np.float32)
-            handle.write(line_bil.tobytes())
-    return out_samples, out_lines, metadata.bands
+    slice_bil = np.asarray(src[y0:y1, :, x0:x1], dtype=np.float32)
+    return slice_bil.transpose(0, 2, 1)

@@ -90,6 +90,14 @@ struct HardwareConfig
 
     SegmentationConfig segmentation;
 
+    struct FusionConfig
+    {
+        double defaultMarginMm = 5.0;
+        int subprocessTimeoutMs = 3600000;
+    };
+
+    FusionConfig fusion;
+
     QString filePath;
     bool loadedFromFile = false;
     QStringList warnings;

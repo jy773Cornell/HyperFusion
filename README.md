@@ -4,7 +4,7 @@
 
 HyperFusion is a multimodal hyperspectral imaging platform for food and agricultural sensing that combines **VNIR and SWIR imaging** in a single coordinated scan to capture complementary chemical and structural information. With **dual reflectance and transmittance imaging modes**, HyperFusion reveals both surface characteristics and internal optical properties, enabling applications including freshness and ripeness evaluation, moisture analysis, defect detection, foreign material inspection, and compositional characterization.
 
-Designed for research and high-throughput phenotyping, HyperFusion integrates live visualization, synchronized dual-camera acquisition, automated calibration, and streamlined data export into a unified workflow. From acquisition to analysis-ready datasets, the platform supports optional flat-field correction, ENVI export, and AI-powered segmentation for downstream quality assessment and phenotyping.
+Designed for research and high-throughput phenotyping, HyperFusion integrates live visualization, synchronized dual-camera acquisition, automated calibration, hypercube fusion, and streamlined data export into a unified workflow. From acquisition to analysis-ready datasets, the platform supports optional flat-field correction, ENVI export, and AI-powered segmentation for downstream quality assessment and phenotyping.
 
 <p align="center">
   <img src="assets/HyperFusionCAD.png" alt="HyperFusion system CAD rendering" width="500"/>
@@ -32,6 +32,7 @@ Designed for research and high-throughput phenotyping, HyperFusion integrates li
 - Automatic synchronization of stage speed and camera line rate
 - Automatic preprocessing after acquisition
 - Optional **GSAM2** segmentation sidecar for automated sample segmentation
+- Offline **dual-camera fusion**: spatial registration (VNIR ↔ SWIR alignment) and spectral fusion into unified ENVI cubes per chip
 - Designed for food quality assessment, plant phenotyping, and hyperspectral imaging research
 
 ---

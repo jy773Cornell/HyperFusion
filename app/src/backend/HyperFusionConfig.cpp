@@ -844,6 +844,27 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
             else
                 warnings.push_back(QStringLiteral("Unknown key in [segmentation]: %1").arg(key));
         }
+        else if (section == QStringLiteral("fusion"))
+        {
+            if (key == QStringLiteral("fusion_margin_mm"))
+            {
+                if (!hasNumber || numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral("Invalid fusion_margin_mm: %1").arg(value));
+                else
+                    config.fusion.defaultMarginMm = numericValue;
+            }
+            else if (key == QStringLiteral("fusion_timeout_ms"))
+            {
+                bool ok = false;
+                const int timeoutMs = value.toInt(&ok);
+                if (!ok || timeoutMs < 60000)
+                    warnings.push_back(QStringLiteral("Invalid fusion_timeout_ms: %1").arg(value));
+                else
+                    config.fusion.subprocessTimeoutMs = timeoutMs;
+            }
+            else
+                warnings.push_back(QStringLiteral("Unknown key in [fusion]: %1").arg(key));
+        }
         else if (section.isEmpty())
         {
             warnings.push_back(QStringLiteral("Key outside a section (ignored): %1").arg(key));
@@ -969,7 +990,12 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "sam2_config = configs/sam2.1/sam2.1_hiera_l.yaml\n"
         << "sam2_checkpoint = checkpoints/sam2.1_hiera_large.pt\n"
         << "detector_device = cuda\n"
-        << "sam2_device = cuda\n";
+        << "sam2_device = cuda\n"
+        << "\n"
+        << "[fusion]\n"
+        << "# Offline FX10e + SWIR3 fusion. Run hf_fusion/setup_venv.ps1 beside app.exe once.\n"
+        << "fusion_margin_mm = 5.0\n"
+        << "fusion_timeout_ms = 3600000\n";
 
     if (!file.commit())
     {

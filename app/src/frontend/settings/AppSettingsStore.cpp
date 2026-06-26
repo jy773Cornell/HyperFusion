@@ -33,6 +33,8 @@ PersistedCapturePosition AppSettingsStore::loadCapturePosition()
     position.saveFfcImage = settings.value(QStringLiteral("capture/preprocess/saveFfcImage"), true).toBool();
     position.runGsamSegmentation =
         settings.value(QStringLiteral("capture/preprocess/runGsamSegmentation"), false).toBool();
+    position.runHfFusion =
+        settings.value(QStringLiteral("capture/preprocess/runHfFusion"), false).toBool();
     position.gsamPrompt =
         settings.value(QStringLiteral("capture/preprocess/gsamPrompt"), QStringLiteral("sample.")).toString();
     position.gsamSampleCount =
@@ -52,6 +54,7 @@ void AppSettingsStore::saveCapturePosition(const PersistedCapturePosition &posit
     settings.setValue(QStringLiteral("capture/preprocess/afterScan"), position.preprocessAfterScan);
     settings.setValue(QStringLiteral("capture/preprocess/saveFfcImage"), position.saveFfcImage);
     settings.setValue(QStringLiteral("capture/preprocess/runGsamSegmentation"), position.runGsamSegmentation);
+    settings.setValue(QStringLiteral("capture/preprocess/runHfFusion"), position.runHfFusion);
     settings.setValue(QStringLiteral("capture/preprocess/gsamPrompt"), position.gsamPrompt);
     settings.setValue(QStringLiteral("capture/preprocess/gsamSampleCount"), position.gsamSampleCount);
     settings.setValue(QStringLiteral("capture/dualCameraAutoSync"), position.dualCameraAutoSync);

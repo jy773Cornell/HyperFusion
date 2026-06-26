@@ -17,6 +17,7 @@
 
 class CapturePostProcessorWorker;
 class CaptureWriterWorker;
+class HfFusionWorker;
 class MainWindow;
 class OperationWaitDialog;
 class QWidget;
@@ -102,7 +103,6 @@ public:
     void updateDualCameraSyncControls();
     void updateScanningSpeedControls();
     void updateCaptureStreamLayout();
-    void updateCaptureCameraPositionRows();
     [[nodiscard]] bool isCaptureStreamWaterfallVisible(std::size_t cameraIndex) const;
     [[nodiscard]] bool dualCameraScanSyncActive() const;
     [[nodiscard]] bool shouldLockSwir3ForDualSync() const;
@@ -124,6 +124,7 @@ public slots:
     void startRecord();
     void stopRecorder();
     void finishScan();
+    void runManualFusion();
 
 private:
     double autoRecordScanSpeedMmPerSec() const;
@@ -229,8 +230,6 @@ private:
     bool resolveCaptureRecordingIlluminationMode(CaptureIlluminationMode &mode,
                                                  QString &errorMessage) const;
     bool selectedCaptureCameraStreaming(QString &errorMessage) const;
-    double closestSelectedCaptureCameraPositionMm(bool *hasSelection) const;
-    double closestCaptureCameraPositionMm(bool *hasPosition) const;
     bool buildCaptureWriterSessionConfig(CaptureWriterSessionConfig &config,
                                          QString &errorMessage) const;
     bool beginCaptureRawDumpSession(QString &errorMessage);
@@ -309,6 +308,7 @@ private:
     class QTimer *captureRecorderStatusTimer_ = nullptr;
     std::unique_ptr<CaptureWriterWorker> captureWriterWorker_;
     std::unique_ptr<CapturePostProcessorWorker> capturePostProcessorWorker_;
+    std::unique_ptr<HfFusionWorker> hfFusionWorker_;
     CaptureWriterSessionSummary lastEndedCaptureSessionSummary_;
     std::unique_ptr<hf::processing::Gsam2ServerManager> gsam2ServerManager_;
 };

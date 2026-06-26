@@ -125,6 +125,8 @@ qt_add_executable(app WIN32
     src/backend/processing/ReferenceSpectrumPlot.cpp
     src/backend/processing/CapturePostProcessor.cpp
     src/backend/processing/CapturePostProcessorWorker.cpp
+    src/backend/processing/HfFusionRunner.cpp
+    src/backend/processing/HfFusionWorker.cpp
     src/backend/processing/Gsam2SegmentationClient.cpp
     src/backend/processing/Gsam2ServerManager.cpp
     src/backend/processing/Gsam2RoiAnalysis.cpp
@@ -161,6 +163,8 @@ qt_add_executable(app WIN32
     include/backend/processing/Gsam2SpectrumPlot.hpp
     include/backend/processing/GsamWslPathUtil.hpp
     include/backend/processing/CapturePostProcessor.hpp
+    include/backend/processing/HfFusionRunner.hpp
+    include/backend/processing/HfFusionWorker.hpp
     include/backend/processing/SwirBprCorrector.hpp
     include/backend/processing/SwirBprCalpackMap.hpp
     include/backend/processing/SwirBprApply.hpp
@@ -319,6 +323,30 @@ if(EXISTS "${HF_PROCESSING_REFERENCE_DIR}")
                 "${HF_PROCESSING_REFERENCE_DIR}/D_illuminants.mat"
                 "$<TARGET_FILE_DIR:app>/backend/processing/reference/D_illuminants.mat"
         COMMENT "Copying preprocessing illuminant reference tables")
+endif()
+
+# Ship hf_fusion Python pipeline beside app.exe (excludes .venv — create locally).
+set(HF_FUSION_REPO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../resources/hf_fusion")
+if(EXISTS "${HF_FUSION_REPO_DIR}/fusion_cli.py")
+    add_custom_command(
+        TARGET app POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:app>/hf_fusion"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${HF_FUSION_REPO_DIR}/fusion_cli.py"
+                "$<TARGET_FILE_DIR:app>/hf_fusion/fusion_cli.py"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${HF_FUSION_REPO_DIR}/requirements.txt"
+                "$<TARGET_FILE_DIR:app>/hf_fusion/requirements.txt"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${HF_FUSION_REPO_DIR}/setup_venv.ps1"
+                "$<TARGET_FILE_DIR:app>/hf_fusion/setup_venv.ps1"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${HF_FUSION_REPO_DIR}/README.md"
+                "$<TARGET_FILE_DIR:app>/hf_fusion/README.md"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${HF_FUSION_REPO_DIR}/src"
+                "$<TARGET_FILE_DIR:app>/hf_fusion/src"
+        COMMENT "Copying hf_fusion pipeline to output directory")
 endif()
 
 file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}" HF_APP_SOURCE_DIR)

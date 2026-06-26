@@ -78,16 +78,6 @@ void UiSettingsController::loadHardwareConfig()
 void UiSettingsController::applyHardwareConfigToUi()
 {
     const hf::HardwareConfig &config = hf::hardwareConfig();
-    for (std::size_t cameraIndex = 0; cameraIndex < 2; ++cameraIndex)
-    {
-        if (host_->captureCameraPositionSpins_[cameraIndex] != nullptr)
-        {
-            host_->captureCameraPositionSpins_[cameraIndex]->setValue(
-                qBound(zaber_stage::kTravelMinimumMm,
-                       config.cameraPositionMm[cameraIndex],
-                       zaber_stage::kTravelLengthMm));
-        }
-    }
 
     if (host_->capturePanel() != nullptr)
         host_->capturePanel()->updateScanningSpeedControls();
@@ -117,6 +107,8 @@ void UiSettingsController::loadPersistedUiSettings()
         host_->captureSaveFfcImageCheck_->setChecked(capturePosition.saveFfcImage);
     if (host_->captureRunGsamCheck_ != nullptr)
         host_->captureRunGsamCheck_->setChecked(capturePosition.runGsamSegmentation);
+    if (host_->captureRunHfFusionCheck_ != nullptr)
+        host_->captureRunHfFusionCheck_->setChecked(capturePosition.runHfFusion);
     if (host_->captureGsamPromptEdit_ != nullptr)
         host_->captureGsamPromptEdit_->setText(capturePosition.gsamPrompt);
     if (host_->captureGsamSampleCountSpin_ != nullptr)
@@ -149,6 +141,8 @@ void UiSettingsController::savePersistedUiSettings()
         capturePosition.saveFfcImage = host_->captureSaveFfcImageCheck_->isChecked();
     if (host_->captureRunGsamCheck_ != nullptr)
         capturePosition.runGsamSegmentation = host_->captureRunGsamCheck_->isChecked();
+    if (host_->captureRunHfFusionCheck_ != nullptr)
+        capturePosition.runHfFusion = host_->captureRunHfFusionCheck_->isChecked();
     if (host_->captureGsamPromptEdit_ != nullptr)
         capturePosition.gsamPrompt = host_->captureGsamPromptEdit_->text().trimmed();
     if (host_->captureGsamSampleCountSpin_ != nullptr)
@@ -332,6 +326,13 @@ void UiSettingsController::connectAutosave()
         connect(host_->captureSaveFfcImageCheck_, &QCheckBox::toggled, this, schedule);
     if (host_->captureRunGsamCheck_ != nullptr)
         connect(host_->captureRunGsamCheck_, &QCheckBox::toggled, this, schedule);
+    if (host_->captureRunHfFusionCheck_ != nullptr)
+    {
+        connect(host_->captureRunHfFusionCheck_, &QCheckBox::toggled, this, schedule);
+        connect(host_->captureRunHfFusionCheck_, &QCheckBox::toggled, this, [this]() {
+            host_->capturePanel()->updateRecorderControls();
+        });
+    }
     if (host_->captureGsamPromptEdit_ != nullptr)
         connect(host_->captureGsamPromptEdit_, &QLineEdit::textChanged, this, schedule);
     if (host_->captureGsamSampleCountSpin_ != nullptr)
