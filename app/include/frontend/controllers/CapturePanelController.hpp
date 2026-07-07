@@ -57,6 +57,7 @@ public:
         double recordScanSpeedMmPerSec = 0.0;
         int whiteReferenceFrameCount = 0;
         int blackReferenceFrameCount = 0;
+        int blackReferenceShutterSettleMs = 1500;
     };
 
     enum class CaptureScanPhase
@@ -159,6 +160,9 @@ private:
     void onCaptureAbsoluteMoveComplete(bool success);
     void beginCaptureMoveToFirstRefPosition();
     void beginCaptureBlackReference();
+    void scheduleBlackReferenceShutterSettleCheck();
+    void activateBlackReferenceCollection(const QString &logLine);
+    bool selectedCaptureCameraShuttersReportedClosed() const;
     void onCaptureBlackReferenceComplete();
     void beginCaptureRecordScanSequence();
     void beginCaptureMoveToWhiteRefScanOrigin();
@@ -267,6 +271,8 @@ private:
     std::vector<CaptureIlluminationMode> capturePendingIlluminationModes_;
     std::size_t captureCurrentModeIndex_ = 0;
     std::array<int, 2> captureBlackRefFramesCollected_ = {0, 0};
+    bool captureBlackReferenceCollectionActive_ = false;
+    QElapsedTimer captureBlackRefShutterSettleTimer_;
     std::array<int, 2> captureWhiteRefFramesCollected_ = {0, 0};
     std::array<int, 2> captureSampleFramesCollected_ = {0, 0};
     quint64 captureRelativeScanTimerToken_ = 0;

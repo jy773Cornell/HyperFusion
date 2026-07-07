@@ -573,6 +573,16 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 else
                     config.blackReferenceFrames = frames;
             }
+            else if (key == QStringLiteral("black_reference_shutter_settle_ms"))
+            {
+                bool ok = false;
+                const int settleMs = value.toInt(&ok);
+                if (!ok || settleMs < 0)
+                    warnings.push_back(
+                        QStringLiteral("Invalid black_reference_shutter_settle_ms: %1").arg(value));
+                else
+                    config.blackReferenceShutterSettleMs = settleMs;
+            }
             else if (key == QStringLiteral("sample_window_max_length_mm")
                      || key == QStringLiteral("sample_window_length_mm"))
             {
@@ -948,6 +958,7 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "acceleration_mm_per_sec2 = 30\n"
         << "white_reference_frames = 100\n"
         << "black_reference_frames = 100\n"
+        << "black_reference_shutter_settle_ms = 1500\n"
         << "sample_window_max_length_mm = 500\n"
         << "# Exposure (ms) for transmittance scan when both reflectance and transmittance are recorded.\n"
         << "fx10e_transmittance_exp = 12\n"

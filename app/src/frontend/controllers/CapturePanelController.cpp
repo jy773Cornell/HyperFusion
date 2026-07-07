@@ -1371,6 +1371,10 @@ void hf::capture::CapturePanelController::updateRecorderStatus() {
     break;
   }
   case CaptureScanPhase::BlackReference: {
+    if (!captureBlackReferenceCollectionActive_) {
+      phaseDetail = tr("black reference (waiting for shutters to close\u2026)");
+      break;
+    }
     int collected = 0;
     std::vector<std::size_t> selectedCameras;
     if (selectedCaptureCameraIndices(selectedCameras)) {
@@ -1580,6 +1584,7 @@ bool hf::capture::CapturePanelController::buildCaptureScanPlan(
     plan.recordScanSpeedMmPerSec = host_->captureScanningSpeedSpin_->value();
   plan.whiteReferenceFrameCount = hw.whiteReferenceFrames;
   plan.blackReferenceFrameCount = hw.blackReferenceFrames;
+  plan.blackReferenceShutterSettleMs = hw.blackReferenceShutterSettleMs;
   plan.whiteRefStartMm[0] = hw.whiteRefMm[0];
   plan.whiteRefStartMm[1] = hw.whiteRefMm[1];
   plan.brightRefStartMm[0] = hw.brightRefMm[0];
@@ -1719,6 +1724,7 @@ void hf::capture::CapturePanelController::resetCaptureSequenceState() {
   captureScanPhase_ = CaptureScanPhase::Idle;
   captureMoveCompletePhase_ = CaptureScanPhase::Idle;
   captureBlackRefFramesCollected_ = {0, 0};
+  captureBlackReferenceCollectionActive_ = false;
   captureWhiteRefFramesCollected_ = {0, 0};
   captureSampleFramesCollected_ = {0, 0};
   captureWhiteRefWindowComplete_ = {false, false};
@@ -2019,11 +2025,92 @@ bool hf::capture::CapturePanelController::shouldAcceptBlackReferenceFrame(
   if (captureScanPhase_ != CaptureScanPhase::BlackReference)
     return false;
 
+  if (!captureBlackReferenceCollectionActive_)
+    return false;
+
   if (cameraIndex >= captureBlackRefFramesCollected_.size())
     return false;
 
   return captureBlackRefFramesCollected_[cameraIndex] <
          captureScanPlan_.blackReferenceFrameCount;
+}
+
+bool hf::capture::CapturePanelController::selectedCaptureCameraShuttersReportedClosed() const {
+  std::vector<std::size_t> cameraIndices;
+  if (!selectedCaptureCameraIndices(cameraIndices))
+    return true;
+
+  for (const std::size_t index : cameraIndices) {
+    const LumoCameraUi &ui = index == 0 ? host_->camera1Ui_ : host_->camera2Ui_;
+    if (ui.shutterReportedOpen)
+      return false;
+  }
+
+  return true;
+}
+
+void hf::capture::CapturePanelController::activateBlackReferenceCollection(
+    const QString &logLine) {
+  if (captureScanPhase_ != CaptureScanPhase::BlackReference ||
+      captureBlackReferenceCollectionActive_)
+    return;
+
+  captureBlackReferenceCollectionActive_ = true;
+  host_->appendLog(logLine);
+  updateRecorderStatus();
+}
+
+void hf::capture::CapturePanelController::scheduleBlackReferenceShutterSettleCheck() {
+  if (captureScanPhase_ != CaptureScanPhase::BlackReference)
+    return;
+
+  std::vector<std::size_t> cameraIndices;
+  if (host_->coordinator() != nullptr && selectedCaptureCameraIndices(cameraIndices)) {
+    for (const std::size_t index : cameraIndices)
+      host_->coordinator()->refreshShutterState(index);
+  }
+
+  const qint64 elapsedMs =
+      captureBlackRefShutterSettleTimer_.isValid() ? captureBlackRefShutterSettleTimer_.elapsed() : 0;
+  const int minSettleMs = std::max(0, captureScanPlan_.blackReferenceShutterSettleMs);
+  const int maxWaitMs = std::max(minSettleMs + 3000, minSettleMs * 3);
+  const bool minDelayMet = elapsedMs >= minSettleMs;
+  const bool shuttersClosed = selectedCaptureCameraShuttersReportedClosed();
+
+  if (minDelayMet && shuttersClosed) {
+    activateBlackReferenceCollection(
+        QStringLiteral("%1: shutters closed \u2014 collecting black reference frames\u2026")
+            .arg(captureSequenceLogPrefix()));
+    return;
+  }
+
+  if (elapsedMs >= maxWaitMs) {
+    QStringList openCameras;
+    for (const std::size_t index : cameraIndices) {
+      const LumoCameraUi &ui = index == 0 ? host_->camera1Ui_ : host_->camera2Ui_;
+      if (ui.shutterReportedOpen)
+        openCameras.push_back(host_->cameraPanel()->profileTabNameForUi(ui));
+    }
+
+    if (openCameras.isEmpty()) {
+      host_->appendLog(
+          QStringLiteral("%1: black reference shutter settle timeout \u2014 collecting "
+                         "frames anyway.")
+              .arg(captureSequenceLogPrefix()));
+    } else {
+      host_->appendLog(
+          QStringLiteral("%1: shutter settle timeout with %2 still open \u2014 collecting "
+                         "frames anyway (black reference may be biased).")
+              .arg(captureSequenceLogPrefix(), openCameras.join(QStringLiteral(", "))));
+    }
+
+    activateBlackReferenceCollection(
+        QStringLiteral("%1: collecting black reference frames\u2026")
+            .arg(captureSequenceLogPrefix()));
+    return;
+  }
+
+  QTimer::singleShot(100, this, [this]() { scheduleBlackReferenceShutterSettleCheck(); });
 }
 
 void hf::capture::CapturePanelController::requestCaptureAbsoluteMove(
@@ -2092,6 +2179,8 @@ void hf::capture::CapturePanelController::onCaptureAbsoluteMoveComplete(
 void hf::capture::CapturePanelController::beginCaptureBlackReference() {
   captureScanPhase_ = CaptureScanPhase::BlackReference;
   captureBlackRefFramesCollected_ = {0, 0};
+  captureBlackReferenceCollectionActive_ = false;
+  captureBlackRefShutterSettleTimer_.restart();
 
   host_->appendLog(QStringLiteral("%1: closing shutters for black reference "
                                   "(%2 frames per camera)\u2026")
@@ -2099,15 +2188,7 @@ void hf::capture::CapturePanelController::beginCaptureBlackReference() {
                        .arg(captureScanPlan_.blackReferenceFrameCount));
 
   setSelectedCameraShutters(false);
-
-  QTimer::singleShot(750, this, [this]() {
-    if (captureScanPhase_ != CaptureScanPhase::BlackReference)
-      return;
-
-    host_->appendLog(
-        QStringLiteral("%1: collecting black reference frames\u2026")
-            .arg(captureSequenceLogPrefix()));
-  });
+  scheduleBlackReferenceShutterSettleCheck();
   updateRecorderStatus();
 }
 
@@ -3430,6 +3511,9 @@ QString hf::capture::CapturePanelController::recorderCameraStatusText(
 
   switch (captureScanPhase_) {
   case CaptureScanPhase::BlackReference:
+    if (!captureBlackReferenceCollectionActive_) {
+      return QStringLiteral("%1: %2").arg(cameraName, tr("closing shutter\u2026"));
+    }
     return QStringLiteral("%1: %2 (%3/%4)")
         .arg(cameraName)
         .arg(tr("black reference"))

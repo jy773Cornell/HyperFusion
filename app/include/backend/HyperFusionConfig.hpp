@@ -21,6 +21,8 @@ struct HardwareConfig
     double operationScanningSpeedMmPerSec = 100.0;
     int whiteReferenceFrames = 100;
     int blackReferenceFrames = 100;
+    /// Minimum wait after shutter close before black-reference frames count (ms).
+    int blackReferenceShutterSettleMs = 1500;
     /// Spatial scale along the scan axis (mm per detector pixel). Index 0 = FX10e, 1 = SWIR3.
     double spatialMmPerPixel[2] = {0.205, 0.4};
     /// Exposure (ms) for transmittance scans when both illumination modes are selected. Index 0 = FX10e, 1 = SWIR3.
