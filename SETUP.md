@@ -12,12 +12,13 @@ This guide covers **developer setup** on a build machine.
   - [2.3 National Instruments (SWIR3)](#23-national-instruments-swir3)
   - [2.4 Dual-camera operation](#24-dual-camera-operation)
 4. [Stage and lighthouse (full bench)](#3-stage-and-lighthouse-full-bench)
-  - [3.1 Zaber Motion Library](#31-zaber-motion-library-scan-stage)
-  - [3.2 MCC Universal Library](#32-measurement-computing-universal-library-lighthouse)
-5. [Optional — GSAM segmentation](#4-optional--gsam-segmentation)
-6. [Optional — Dual-camera fusion](#5-optional--dual-camera-fusion)
-7. [Configuration —](#6-configuration--hyperfusioncfg) `hyperfusion.cfg`
-8. [Build HyperFusion](#7-build-hyperfusion)
+  - [3.1 Zaber Motion Library](#31-zaber-motion-library)
+  - [3.2 MCC Universal Library](#32-mcc-universal-library)
+5. [Segmentation — GSAM segmentation](#4-segmentation--gsam-segmentation)
+6. [Fusion — Dual-camera fusion](#5-fusion--dual-camera-fusion)
+7. [Robot Arm — UR3e robot (WSL ROS 2)](#6-robot-arm--ur3e-robot-wsl-ros-2)
+8. [Configuration — `hyperfusion.cfg`](#7-configuration--hyperfusioncfg)
+9. [Build HyperFusion](#8-build-hyperfusion)
 
 ---
 
@@ -32,6 +33,7 @@ This guide covers **developer setup** on a build machine.
 | **2 — Full bench**   | + Zaber Motion Library, MCC UL           | Stage scanning, lighthouse, capture workflows      |
 | **3 — Optional**     | WSL + GSAM (see `resources/gsam2/`)      | Post-capture segmentation                          |
 | **4 — Optional**     | Python venv + `hf_fusion` (see below)    | Dual-camera spatial registration + spectral fusion |
+| **5 — Optional**     | WSL + ROS 2 + `resources/ur3e/` (see below) | UR3e robot sidecar (`use_mock_hardware` for simulation) |
 
 
 Install **Stage 1** first and verify cameras in Lumo/NI MAX before adding stage and light hardware.
@@ -108,7 +110,7 @@ At this point you can operate the **full-spectrum module** (FX10e + SWIR3) for s
 
 
 
-### 3.1 Zaber Motion Library (scan stage)
+### 3.1 Zaber Motion Library
 
 - Install **Zaber Motion Library (ZML)**
 - One-time stage setup: use **Zaber Launcher** (LC40B profile, motor orientation). HyperFusion re-applies travel limits and lockstep on each connect.
@@ -116,7 +118,7 @@ At this point you can operate the **full-spectrum module** (FX10e + SWIR3) for s
 
 
 
-### 3.2 Measurement Computing Universal Library (lighthouse)
+### 3.2 MCC Universal Library
 
 - Hardware: **Measurement Computing USB-1208FS-Plus** (or compatible 1208 FS Plus family).
 - Install **MCC UL** from Measurement Computing (provides `cbw64.dll`).
@@ -126,7 +128,7 @@ At this point you can operate the **full-spectrum module** (FX10e + SWIR3) for s
 
 
 
-## 4. Optional — GSAM segmentation
+## 4. Segmentation — GSAM segmentation
 
 - Requires **WSL2 + Ubuntu** and the Python env under `resources/gsam2/`.
 - See `resources/gsam2/README.md`.
@@ -137,7 +139,7 @@ At this point you can operate the **full-spectrum module** (FX10e + SWIR3) for s
 
 
 
-## 5. Optional — Dual-camera fusion
+## 5. Fusion — Dual-camera fusion
 
 Offline **FX10e + SWIR3** pipeline: spatial registration (centroid match + phase correction) and spectral fusion into unified ENVI cubes per chip ROI. Implemented in `resources/hf_fusion/`; copied to `{app}/hf_fusion/` on build (without `.venv`).
 
@@ -201,7 +203,88 @@ Full pipeline docs: `resources/hf_fusion/README.md`.
 
 
 
-## 6. Configuration — `hyperfusion.cfg`
+## 6. Robot Arm — UR3e robot (WSL ROS 2)
+
+Universal Robots **UR3e** control runs as a **WSL sidecar** (same pattern as GSAM2): a small HTTP server in Ubuntu talks to the ROS 2 driver; the Windows app will call it via `wsl.exe`.
+
+### 6.1 Prerequisites
+
+| Item | Notes |
+|------|--------|
+| **WSL 2 + Ubuntu 22.04** | Required for ROS 2 Humble |
+| **Robot on LAN** | Default IP `192.168.0.10` (edit `[ur3e]` in `hyperfusion.cfg`) |
+| **Lab safety** | E-stop accessible; no motion until explicit connect from the UR3e tab |
+
+If WSL cannot ping the robot, enable mirrored networking in `%USERPROFILE%\.wslconfig` (`networkingMode=mirrored`), then `wsl --shutdown`.
+
+### 6.2 One-time WSL setup
+
+From **PowerShell** (delegates to WSL):
+
+```powershell
+cd D:\Pototypy\HyperFusion\resources\ur3e   # adjust path
+.\install_env.ps1
+```
+
+Or from **WSL**, in `resources/ur3e/`:
+
+```bash
+cd /mnt/d/Pototypy/HyperFusion/resources/ur3e   # adjust path
+chmod +x install_env.sh
+./install_env.sh
+```
+
+Do **not** run `./install_env.sh` directly in PowerShell — it is a bash script and will not execute.
+
+This installs **ROS 2 + `ros-*-ur`** and creates `./venv` for the HTTP sidecar.
+
+Full details: **`resources/ur3e/README.md`**.
+
+### 6.3 Verify sidecar (simulation)
+
+```bash
+cd /mnt/d/Pototypy/HyperFusion/resources/ur3e
+source /opt/ros/jazzy/setup.bash   # or humble on Ubuntu 22.04
+./venv/bin/ur3e_server --use-mock-hardware --port 8766
+```
+
+From **Windows PowerShell**:
+
+```powershell
+wsl curl -s http://127.0.0.1:8766/health
+wsl curl -s -X POST http://127.0.0.1:8766/connect -H "Content-Type: application/json" -d "{}"
+```
+
+Robot reachability from WSL:
+
+```bash
+./scripts/check_robot_network.sh 192.168.0.10
+```
+
+### 6.4 Configuration
+
+`[ur3e]` in `hyperfusion.cfg` (reloaded on app start):
+
+
+| Key | Purpose |
+|-----|---------|
+| `wsl_distro` | WSL distribution name (default `Ubuntu`) |
+| `ur3e_repo_linux` | WSL path to sidecar; empty = auto `resources/ur3e` |
+| `server_port` | HTTP port (default **8766**, GSAM uses 8765) |
+| `robot_ip` | UR controller IP |
+| `dashboard_port` / `rtde_port` | UR dashboard / RTDE ports |
+| `use_mock_hardware` | `true` = ROS simulation (no physical robot); `false` = real arm |
+| `ros_distro` / `ur_type` | ROS distro (`jazzy` / `humble`) and UR model (`ur3e`) |
+| `prestart_driver` | Warm ROS driver in background when sidecar starts (default `false`; use with simulation first) |
+| `max_linear_speed_m_per_s` / `max_linear_accel_m_per_s2` | Motion caps |
+
+C++ app integration (`Ur3eServerManager`, UR3e tab wiring) is added incrementally; the sidecar can be tested standalone now.
+
+---
+
+
+
+## 7. Configuration — `hyperfusion.cfg`
 
 Copied next to `app.exe` on build. **Reloaded on every app start.** Edit for each bench:
 
@@ -215,6 +298,7 @@ Copied next to `app.exe` on build. **Reloaded on every app start.** Edit for eac
 | `[preprocessing]`         | FFC and SWIR false-color export settings                                                                            |
 | `[segmentation]`          | GSAM2 sidecar (optional)                                                                                            |
 | `[fusion]`                | Dual-camera fusion Python paths, margin, timeout                                                                    |
+| `[ur3e]`                  | UR3e WSL sidecar (optional)                                                                                         |
 
 
 Camera exposure, frame rate, binning, and RGB band picks are stored in **app settings** (QSettings), not in this file.
@@ -223,7 +307,7 @@ Camera exposure, frame rate, binning, and RGB band picks are stored in **app set
 
 
 
-## 7. Build HyperFusion
+## 8. Build HyperFusion
 
 From the `app` folder:
 

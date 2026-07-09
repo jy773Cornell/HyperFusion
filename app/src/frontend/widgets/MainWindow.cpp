@@ -2,10 +2,13 @@
 // Hardware access goes through CameraCoordinator; this file is UI layout and wiring only.
 #include "frontend/widgets/MainWindow.hpp"
 
+#include "frontend/logging/AppLog.hpp"
+#include "frontend/logging/AppLogSession.hpp"
 #include "frontend/controllers/CameraPanelController.hpp"
 #include "frontend/controllers/LightPanelController.hpp"
 #include "frontend/controllers/UiSettingsController.hpp"
 #include "frontend/controllers/StagePanelController.hpp"
+#include "frontend/controllers/Ur3ePanelController.hpp"
 
 #include "adapters/lumo/LumoCamera.hpp"
 #include "adapters/lumo/LumoDeviceTypes.hpp"
@@ -60,9 +63,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPlainTextEdit>
-#include <QPushButton>
-#include <QScrollArea>
-#include <QSpinBox>
+#include <QSignalBlocker>
 #include <QSplitter>
 #include <QTabWidget>
 #include <QVBoxLayout>
@@ -149,6 +150,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     setMinimumSize(1180, 760);
 
     stagePanel_ = std::make_unique<hf::stage::StagePanelController>(this);
+    ur3ePanel_ = std::make_unique<hf::ur3e::Ur3ePanelController>(this);
     lightPanel_ = std::make_unique<hf::light::LightPanelController>(this);
     cameraPanel_ = std::make_unique<hf::camera::CameraPanelController>(this);
     settingsPanel_ = std::make_unique<hf::settings::UiSettingsController>(this);
@@ -165,15 +167,29 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     splitter->setStretchFactor(1, 1);
     splitter->setSizes({420, 1130});
 
-    auto *logBox = new QGroupBox("Log", central);
+    auto *logBox = new QGroupBox(QStringLiteral("Log"), central);
     auto *logLayout = new QVBoxLayout(logBox);
-    logOutput_ = new QPlainTextEdit(logBox);
-    logOutput_->setReadOnly(true);
-    logOutput_->setMaximumBlockCount(5000);
-    logOutput_->setPlaceholderText("Application log output...");
-    logOutput_->setMinimumHeight(140);
-    logOutput_->setMaximumHeight(220);
-    logLayout->addWidget(logOutput_);
+    logTabs_ = new QTabWidget(logBox);
+    logTabs_->setDocumentMode(true);
+    logTabs_->setMinimumHeight(140);
+    logTabs_->setMaximumHeight(220);
+
+    for (int i = 0; i < hf::log::channelCount(); ++i)
+    {
+        const auto channel = static_cast<hf::log::Channel>(i);
+        auto *output = new QPlainTextEdit(logTabs_);
+        output->setReadOnly(true);
+        output->setMaximumBlockCount(5000);
+        output->setPlaceholderText(
+            QStringLiteral("%1 log output…").arg(hf::log::channelLabel(channel)));
+        logOutputs_[static_cast<std::size_t>(i)] = output;
+        logTabs_->addTab(output, hf::log::channelTabTitle(channel));
+    }
+
+    logLayout->addWidget(logTabs_);
+
+    if (QCoreApplication::instance() != nullptr)
+        sessionLog_.begin(QCoreApplication::applicationDirPath());
 
     rootLayout->addWidget(splitter, 1);
     rootLayout->addWidget(logBox, 0);
@@ -195,6 +211,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 
     stagePanel_->initializeWorker();
     stagePanel_->wireSettingsTabConnections();
+    ur3ePanel_->applyHardwareConfigToUi();
+    ur3ePanel_->wireSettingsTabConnections();
     lightPanel_->initializeWorker();
 
     capturePanel_->initializeWorkers();
@@ -203,8 +221,15 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     capturePanel_->updateRecorderControls();
 
     QTimer::singleShot(250, this, [this]() {
+        if (sessionLog_.isOpen())
+        {
+            appendLog(hf::log::Channel::App,
+                      QStringLiteral("Session log file: %1").arg(sessionLog_.filePath()));
+        }
         if (capturePanel_ != nullptr)
             capturePanel_->tryAutoStartGsamServer();
+        if (ur3ePanel_ != nullptr)
+            ur3ePanel_->startSidecarOnLaunch();
     });
 }
 
@@ -236,6 +261,14 @@ void MainWindow::onSettingsTabChanged(const int index)
     }
     else if (index == kSettingsTabLight)
         lightPanel_->syncUiFromBackend();
+    else if (index == kSettingsTabUr3e && ur3ePanel_ != nullptr)
+        ur3ePanel_->refreshUi();
+
+    if (streamTabs_ != nullptr && index == kSettingsTabUr3e)
+    {
+        QSignalBlocker blocker(streamTabs_);
+        streamTabs_->setCurrentIndex(kStreamTabUr3e);
+    }
 
     if (streamTabs_ != nullptr && streamTabs_->currentIndex() == kStreamTabCapture
         && cameraPanel_ != nullptr)
@@ -244,7 +277,19 @@ void MainWindow::onSettingsTabChanged(const int index)
     }
 }
 
+void MainWindow::onStreamTabChanged(const int index)
+{
+    if (settingsTabs_ != nullptr && index == kStreamTabUr3e)
+    {
+        QSignalBlocker blocker(settingsTabs_);
+        settingsTabs_->setCurrentIndex(kSettingsTabUr3e);
+        if (ur3ePanel_ != nullptr)
+            ur3ePanel_->refreshUi();
+    }
+}
+
 hf::stage::StagePanelController *MainWindow::stagePanel() const { return stagePanel_.get(); }
+hf::ur3e::Ur3ePanelController *MainWindow::ur3ePanel() const { return ur3ePanel_.get(); }
 hf::light::LightPanelController *MainWindow::lightPanel() const { return lightPanel_.get(); }
 hf::camera::CameraPanelController *MainWindow::cameraPanel() const { return cameraPanel_.get(); }
 hf::settings::UiSettingsController *MainWindow::settingsPanel() const { return settingsPanel_.get(); }
@@ -285,42 +330,15 @@ QWidget *MainWindow::createStreamTabsPanel()
     streamTabs_->addTab(ui::CameraStreamTabBuilder::buildCameraStreamTab(
                             this, cameraPanel_->profileTabNameForUi(camera2Ui_), camera2Ui_, streamHooks),
                         cameraPanel_->profileTabNameForUi(camera2Ui_));
-    streamTabs_->addTab(createRgbUr3eStreamTab(), QStringLiteral("UR3e"));
+    streamTabs_->addTab(createUr3eStreamTab(), QStringLiteral("UR3e"));
     streamTabs_->addTab(capturePanel_->createStreamTab(), QStringLiteral("Capture"));
+
+    connect(streamTabs_, &QTabWidget::currentChanged, this, &MainWindow::onStreamTabChanged);
 
     layout->addWidget(streamTabs_, 1);
     return panel;
 }
 
-
-QWidget *MainWindow::createRgbUr3eStreamTab()
-{
-    auto *tab = new QWidget(this);
-    auto *layout = new QVBoxLayout(tab);
-
-    auto *gridHost = new QWidget(tab);
-    auto *grid = new QGridLayout(gridHost);
-    grid->setContentsMargins(8, 8, 8, 8);
-    grid->setSpacing(10);
-
-    QLabel *rgbLabel = nullptr;
-    QLabel *poseLabel = nullptr;
-
-    auto *rgbPane = ui::createPreviewPane(tab, QStringLiteral("RGB"), rgbLabel);
-    auto *posePane = ui::createPreviewPane(tab, QStringLiteral("Robot / pose"), poseLabel);
-
-    rgbLabel->setText("UR3e RGB preview (multi-angle capture) \u2014 disconnected");
-    poseLabel->setText("UR3e pose / path preview (TODO) \u2014 disconnected");
-
-    grid->addWidget(rgbPane, 0, 0);
-    grid->addWidget(posePane, 0, 1);
-    grid->setRowStretch(0, 1);
-    grid->setColumnStretch(0, 1);
-    grid->setColumnStretch(1, 1);
-
-    layout->addWidget(gridHost, 1);
-    return tab;
-}
 bool MainWindow::isCameraSessionActive(const CameraState state)
 {
     return hf::camera::CameraPanelController::isSessionActive(state);
@@ -417,12 +435,23 @@ void MainWindow::performGracefulShutdown()
         });
     }
 
+    if (ur3ePanel_ != nullptr)
+    {
+        waitDialog.setStatusText(tr("Stopping UR3e sidecar\u2026"));
+        QApplication::processEvents();
+        waitWithBusyDialog(waitDialog, [this]() {
+            if (ur3ePanel_ != nullptr)
+                ur3ePanel_->shutdownSync();
+        });
+    }
+
     if (cameraPanel_ != nullptr)
         cameraPanel_->stopStreamPipeline();
 
     
 
     settingsPanel_->savePersistedUiSettings();
+    sessionLog_.close();
     gracefulShutdownDone_ = true;
 }
 
@@ -444,9 +473,16 @@ void MainWindow::closeEvent(QCloseEvent *event)
 }
 void MainWindow::appendLog(const QString &message)
 {
-    if (logOutput_ == nullptr)
+    appendLog(hf::log::classifyMessage(message), message);
+}
+
+void MainWindow::appendLog(const hf::log::Channel channel, const QString &message)
+{
+    const std::size_t index = static_cast<std::size_t>(channel);
+    if (index >= logOutputs_.size() || logOutputs_[index] == nullptr)
         return;
 
-    const QString ts = QDateTime::currentDateTime().toString("yyyy-MM-dd hh:mm:ss");
-    logOutput_->appendPlainText(QString("[%1] %2").arg(ts, message));
+    const QString ts = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd hh:mm:ss"));
+    logOutputs_[index]->appendPlainText(QStringLiteral("[%1] %2").arg(ts, message));
+    sessionLog_.write(channel, message);
 }

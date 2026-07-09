@@ -1,6 +1,8 @@
+// Offline post-processing for completed stage-scan capture sessions (backend).
 #include "backend/processing/CapturePostProcessor.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
+#include "backend/processing/EnviBilReader.hpp"
 #include "backend/processing/FlatFieldCorrector.hpp"
 #include "backend/processing/Gsam2RoiAnalysis.hpp"
 #include "backend/processing/Gsam2SegmentationClient.hpp"
@@ -19,6 +21,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QSaveFile>
+#include <QXmlStreamReader>
 #include <QXmlStreamWriter>
 
 #include <algorithm>
@@ -122,16 +125,16 @@ double referencePlotDnAxisMaxForStream(const CaptureStreamTraits &traits)
 
 ReflectanceRgbExportMode rgbExportModeForStream(const CaptureStreamTraits &traits)
 {
-    // reflectance/fx10e + transmittance/fx10e → D-illuminant sRGB (λ ≤ truncate_nm)
-    // reflectance/swir3 + transmittance/swir3 → SWIR false-color wavelength ranges
-    return traits.isSwir3 ? ReflectanceRgbExportMode::SwirFalseColorRanges
-                          : ReflectanceRgbExportMode::SpectralToSrgb;
+    if (traits.isSwir3)
+        return ReflectanceRgbExportMode::SwirFalseColorRanges;
+    return ReflectanceRgbExportMode::SpectralToSrgb;
 }
 
 QString rgbExportModeLabel(const ReflectanceRgbExportMode mode)
 {
-    return mode == ReflectanceRgbExportMode::SwirFalseColorRanges ? QStringLiteral("swir_false_color")
-                                                                  : QStringLiteral("srgb");
+    if (mode == ReflectanceRgbExportMode::SwirFalseColorRanges)
+        return QStringLiteral("swir_false_color");
+    return QStringLiteral("srgb");
 }
 
 SwirFalseColorConfig swirFalseColorConfigFromHardware(const hf::HardwareConfig::PreprocessingConfig &cfg)
@@ -725,7 +728,7 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
         Gsam2SegmentationRequest segRequest;
         segRequest.inputRgbPath = report.rgbPath;
         segRequest.outputDirectory = segDir;
-        segRequest.imageName = datasetStem + QStringLiteral("_rgb.png");
+        segRequest.imageName = QFileInfo(report.rgbPath).fileName();
         segRequest.prompt = options.gsamPrompt.trimmed().isEmpty() ? QStringLiteral("sample.")
                                                                     : options.gsamPrompt.trimmed();
         segRequest.maxDetections = std::max(1, options.gsamSampleCount);
@@ -756,7 +759,7 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
         const Gsam2RoiAnalysisResult roiResult = analyzeGsam2SegmentationRois(
             ffcHdrForRgb,
             segDir,
-            datasetStem + QStringLiteral("_rgb.png"),
+            QFileInfo(report.rgbPath).fileName(),
             segResponse.manifestJsonPath,
             spectrumYAxisLabelForStream(streamTraits),
             &segError);
@@ -792,7 +795,234 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
 
     return report;
 }
+
+QString streamRootFromManifestRelativePath(const QString &relativePath)
+{
+    const int captureIdx = relativePath.indexOf(QStringLiteral("/capture/"), Qt::CaseInsensitive);
+    if (captureIdx < 0)
+        return {};
+
+    return relativePath.left(captureIdx);
+}
+
+std::uint64_t frameCountFromHdrPath(const QString &hdrPath)
+{
+    EnviBilMetadata metadata;
+    if (!parseEnviHdr(hdrPath, metadata, nullptr))
+        return 0;
+
+    return metadata.lines > 0 ? static_cast<std::uint64_t>(metadata.lines) : 0;
+}
+
+void applyHdrPathsToStream(CaptureWriterStreamSummary &stream,
+                           const QString &sessionDirectory,
+                           const QString &relativeHdrPath,
+                           const QString &type)
+{
+    const QString absoluteHdr = QDir(sessionDirectory).filePath(relativeHdrPath);
+    const QString absoluteRaw =
+        QFileInfo(absoluteHdr).absolutePath() + QLatin1Char('/')
+        + QFileInfo(absoluteHdr).completeBaseName() + QStringLiteral(".raw");
+    const std::uint64_t frameCount = frameCountFromHdrPath(absoluteHdr);
+
+    if (type.compare(QStringLiteral("capture"), Qt::CaseInsensitive) == 0)
+    {
+        stream.hdrPath = absoluteHdr;
+        stream.rawPath = absoluteRaw;
+        stream.baseName = QFileInfo(absoluteHdr).completeBaseName();
+        stream.frameCount = frameCount;
+        return;
+    }
+
+    if (type.compare(QStringLiteral("darkref"), Qt::CaseInsensitive) == 0)
+    {
+        stream.blackReferenceHdrPath = absoluteHdr;
+        stream.blackReferenceRawPath = absoluteRaw;
+        stream.blackReferenceFrameCount = frameCount;
+        return;
+    }
+
+    if (type.compare(QStringLiteral("whiteref"), Qt::CaseInsensitive) == 0)
+    {
+        stream.whiteReferenceHdrPath = absoluteHdr;
+        stream.whiteReferenceRawPath = absoluteRaw;
+        stream.whiteReferenceFrameCount = frameCount;
+    }
+}
+
+bool discoverStreamFromCaptureDirectory(const QString &sessionDirectory,
+                                        const QString &relativeRoot,
+                                        CaptureWriterStreamSummary &streamOut)
+{
+    const QString captureDir =
+        QDir(sessionDirectory).filePath(relativeRoot + QStringLiteral("/capture"));
+    const QDir dir(captureDir);
+    if (!dir.exists())
+        return false;
+
+    CaptureWriterStreamSummary stream;
+    stream.relativeRoot = relativeRoot;
+
+    const QStringList hdrFiles = dir.entryList({QStringLiteral("*.hdr")}, QDir::Files, QDir::Name);
+    for (const QString &hdrName : hdrFiles)
+    {
+        const QString relativeHdrPath =
+            manifestRelativePath(sessionDirectory, dir.filePath(hdrName));
+        if (hdrName.startsWith(QStringLiteral("DARKREF_"), Qt::CaseInsensitive))
+            applyHdrPathsToStream(stream, sessionDirectory, relativeHdrPath, QStringLiteral("darkref"));
+        else if (hdrName.startsWith(QStringLiteral("WHITEREF_"), Qt::CaseInsensitive))
+            applyHdrPathsToStream(stream, sessionDirectory, relativeHdrPath, QStringLiteral("whiteref"));
+        else if (stream.hdrPath.isEmpty())
+            applyHdrPathsToStream(stream, sessionDirectory, relativeHdrPath, QStringLiteral("capture"));
+    }
+
+    if (stream.hdrPath.isEmpty())
+        return false;
+
+    streamOut = std::move(stream);
+    return true;
+}
+
+bool includeRelativeRoot(const QString &relativeRoot, const QStringList &relativeRootsFilter)
+{
+    if (relativeRootsFilter.isEmpty())
+        return true;
+
+    for (const QString &filterRoot : relativeRootsFilter)
+    {
+        if (relativeRoot.compare(filterRoot, Qt::CaseInsensitive) == 0)
+            return true;
+    }
+
+    return false;
+}
+
+bool loadStreamsFromManifest(const QString &sessionDirectory,
+                             const QStringList &relativeRootsFilter,
+                             QMap<QString, CaptureWriterStreamSummary> &streamsOut,
+                             QString *errorMessage)
+{
+    const QString manifestPath = QDir(sessionDirectory).filePath(QStringLiteral("manifest.xml"));
+    if (!QFileInfo::exists(manifestPath))
+        return false;
+
+    QFile file(manifestPath);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("Could not open %1").arg(manifestPath);
+        return false;
+    }
+
+    QXmlStreamReader xml(&file);
+    while (!xml.atEnd())
+    {
+        xml.readNext();
+        if (!xml.isStartElement() || xml.name() != QStringLiteral("file"))
+            continue;
+
+        const QString extension = xml.attributes().value(QStringLiteral("extension")).toString();
+        if (extension.compare(QStringLiteral("hdr"), Qt::CaseInsensitive) != 0)
+        {
+            xml.skipCurrentElement();
+            continue;
+        }
+
+        const QString type = xml.attributes().value(QStringLiteral("type")).toString();
+        const QString relativePath = xml.readElementText().trimmed();
+        if (relativePath.isEmpty())
+            continue;
+
+        const QString relativeRoot = streamRootFromManifestRelativePath(relativePath);
+        if (relativeRoot.isEmpty() || !includeRelativeRoot(relativeRoot, relativeRootsFilter))
+            continue;
+
+        CaptureWriterStreamSummary &stream = streamsOut[relativeRoot];
+        stream.relativeRoot = relativeRoot;
+        applyHdrPathsToStream(stream, sessionDirectory, relativePath, type);
+    }
+
+    if (xml.hasError() && errorMessage != nullptr)
+    {
+        *errorMessage = QStringLiteral("manifest.xml parse error: %1").arg(xml.errorString());
+        return false;
+    }
+
+    return !streamsOut.isEmpty();
+}
+
+void discoverStreamsFromFilesystem(const QString &sessionDirectory,
+                                   const QStringList &relativeRootsFilter,
+                                   QMap<QString, CaptureWriterStreamSummary> &streamsOut)
+{
+    const auto tryDiscover = [&](const QString &relativeRoot) {
+        if (!includeRelativeRoot(relativeRoot, relativeRootsFilter))
+            return;
+
+        CaptureWriterStreamSummary stream;
+        if (!discoverStreamFromCaptureDirectory(sessionDirectory, relativeRoot, stream))
+            return;
+
+        streamsOut.insert(relativeRoot, std::move(stream));
+    };
+
+    if (!relativeRootsFilter.isEmpty())
+    {
+        for (const QString &relativeRoot : relativeRootsFilter)
+            tryDiscover(relativeRoot);
+        return;
+    }
+
+    const QStringList modeEntries =
+        QDir(sessionDirectory).entryList(QDir::Dirs | QDir::NoDotAndDotDot, QDir::Name);
+    for (const QString &mode : modeEntries)
+    {
+        for (const QString &camera : {QStringLiteral("fx10e"), QStringLiteral("swir3")})
+            tryDiscover(mode + QLatin1Char('/') + camera);
+    }
+}
 } // namespace
+
+CaptureSessionLoadResult loadCaptureSessionSummaryFromDisk(const QString &sessionDirectory,
+                                                           const QStringList &relativeRootsFilter)
+{
+    CaptureSessionLoadResult result;
+    const QString session = QDir::fromNativeSeparators(sessionDirectory.trimmed());
+    if (session.isEmpty() || !QFileInfo(session).isDir())
+    {
+        result.errorMessage = QStringLiteral("Session directory not found.");
+        return result;
+    }
+
+    QMap<QString, CaptureWriterStreamSummary> streams;
+    QString manifestError;
+    loadStreamsFromManifest(session, relativeRootsFilter, streams, &manifestError);
+
+    for (auto it = streams.begin(); it != streams.end();)
+    {
+        if (it->hdrPath.isEmpty())
+            it = streams.erase(it);
+        else
+            ++it;
+    }
+
+    if (streams.isEmpty())
+        discoverStreamsFromFilesystem(session, relativeRootsFilter, streams);
+
+    if (streams.isEmpty())
+    {
+        result.errorMessage = manifestError.isEmpty()
+                                  ? QStringLiteral("No capture streams found under %1.").arg(session)
+                                  : manifestError;
+        return result;
+    }
+
+    result.summary.sessionDirectory = session;
+    result.summary.streams = std::move(streams);
+    result.summary.active = false;
+    result.success = true;
+    return result;
+}
 
 CapturePostProcessResult processCaptureSession(const CaptureWriterSessionSummary &summary,
                                                const CapturePostProcessOptions &options)

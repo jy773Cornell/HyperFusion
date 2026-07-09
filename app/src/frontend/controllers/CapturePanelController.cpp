@@ -11,6 +11,7 @@
 #include "backend/LighthouseTypes.hpp"
 #include "backend/LighthouseWorker.hpp"
 #include "backend/StageWorker.hpp"
+#include "backend/processing/CapturePostProcessor.hpp"
 #include "backend/processing/CapturePostProcessorWorker.hpp"
 #include "backend/processing/Gsam2ServerManager.hpp"
 #include "backend/processing/HfFusionRunner.hpp"
@@ -18,6 +19,7 @@
 #include "frontend/controllers/CameraPanelController.hpp"
 #include "frontend/controllers/LightPanelController.hpp"
 #include "frontend/controllers/StagePanelController.hpp"
+#include "frontend/controllers/Ur3ePanelController.hpp"
 #include "frontend/controllers/UiSettingsController.hpp"
 #include "frontend/widgets/LumoCameraUi.hpp"
 #include "frontend/widgets/MainWindow.hpp"
@@ -1220,6 +1222,8 @@ void hf::capture::CapturePanelController::updateSessionUiLock() {
 
   if (host_->ur3eSettingsPage_ != nullptr)
     host_->ur3eSettingsPage_->setEnabled(!scanActive);
+  if (host_->ur3ePanel() != nullptr)
+    host_->ur3ePanel()->refreshUi();
 
   if (scanActive && host_->captureRecorderStopBtn_ != nullptr)
     host_->captureRecorderStopBtn_->setEnabled(true);
@@ -2974,22 +2978,228 @@ void hf::capture::CapturePanelController::runManualFusion() {
     return;
   }
 
+  auto preprocessedDirForCamera = [](const QString &sessionDirectory,
+                                      const QString &mode,
+                                      const QString &camera) -> QString {
+    return QDir(sessionDirectory).filePath(
+        mode + QLatin1Char('/') + camera + QStringLiteral("/preprocessed"));
+  };
+
+  auto hasRgbPng = [](const QString &preprocessedDir) -> bool {
+    const QDir dir(preprocessedDir);
+    if (!dir.exists())
+      return false;
+    const QStringList matches =
+        dir.entryList({QStringLiteral("*_rgb.png")}, QDir::Files, QDir::Name);
+    return !matches.isEmpty();
+  };
+
+  auto hasFfcHdr = [](const QString &preprocessedDir) -> bool {
+    const QDir dir(preprocessedDir);
+    if (!dir.exists())
+      return false;
+    const QStringList matches =
+        dir.entryList({QStringLiteral("*_ffc.hdr")}, QDir::Files, QDir::Name);
+    return !matches.isEmpty();
+  };
+
+  auto hasSegmentationManifest = [](const QString &preprocessedDir) -> bool {
+    const QString manifestPath =
+        QDir(preprocessedDir).filePath(QStringLiteral("segmentation/segmentation_results.json"));
+    return QFileInfo::exists(manifestPath);
+  };
+
+  auto needsPreprocessAndSeg = [&](const QString &sessionDir) -> bool {
+    for (const QString &mode : modes)
+    {
+      const QString fxPre = preprocessedDirForCamera(sessionDir, mode, QStringLiteral("fx10e"));
+      const QString swPre = preprocessedDirForCamera(sessionDir, mode, QStringLiteral("swir3"));
+
+      if (!hasRgbPng(fxPre) || !hasFfcHdr(fxPre) || !hasSegmentationManifest(fxPre))
+        return true;
+      if (!hasRgbPng(swPre) || !hasFfcHdr(swPre) || !hasSegmentationManifest(swPre))
+        return true;
+    }
+    return false;
+  };
+
+  const bool mustRunPostProcess = needsPreprocessAndSeg(path);
+
   host_->appendLog(
       QStringLiteral("Capture fusion: manual run started for %1 (%2)")
           .arg(path, modes.join(QStringLiteral(", "))));
 
-  hfFusionWorker_->requestFusion(
-      path, {},
-      [this](const hf::processing::HfFusionSessionResult &result) {
-        QMetaObject::invokeMethod(
-            this,
-            [this, result]() {
-              for (const QString &line : result.logLines)
-                host_->appendLog(line);
-              updateRecorderControls();
-            },
-            Qt::QueuedConnection);
-      });
+  auto startFusion = [this, path, modes]() {
+    hfFusionWorker_->requestFusion(
+        path, modes,
+        [this](const hf::processing::HfFusionSessionResult &result) {
+          QMetaObject::invokeMethod(
+              this,
+              [this, result]() {
+                for (const QString &line : result.logLines)
+                  host_->appendLog(line);
+                updateRecorderControls();
+              },
+              Qt::QueuedConnection);
+        });
+  };
+
+  if (mustRunPostProcess)
+  {
+    if (capturePostProcessorWorker_ == nullptr)
+    {
+      QMessageBox::warning(
+          host_, tr("Spectral fusion"),
+          tr("Preprocessed data or segmentation results are missing for %1, "
+             "but post-processing worker is not available.")
+              .arg(path));
+      return;
+    }
+
+    if (capturePostProcessorWorker_->isBusy())
+    {
+      host_->appendLog(
+          QStringLiteral("Capture post-process already running; wait before starting fusion."));
+      return;
+    }
+
+    const QString lastSummaryDir =
+        lastEndedCaptureSessionSummary_.sessionDirectory;
+    const bool canUseLastSummary =
+        !lastSummaryDir.isEmpty() &&
+        QDir(lastSummaryDir).absolutePath().compare(QDir(path).absolutePath(),
+                                                    Qt::CaseInsensitive) == 0;
+
+    CaptureWriterSessionSummary sessionSummary;
+    if (canUseLastSummary)
+    {
+      sessionSummary = lastEndedCaptureSessionSummary_;
+    }
+    else
+    {
+      QStringList streamRoots;
+      for (const QString &mode : modes)
+      {
+        for (const QString &camera : {QStringLiteral("fx10e"), QStringLiteral("swir3")})
+          streamRoots.push_back(mode + QLatin1Char('/') + camera);
+      }
+
+      const hf::processing::CaptureSessionLoadResult loadResult =
+          hf::processing::loadCaptureSessionSummaryFromDisk(path, streamRoots);
+      if (!loadResult.success)
+      {
+        QMessageBox::warning(
+            host_, tr("Spectral fusion"),
+            tr("Could not load capture data for post-processing:\n%1")
+                .arg(loadResult.errorMessage));
+        return;
+      }
+      sessionSummary = loadResult.summary;
+    }
+
+    // Run preprocessing + GSAM segmentation so HfFusion can find *_ffc.hdr and
+    // segmentation/segmentation_results.json for both cameras.
+    hf::processing::CapturePostProcessOptions options;
+    options.saveFfcImage = true; // required by HfFusion prerequisites
+    options.runGsamSegmentation = true;
+    options.runHfFusion = false;
+    if (host_->captureGsamPromptEdit_ != nullptr)
+      options.gsamPrompt = host_->captureGsamPromptEdit_->text().trimmed();
+    if (host_->captureGsamSampleCountSpin_ != nullptr)
+      options.gsamSampleCount = host_->captureGsamSampleCountSpin_->value();
+    if (gsam2ServerManager_ != nullptr)
+      options.gsamServerUrl = gsam2ServerManager_->serverUrl();
+
+    host_->appendLog(
+        QStringLiteral("Capture post-process (pre-fusion): missing preprocessing/segmentation; running preprocess+GSAM…"));
+
+    capturePostProcessorWorker_->requestProcess(
+        sessionSummary, options,
+        [this, path, modes](const hf::processing::CapturePostProcessResult &result) {
+          QMetaObject::invokeMethod(
+              this,
+              [this, path, modes, result]() {
+                for (const QString &line : result.logLines)
+                  host_->appendLog(line);
+
+                // Re-check: user asked for a single guard, so only start fusion
+                // if segmentation now exists.
+                bool stillMissing = true;
+                {
+                  auto preprocessedDirForCamera2 = [](const QString &sessionDirectory,
+                                                      const QString &mode,
+                                                      const QString &camera) -> QString {
+                    return QDir(sessionDirectory).filePath(
+                        mode + QLatin1Char('/') + camera +
+                        QStringLiteral("/preprocessed"));
+                  };
+                  auto hasRgbPng2 = [](const QString &preprocessedDir) -> bool {
+                    const QDir dir(preprocessedDir);
+                    if (!dir.exists())
+                      return false;
+                    const QStringList matches = dir.entryList(
+                        {QStringLiteral("*_rgb.png")}, QDir::Files, QDir::Name);
+                    return !matches.isEmpty();
+                  };
+                  auto hasFfcHdr2 = [](const QString &preprocessedDir) -> bool {
+                    const QDir dir(preprocessedDir);
+                    if (!dir.exists())
+                      return false;
+                    const QStringList matches = dir.entryList(
+                        {QStringLiteral("*_ffc.hdr")}, QDir::Files, QDir::Name);
+                    return !matches.isEmpty();
+                  };
+                  auto hasSegmentationManifest2 = [](const QString &preprocessedDir) -> bool {
+                    const QString manifestPath =
+                        QDir(preprocessedDir).filePath(
+                            QStringLiteral("segmentation/segmentation_results.json"));
+                    return QFileInfo::exists(manifestPath);
+                  };
+
+                  stillMissing = false;
+                  for (const QString &mode : modes)
+                  {
+                    const QString fxPre = preprocessedDirForCamera2(
+                        path, mode, QStringLiteral("fx10e"));
+                    const QString swPre = preprocessedDirForCamera2(
+                        path, mode, QStringLiteral("swir3"));
+                    if (!hasRgbPng2(fxPre) || !hasFfcHdr2(fxPre) || !hasSegmentationManifest2(fxPre) ||
+                        !hasRgbPng2(swPre) || !hasFfcHdr2(swPre) || !hasSegmentationManifest2(swPre))
+                    {
+                      stillMissing = true;
+                      break;
+                    }
+                  }
+                }
+
+                if (stillMissing)
+                {
+                  host_->appendLog(
+                      QStringLiteral("Capture fusion: post-process did not produce required preprocessing/segmentation; fusion aborted."));
+                  updateRecorderControls();
+                  return;
+                }
+
+                if (hfFusionWorker_ != nullptr && !hfFusionWorker_->isBusy())
+                  hfFusionWorker_->requestFusion(path, modes, [this](const hf::processing::HfFusionSessionResult &fusionResult) {
+                    QMetaObject::invokeMethod(
+                        this,
+                        [this, fusionResult]() {
+                          for (const QString &line : fusionResult.logLines)
+                            host_->appendLog(line);
+                          updateRecorderControls();
+                        },
+                        Qt::QueuedConnection);
+                  });
+              },
+              Qt::QueuedConnection);
+        });
+  }
+  else
+  {
+    startFusion();
+  }
+
   updateRecorderControls();
 }
 

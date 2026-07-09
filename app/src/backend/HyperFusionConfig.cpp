@@ -875,6 +875,87 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
             else
                 warnings.push_back(QStringLiteral("Unknown key in [fusion]: %1").arg(key));
         }
+        else if (section == QStringLiteral("ur3e"))
+        {
+            if (key == QStringLiteral("wsl_distro"))
+                config.ur3e.wslDistro = value;
+            else if (key == QStringLiteral("wsl_bash_command"))
+                config.ur3e.wslBashCommand = value;
+            else if (key == QStringLiteral("ur3e_repo_linux"))
+                config.ur3e.ur3eRepoLinux = value;
+            else if (key == QStringLiteral("server_port"))
+            {
+                bool ok = false;
+                const int port = value.toInt(&ok);
+                if (!ok || port <= 0 || port > 65535)
+                    warnings.push_back(QStringLiteral("Invalid ur3e server_port: %1").arg(value));
+                else
+                    config.ur3e.serverPort = port;
+            }
+            else if (key == QStringLiteral("robot_ip"))
+                config.ur3e.robotIp = value;
+            else if (key == QStringLiteral("dashboard_port"))
+            {
+                bool ok = false;
+                const int port = value.toInt(&ok);
+                if (!ok || port <= 0 || port > 65535)
+                    warnings.push_back(QStringLiteral("Invalid ur3e dashboard_port: %1").arg(value));
+                else
+                    config.ur3e.dashboardPort = port;
+            }
+            else if (key == QStringLiteral("rtde_port"))
+            {
+                bool ok = false;
+                const int port = value.toInt(&ok);
+                if (!ok || port <= 0 || port > 65535)
+                    warnings.push_back(QStringLiteral("Invalid ur3e rtde_port: %1").arg(value));
+                else
+                    config.ur3e.rtdePort = port;
+            }
+            else if (key == QStringLiteral("prestart_driver"))
+            {
+                const QString lower = value.trimmed().toLower();
+                config.ur3e.prestartDriver =
+                    lower == QStringLiteral("true") || lower == QStringLiteral("1")
+                    || lower == QStringLiteral("yes");
+            }
+            else if (key == QStringLiteral("ros_distro"))
+                config.ur3e.rosDistro = value;
+            else if (key == QStringLiteral("ur_type"))
+                config.ur3e.urType = value;
+            else if (key == QStringLiteral("use_mock_hardware"))
+            {
+                const QString lower = value.trimmed().toLower();
+                config.ur3e.useMockHardware =
+                    lower.isEmpty() || lower == QStringLiteral("true") || lower == QStringLiteral("1")
+                    || lower == QStringLiteral("yes");
+            }
+            else if (key == QStringLiteral("max_linear_speed_m_per_s"))
+            {
+                if (!hasNumber || numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral("Invalid ur3e max_linear_speed_m_per_s: %1").arg(value));
+                else
+                    config.ur3e.maxLinearSpeedMPerS = numericValue;
+            }
+            else if (key == QStringLiteral("max_linear_accel_m_per_s2"))
+            {
+                if (!hasNumber || numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral("Invalid ur3e max_linear_accel_m_per_s2: %1").arg(value));
+                else
+                    config.ur3e.maxLinearAccelMPerS2 = numericValue;
+            }
+            else if (key == QStringLiteral("motion_type"))
+            {
+                const QString lower = value.trimmed().toLower();
+                if (lower == QStringLiteral("move_j") || lower == QStringLiteral("move_l"))
+                    config.ur3e.motionType = lower;
+                else
+                    warnings.push_back(
+                        QStringLiteral("Invalid ur3e motion_type (use move_j or move_l): %1").arg(value));
+            }
+            else
+                warnings.push_back(QStringLiteral("Unknown key in [ur3e]: %1").arg(key));
+        }
         else if (section.isEmpty())
         {
             warnings.push_back(QStringLiteral("Key outside a section (ignored): %1").arg(key));
@@ -1006,7 +1087,24 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "[fusion]\n"
         << "# Offline FX10e + SWIR3 fusion. Run hf_fusion/setup_venv.ps1 beside app.exe once.\n"
         << "fusion_margin_mm = 5.0\n"
-        << "fusion_timeout_ms = 3600000\n";
+        << "fusion_timeout_ms = 3600000\n"
+        << "\n"
+        << "[ur3e]\n"
+        << "# UR3e WSL sidecar (ROS 2). See resources/ur3e/README.md.\n"
+        << "wsl_distro = Ubuntu\n"
+        << "wsl_bash_command = \n"
+        << "ur3e_repo_linux = \n"
+        << "server_port = 8766\n"
+        << "robot_ip = 192.168.0.10\n"
+        << "dashboard_port = 29999\n"
+        << "rtde_port = 30004\n"
+        << "prestart_driver = false\n"
+        << "ros_distro = jazzy\n"
+        << "ur_type = ur3e\n"
+        << "use_mock_hardware = true\n"
+        << "max_linear_speed_m_per_s = 0.05\n"
+        << "max_linear_accel_m_per_s2 = 0.3\n"
+        << "motion_type = move_j\n";
 
     if (!file.commit())
     {

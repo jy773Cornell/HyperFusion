@@ -6,6 +6,7 @@
 #include "backend/LighthouseTypes.hpp"
 #include "backend/StageTypes.hpp"
 #include "frontend/controllers/CapturePanelController.hpp"
+#include "frontend/logging/AppLogSession.hpp"
 #include "frontend/widgets/LumoCameraUi.hpp"
 
 #include <QImage>
@@ -38,6 +39,11 @@ namespace hf::stage
 class StagePanelController;
 }
 
+namespace hf::ur3e
+{
+class Ur3ePanelController;
+}
+
 class CameraCoordinator;
 class LighthouseWorker;
 class OperationWaitDialog;
@@ -63,6 +69,8 @@ class DetectorCrosshairWidget;
 class IntensityBarWidget;
 class ProfilePlotWidget;
 class StageAxisWidget;
+class Ur3eJointBarWidget;
+class Ur3eScanRoutePlanWidget;
 class WaterfallDisplayWidget;
 } // namespace ui
 
@@ -81,6 +89,7 @@ class MainWindow : public QMainWindow
 
     friend class hf::capture::CapturePanelController;
     friend class hf::stage::StagePanelController;
+    friend class hf::ur3e::Ur3ePanelController;
     friend class hf::light::LightPanelController;
     friend class hf::camera::CameraPanelController;
     friend class hf::settings::UiSettingsController;
@@ -91,6 +100,7 @@ public:
 
     [[nodiscard]] hf::capture::CapturePanelController *capturePanel() const;
     [[nodiscard]] hf::stage::StagePanelController *stagePanel() const;
+    [[nodiscard]] hf::ur3e::Ur3ePanelController *ur3ePanel() const;
     [[nodiscard]] hf::light::LightPanelController *lightPanel() const;
     [[nodiscard]] hf::camera::CameraPanelController *cameraPanel() const;
     [[nodiscard]] hf::settings::UiSettingsController *settingsPanel() const;
@@ -102,6 +112,7 @@ public:
     [[nodiscard]] bool isCaptureSessionActive() const;
 
     void appendLog(const QString &message);
+    void appendLog(hf::log::Channel channel, const QString &message);
 
 protected:
     void closeEvent(QCloseEvent *event) override;
@@ -119,12 +130,14 @@ private:
     QWidget *createStageSettingsTab();
     QWidget *createLightSettingsTab();
     QWidget *createUr3eSettingsTab();
+    QWidget *createUr3eStreamTab();
     QWidget *createCaptureSettingsTab();
-    QWidget *createRgbUr3eStreamTab();
     QWidget *createLumoCameraGroup(QWidget *parent, LumoCameraUi &ui, LumoSensorKind sensorKind);
 
     // Core layout
-    QPlainTextEdit *logOutput_ = nullptr;
+    QTabWidget *logTabs_ = nullptr;
+    std::array<QPlainTextEdit *, hf::log::channelCount()> logOutputs_{};
+    hf::log::SessionLogWriter sessionLog_;
     QTabWidget *settingsTabs_ = nullptr;
     QTabWidget *streamTabs_ = nullptr;
     QTabWidget *cameraSettingsTabs_ = nullptr;
@@ -139,6 +152,11 @@ private:
     static constexpr int kStreamTabCamera2 = 1;
     static constexpr int kStreamTabUr3e = 2;
     static constexpr int kStreamTabCapture = 3;
+
+    // UR3e stream tab
+    QWidget *ur3eStreamPage_ = nullptr;
+    ui::Ur3eScanRoutePlanWidget *ur3eScanRoutePlanWidget_ = nullptr;
+    QLabel *ur3eRgbPreviewLabel_ = nullptr;
 
     // Capture stream tab
     QWidget *captureStreamPage_ = nullptr;
@@ -207,6 +225,18 @@ private:
     QGroupBox *capturePositionBox_ = nullptr;
     QGroupBox *captureCamerasBox_ = nullptr;
     QWidget *ur3eSettingsPage_ = nullptr;
+    QLineEdit *ur3eRobotIpEdit_ = nullptr;
+    QPushButton *ur3eConnectBtn_ = nullptr;
+    QPushButton *ur3eDisconnectBtn_ = nullptr;
+    static constexpr int kUr3eJointCount = 6;
+    ui::Ur3eJointBarWidget *ur3eJointBars_[kUr3eJointCount] = {nullptr, nullptr, nullptr,
+                                                               nullptr, nullptr, nullptr};
+    QPushButton *ur3eMoveBtn_ = nullptr;
+    QPushButton *ur3eStopMotionBtn_ = nullptr;
+    QPushButton *ur3eSyncJointsBtn_ = nullptr;
+    QPushButton *ur3eStartRvizBtn_ = nullptr;
+    QPushButton *ur3eStartMoveItBtn_ = nullptr;
+    QTimer *ur3ePosePollTimer_ = nullptr;
     QLabel *captureCamerasEmptyLabel_ = nullptr;
     QCheckBox *captureCamera1Check_ = nullptr;
     QCheckBox *captureCamera2Check_ = nullptr;
@@ -235,6 +265,7 @@ private:
     bool performingGracefulShutdown_ = false;
 
     std::unique_ptr<hf::stage::StagePanelController> stagePanel_;
+    std::unique_ptr<hf::ur3e::Ur3ePanelController> ur3ePanel_;
     std::unique_ptr<hf::light::LightPanelController> lightPanel_;
     std::unique_ptr<hf::camera::CameraPanelController> cameraPanel_;
     std::unique_ptr<hf::settings::UiSettingsController> settingsPanel_;
@@ -242,4 +273,5 @@ private:
 
 private slots:
     void onSettingsTabChanged(int index);
+    void onStreamTabChanged(int index);
 };

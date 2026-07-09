@@ -48,6 +48,7 @@ endif()
 
 qt_add_executable(app WIN32
     src/main.cpp
+    resources/app.qrc
     # frontend/widgets — QWidget subclasses only
     src/frontend/widgets/MainWindow.cpp
     src/frontend/widgets/DetectorCrosshairWidget.cpp
@@ -64,11 +65,17 @@ qt_add_executable(app WIN32
     src/frontend/controllers/CameraPanelController.cpp
     src/frontend/controllers/UiSettingsController.cpp
     src/frontend/controllers/CapturePanelController.cpp
+    src/frontend/controllers/Ur3ePanelController.cpp
+    src/frontend/logging/AppLog.cpp
+    src/frontend/logging/AppLogSession.cpp
     src/frontend/widgets/MainWindowTabHelpers.cpp
     src/frontend/widgets/SettingsTabPanelBuilder.cpp
     src/frontend/widgets/CameraSettingsTab.cpp
     src/frontend/widgets/StageSettingsTab.cpp
     src/frontend/widgets/LightSettingsTab.cpp
+    src/frontend/widgets/Ur3eJointBarWidget.cpp
+    src/frontend/widgets/Ur3eScanRoutePlanWidget.cpp
+    src/frontend/widgets/Ur3eStreamTab.cpp
     src/frontend/widgets/Ur3eSettingsTab.cpp
     src/frontend/widgets/CaptureSettingsTab.cpp
     src/frontend/streaming/FrameCoalescer.cpp
@@ -81,6 +88,8 @@ qt_add_executable(app WIN32
     include/frontend/widgets/ProfilePlotWidget.hpp
     include/frontend/widgets/StageAxisWidget.hpp
     include/frontend/widgets/IntensityBarWidget.hpp
+    include/frontend/widgets/Ur3eScanRoutePlanWidget.hpp
+    include/frontend/widgets/Ur3eJointBarWidget.hpp
     include/frontend/widgets/LumoCameraUi.hpp
     include/frontend/widgets/WaterfallDisplayWidget.hpp
     include/frontend/widgets/StreamPaneHelpers.hpp
@@ -90,6 +99,9 @@ qt_add_executable(app WIN32
     include/frontend/controllers/CameraPanelController.hpp
     include/frontend/controllers/UiSettingsController.hpp
     include/frontend/controllers/CapturePanelController.hpp
+    include/frontend/controllers/Ur3ePanelController.hpp
+    include/frontend/logging/AppLog.hpp
+    include/frontend/logging/AppLogSession.hpp
     include/frontend/widgets/MainWindowTabHelpers.hpp
     include/frontend/widgets/SettingsTabPanelBuilder.hpp
     include/frontend/streaming/FrameCoalescer.hpp
@@ -106,6 +118,7 @@ qt_add_executable(app WIN32
     src/frontend/processing/WaterfallProcessor.cpp
     # frontend/utils — small UI helpers
     src/frontend/utils/SerialPortEnumerator.cpp
+    src/frontend/utils/AppBranding.cpp
     # frontend/settings — persistence
     src/frontend/settings/AppSettingsStore.cpp
     include/frontend/settings/AppSettingsStore.hpp
@@ -132,6 +145,12 @@ qt_add_executable(app WIN32
     src/backend/processing/Gsam2RoiAnalysis.cpp
     src/backend/processing/Gsam2SpectrumPlot.cpp
     src/backend/processing/GsamWslPathUtil.cpp
+    src/backend/ur3e/Ur3eClient.cpp
+    src/backend/ur3e/Ur3eMoveItManager.cpp
+    src/backend/ur3e/Ur3eRvizManager.cpp
+    src/backend/ur3e/Ur3eServerManager.cpp
+    src/backend/ur3e/Ur3eWslLogUtil.cpp
+    src/backend/ur3e/Ur3eWslPathUtil.cpp
     src/backend/processing/IlluminantTables.cpp
     src/backend/processing/ReferenceBuilder.cpp
     src/backend/processing/EnviBilWriter.cpp
@@ -162,6 +181,12 @@ qt_add_executable(app WIN32
     include/backend/processing/Gsam2RoiAnalysis.hpp
     include/backend/processing/Gsam2SpectrumPlot.hpp
     include/backend/processing/GsamWslPathUtil.hpp
+    include/backend/ur3e/Ur3eClient.hpp
+    include/backend/ur3e/Ur3eServerManager.hpp
+    include/backend/ur3e/Ur3eMoveItManager.hpp
+    include/backend/ur3e/Ur3eRvizManager.hpp
+    include/backend/ur3e/Ur3eWslLogUtil.hpp
+    include/backend/ur3e/Ur3eWslPathUtil.hpp
     include/backend/processing/CapturePostProcessor.hpp
     include/backend/processing/HfFusionRunner.hpp
     include/backend/processing/HfFusionWorker.hpp
@@ -289,6 +314,12 @@ else()
 endif()
 
 target_link_libraries(app PRIVATE Qt6::Widgets Qt6::Core Qt6::Network)
+
+if(WIN32)
+    target_sources(app PRIVATE resources/app.rc)
+    set_source_files_properties(resources/app.rc PROPERTIES
+        VS_RESOURCE_COMPILE_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/resources")
+endif()
 
 # Ship hyperfusion.cfg beside app.exe (hardware parameters).
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/hyperfusion.cfg")

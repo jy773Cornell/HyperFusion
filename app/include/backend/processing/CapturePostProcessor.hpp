@@ -25,6 +25,17 @@ struct CapturePostProcessOptions
     QString hfFusionMode = QStringLiteral("reflectance");
 };
 
+struct CaptureSessionLoadResult
+{
+    bool success = false;
+    QString errorMessage;
+    CaptureWriterSessionSummary summary;
+};
+
+/// Rebuild stream paths from manifest.xml (or capture/ scan) for offline post-processing.
+CaptureSessionLoadResult loadCaptureSessionSummaryFromDisk(const QString &sessionDirectory,
+                                                           const QStringList &relativeRootsFilter = {});
+
 CapturePostProcessResult processCaptureSession(const CaptureWriterSessionSummary &summary,
                                                const CapturePostProcessOptions &options = {});
 

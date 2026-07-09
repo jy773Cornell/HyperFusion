@@ -80,14 +80,72 @@ def write_segmented_rgb_patch(rgb: np.ndarray, mask: np.ndarray, path: Path) -> 
 
 
 def z_order_sort_indices(boxes_xyxy: np.ndarray) -> List[int]:
-    """Sort detections top-to-bottom, then left-to-right (reading / Z order)."""
+    """Row-major order from the left-upper corner.
 
-    def sort_key(index: int) -> tuple[float, float]:
-        x1, y1, x2, y2 = (float(boxes_xyxy[index, 0]), float(boxes_xyxy[index, 1]),
-                            float(boxes_xyxy[index, 2]), float(boxes_xyxy[index, 3]))
-        return ((y1 + y2) * 0.5, (x1 + x2) * 0.5)
+    We cluster detections into rows using the Y center of each box, then sort
+    within each row by X center. ROI ids are assigned after this reorder, so:
+      - row #1 is the top-most objects
+      - within a row, left-to-right is ROI increasing
+    """
 
-    return sorted(range(int(boxes_xyxy.shape[0])), key=sort_key)
+    count = int(boxes_xyxy.shape[0])
+    if count <= 1:
+        return list(range(count))
+
+    x_tl = []
+    y_tl = []
+    heights = []
+    for i in range(count):
+        x1, y1, x2, y2 = (
+            float(boxes_xyxy[i, 0]),
+            float(boxes_xyxy[i, 1]),
+            float(boxes_xyxy[i, 2]),
+            float(boxes_xyxy[i, 3]),
+        )
+        # Left-upper corner coordinates.
+        x_tl.append(x1)
+        y_tl.append(y1)
+        heights.append(max(1.0, y2 - y1))
+
+    # Row tolerance derived from typical box height.
+    heights_np = np.asarray(heights, dtype=np.float32)
+    median_h = float(np.median(heights_np)) if heights_np.size else 0.0
+    row_tol = max(10.0, 0.5 * median_h)
+
+    indices_by_y = sorted(range(count), key=lambda i: y_tl[i])
+
+    rows: List[List[int]] = []
+    current_row: list[int] = []
+    current_row_y: Optional[float] = None
+
+    for idx in indices_by_y:
+        y = y_tl[idx]
+        if current_row_y is None:
+            current_row = [idx]
+            current_row_y = y
+            continue
+
+        if abs(y - current_row_y) <= row_tol:
+            current_row.append(idx)
+            # Update running mean for stability.
+            current_row_y = float(np.mean([y_tl[j] for j in current_row]))
+        else:
+            rows.append(current_row)
+            current_row = [idx]
+            current_row_y = y
+
+    if current_row:
+        rows.append(current_row)
+
+    # Sort each row left-to-right.
+    for r in rows:
+        r.sort(key=lambda i: x_tl[i])
+
+    # Flatten rows in top-to-bottom order.
+    ordered: list[int] = []
+    for r in rows:
+        ordered.extend(r)
+    return ordered
 
 
 def reorder_detections(

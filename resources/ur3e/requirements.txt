@@ -1,0 +1,3 @@
+# HTTP sidecar runtime (ROS 2 packages are installed via install_env.sh / apt).
+PyYAML>=6.0
+numpy>=1.26

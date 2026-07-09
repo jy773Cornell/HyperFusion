@@ -1,0 +1,23 @@
+# Default UR3e sidecar settings (overridden by CLI args from HyperFusion hyperfusion.cfg).
+robot:
+  ip: "192.168.0.10"
+  dashboard_port: 29999
+  rtde_port: 30004
+
+motion:
+  max_linear_speed_m_per_s: 0.05
+  max_linear_accel_m_per_s2: 0.3
+
+server:
+  host: "0.0.0.0"
+  port: 8766
+
+ros_distro: jazzy
+ur_type: ur3e
+
+# true: ur_robot_driver ros2_control MockSystem (simulation).
+# false: connect to real robot at robot.ip.
+use_mock_hardware: true
+
+# Warm ur_robot_driver in background when sidecar starts (faster UI Connect).
+prestart_driver: false

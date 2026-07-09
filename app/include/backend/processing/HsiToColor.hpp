@@ -6,6 +6,9 @@
 
 #include <QString>
 
+#include <functional>
+#include <vector>
+
 namespace hf::processing
 {
 enum class ReflectanceRgbExportMode
@@ -47,5 +50,17 @@ bool writeFfcCubeRgbPng(const EnviBilMetadata &ffcMetadata,
                         const QString &illuminantsJsonPath,
                         const QString &outputPngPath,
                         QString *errorMessage = nullptr);
+
+/// Build sRGB PNG from per-pixel reflectance spectra (FX wavelength axis).
+bool writeReflectanceRgbPngFromProvider(
+    const std::vector<double> &wavelengthsNm,
+    int samples,
+    int lines,
+    const std::function<void(int line, int sample, float *reflectanceSpectrum)> &provideReflectance,
+    int illuminantD,
+    double truncateNm,
+    const QString &illuminantsJsonPath,
+    const QString &outputPngPath,
+    QString *errorMessage = nullptr);
 
 } // namespace hf::processing

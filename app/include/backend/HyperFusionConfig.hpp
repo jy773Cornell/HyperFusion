@@ -100,6 +100,27 @@ struct HardwareConfig
 
     FusionConfig fusion;
 
+    struct Ur3eConfig
+    {
+        QString wslDistro = QStringLiteral("Ubuntu");
+        QString wslBashCommand;
+        QString ur3eRepoLinux;
+        int serverPort = 8766;
+        QString robotIp = QStringLiteral("192.168.0.10");
+        int dashboardPort = 29999;
+        int rtdePort = 30004;
+        bool prestartDriver = false;
+        QString rosDistro = QStringLiteral("jazzy");
+        QString urType = QStringLiteral("ur3e");
+        bool useMockHardware = true;
+        double maxLinearSpeedMPerS = 0.05;
+        double maxLinearAccelMPerS2 = 0.3;
+        /// "move_j" (joint sliders) or "move_l" (linear TCP; uses current /pose target).
+        QString motionType = QStringLiteral("move_j");
+    };
+
+    Ur3eConfig ur3e;
+
     QString filePath;
     bool loadedFromFile = false;
     QStringList warnings;
