@@ -1,17 +1,17 @@
 // Offline post-processing for completed stage-scan capture sessions (backend).
-#include "backend/processing/CapturePostProcessor.hpp"
+#include "backend/camera/processing/CapturePostProcessor.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/processing/EnviBilReader.hpp"
-#include "backend/processing/FlatFieldCorrector.hpp"
-#include "backend/processing/Gsam2RoiAnalysis.hpp"
-#include "backend/processing/Gsam2SegmentationClient.hpp"
-#include "backend/processing/HfFusionRunner.hpp"
-#include "backend/processing/HsiToColor.hpp"
-#include "backend/processing/IlluminantTables.hpp"
-#include "backend/processing/ReferenceBuilder.hpp"
-#include "backend/processing/ReferenceSpectrumPlot.hpp"
-#include "backend/processing/ReferenceSpectrumStats.hpp"
+#include "backend/camera/processing/EnviBilReader.hpp"
+#include "backend/camera/processing/FlatFieldCorrector.hpp"
+#include "backend/camera/processing/Gsam2RoiAnalysis.hpp"
+#include "backend/camera/processing/Gsam2SegmentationClient.hpp"
+#include "backend/camera/processing/HfFusionRunner.hpp"
+#include "backend/camera/processing/HsiToColor.hpp"
+#include "backend/camera/processing/IlluminantTables.hpp"
+#include "backend/camera/processing/ReferenceBuilder.hpp"
+#include "backend/camera/processing/ReferenceSpectrumPlot.hpp"
+#include "backend/camera/processing/ReferenceSpectrumStats.hpp"
 
 #include <QDateTime>
 #include <QDir>

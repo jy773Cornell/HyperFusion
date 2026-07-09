@@ -6,7 +6,7 @@
 #include "adapters/lumo/CalibrationPackPaths.hpp"
 #include "adapters/lumo/Swir3NiCamera.hpp"
 #include "frontend/widgets/LumoCameraUi.hpp"
-#include "backend/CameraCoordinator.hpp"
+#include "backend/camera/CameraCoordinator.hpp"
 #include "backend/HyperFusionConfig.hpp"
 #include "frontend/processing/DetectorFrameConverter.hpp"
 

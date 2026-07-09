@@ -1,7 +1,7 @@
 // Multi-camera coordinator: routes UI commands to per-camera workers.
 #pragma once
 
-#include "backend/CameraWorker.hpp"
+#include "backend/camera/CameraWorker.hpp"
 
 #include <cstddef>
 #include <functional>

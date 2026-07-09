@@ -1,8 +1,8 @@
 // HTTP client for the GSAM2 WSL sidecar server (via wsl curl; WSL2 localhost is not reachable from Windows).
-#include "backend/processing/Gsam2SegmentationClient.hpp"
+#include "backend/camera/processing/Gsam2SegmentationClient.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/processing/GsamWslPathUtil.hpp"
+#include "backend/camera/processing/GsamWslPathUtil.hpp"
 
 #include <QDir>
 #include <QJsonDocument>

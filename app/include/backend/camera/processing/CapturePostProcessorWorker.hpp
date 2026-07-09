@@ -1,7 +1,7 @@
 #pragma once
 
-#include "backend/CaptureWriterTypes.hpp"
-#include "backend/processing/CapturePostProcessor.hpp"
+#include "backend/camera/CaptureWriterTypes.hpp"
+#include "backend/camera/processing/CapturePostProcessor.hpp"
 
 #include <atomic>
 #include <condition_variable>

@@ -1,5 +1,5 @@
 // Dedicated Qt thread implementation for blocking Lumo/NI SDK lifecycle calls.
-#include "backend/SdkLifecycleRunner.hpp"
+#include "backend/camera/SdkLifecycleRunner.hpp"
 
 #include <QMetaObject>
 #include <QMutexLocker>

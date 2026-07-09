@@ -13,14 +13,14 @@ HyperFusion controls a **Universal Robots UR3e** via a **WSL sidecar**: the Wind
 | **ROS 2** | Humble (Jammy) or Jazzy (Noble) — installed by `install_env.sh` |
 | **Python ≥ 3.10** | Ubuntu ships `python3` |
 
-Optional: enable **mirrored networking** in `%USERPROFILE%\.wslconfig` if WSL cannot reach the robot:
+Optional: if WSL cannot reach the robot, or External Control cannot reach the PC, run (Administrator PowerShell recommended):
 
-```ini
-[wsl2]
-networkingMode=mirrored
+```powershell
+cd resources\ur3e
+.\scripts\setup_wsl_robot_network.ps1 -ShutdownWsl
 ```
 
-Then `wsl --shutdown` and reopen Ubuntu.
+This writes `%USERPROFILE%\.wslconfig` (`networkingMode=mirrored`) and adds inbound firewall rules for TCP **50001–50004**. Or use `.\install_env.ps1 -SetupRobotNetwork -ShutdownWsl`.
 
 ---
 

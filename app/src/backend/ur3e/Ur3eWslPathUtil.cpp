@@ -2,7 +2,7 @@
 #include "backend/ur3e/Ur3eWslPathUtil.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/processing/GsamWslPathUtil.hpp"
+#include "backend/camera/processing/GsamWslPathUtil.hpp"
 
 #include <QCoreApplication>
 #include <QDir>

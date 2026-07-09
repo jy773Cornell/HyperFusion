@@ -1,8 +1,8 @@
 // ROI mean reflectance extraction from FFC ENVI cubes and GSAM2 mask outputs.
-#include "backend/processing/Gsam2RoiAnalysis.hpp"
+#include "backend/camera/processing/Gsam2RoiAnalysis.hpp"
 
-#include "backend/processing/EnviBilReader.hpp"
-#include "backend/processing/Gsam2SpectrumPlot.hpp"
+#include "backend/camera/processing/EnviBilReader.hpp"
+#include "backend/camera/processing/Gsam2SpectrumPlot.hpp"
 
 #include <QDir>
 #include <QFile>

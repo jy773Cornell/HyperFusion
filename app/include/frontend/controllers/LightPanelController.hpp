@@ -1,7 +1,7 @@
 // Light / lighthouse tab orchestration: DAQ worker and lamp UI sync.
 #pragma once
 
-#include "backend/LighthouseTypes.hpp"
+#include "backend/light/LighthouseTypes.hpp"
 
 #include <QElapsedTimer>
 #include <QObject>

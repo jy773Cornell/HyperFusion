@@ -1,6 +1,6 @@
 #pragma once
 
-#include "backend/StageTypes.hpp"
+#include "backend/stage/StageTypes.hpp"
 
 #ifdef HF_HAVE_ZML
 namespace zaber::motion::ascii

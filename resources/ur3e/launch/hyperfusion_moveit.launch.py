@@ -15,10 +15,11 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, RegisterEventHandler
 from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, Command, FindExecutable
 
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
+from launch_ros.parameter_descriptions import ParameterValue
 
 from moveit_configs_utils import MoveItConfigsBuilder
 
@@ -90,11 +91,61 @@ def generate_launch_description():
     use_sim_time = LaunchConfiguration("use_sim_time")
     publish_robot_description_semantic = LaunchConfiguration("publish_robot_description_semantic")
 
+    _pkg_root = Path(os.environ.get("HYPERFUSION_UR3E_REPO", Path(__file__).resolve().parent.parent))
+    _default_description = str(_pkg_root / "urdf" / "hyperfusion_ur3e.urdf.xacro")
+    _ceiling_height_m = os.environ.get("HYPERFUSION_CEILING_MOUNT_HEIGHT_M", "0.65")
+
+    hyperfusion_robot_description = ParameterValue(
+        Command(
+            [
+                FindExecutable(name="xacro"),
+                " ",
+                _default_description,
+                " ",
+                "ur_type:=",
+                ur_type,
+                " ",
+                "name:=",
+                ur_type,
+                " ",
+                "use_mock_hardware:=true",
+                " ",
+                "mock_sensor_commands:=true",
+                " ",
+                "headless_mode:=true",
+                " ",
+                "ceiling_mount:=true",
+                " ",
+                "ceiling_mount_height_m:=",
+                _ceiling_height_m,
+                " ",
+            ]
+        ),
+        value_type=str,
+    )
+
     moveit_config = (
         MoveItConfigsBuilder(robot_name="ur", package_name="ur_moveit_config")
         .robot_description_semantic(Path("srdf") / "ur.srdf.xacro", {"name": ur_type})
         .to_moveit_configs()
     )
+    moveit_params = moveit_config.to_dict()
+    moveit_params["robot_description"] = hyperfusion_robot_description
+
+    def _truthy_env(name: str, default: str = "true") -> bool:
+        return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
+
+    use_mock_hardware = _truthy_env("HYPERFUSION_USE_MOCK_HARDWARE", "true")
+    controllers_file = (
+        _pkg_root / "config" / "moveit_controllers_hyperfusion.yaml"
+        if use_mock_hardware
+        else _pkg_root / "config" / "moveit_controllers_hyperfusion_hardware.yaml"
+    )
+    try:
+        with open(controllers_file, encoding="utf-8") as controllers_stream:
+            moveit_controller_params = yaml.safe_load(controllers_stream)
+    except OSError as exc:
+        raise RuntimeError(f"Missing MoveIt controllers config: {controllers_file}") from exc
 
     warehouse_ros_config = {
         "warehouse_plugin": "warehouse_ros_sqlite::DatabaseConnection",
@@ -121,7 +172,8 @@ def generate_launch_description():
         executable="move_group",
         output="screen",
         parameters=[
-            moveit_config.to_dict(),
+            moveit_params,
+            moveit_controller_params,
             warehouse_ros_config,
             planning_scene_monitor_config,
             {
@@ -138,7 +190,7 @@ def generate_launch_description():
         condition=IfCondition(launch_servo),
         executable="servo_node",
         parameters=[
-            moveit_config.to_dict(),
+            moveit_params,
             servo_params,
         ],
         output="screen",
@@ -155,7 +207,7 @@ def generate_launch_description():
         output="log",
         arguments=["-d", rviz_config_file],
         parameters=[
-            moveit_config.robot_description,
+            {"robot_description": hyperfusion_robot_description},
             moveit_config.robot_description_semantic,
             moveit_config.robot_description_kinematics,
             moveit_config.planning_pipelines,

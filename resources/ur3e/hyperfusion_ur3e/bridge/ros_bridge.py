@@ -24,6 +24,9 @@ CANONICAL_JOINT_NAMES: List[str] = [
     "wrist_3_joint",
 ]
 
+MOCK_JOINT_TRAJECTORY_ACTION = "/joint_trajectory_controller/follow_joint_trajectory"
+HARDWARE_JOINT_TRAJECTORY_ACTION = "/scaled_joint_trajectory_controller/follow_joint_trajectory"
+
 
 class Ur3eRosBridge:
   """Adapter between HTTP handlers and ur_robot_driver via ROS 2."""
@@ -38,9 +41,13 @@ class Ur3eRosBridge:
       max_linear_accel_m_per_s2: float = 0.3,
       ros_distro: str = "jazzy",
       ur_type: str = "ur3e",
+      reverse_ip: str = "0.0.0.0",
       use_mock_hardware: bool = True,
+      initial_joint_deg: Optional[List[float]] = None,
+      ceiling_mount_height_m: Optional[float] = None,
   ) -> None:
     self.robot_ip = robot_ip
+    self.reverse_ip = reverse_ip.strip() or "0.0.0.0"
     self.dashboard_port = dashboard_port
     self.rtde_port = rtde_port
     self.max_linear_speed_m_per_s = max_linear_speed_m_per_s
@@ -48,6 +55,8 @@ class Ur3eRosBridge:
     self.ros_distro = ros_distro
     self.ur_type = ur_type
     self.use_mock_hardware = use_mock_hardware
+    self.initial_joint_deg = initial_joint_deg or [0.0, -150.0, 120.0, 0.0, 90.0, 0.0]
+    self.ceiling_mount_height_m = ceiling_mount_height_m
 
     self._lock = threading.RLock()
     self._status = RobotStatus(robot_ip=robot_ip)
@@ -69,6 +78,54 @@ class Ur3eRosBridge:
     self._node_seq: int = 0
     self._active_goal_handle: Any = None
     self._stop_requested = threading.Event()
+
+  def _joint_trajectory_action_topic(self) -> str:
+    if self.use_mock_hardware:
+      return MOCK_JOINT_TRAJECTORY_ACTION
+    return HARDWARE_JOINT_TRAJECTORY_ACTION
+
+  def _joint_trajectory_controller_name(self) -> str:
+    if self.use_mock_hardware:
+      return "joint_trajectory_controller"
+    return "scaled_joint_trajectory_controller"
+
+  def _verify_joint_trajectory_controller_active(self) -> None:
+    import subprocess
+
+    controller = self._joint_trajectory_controller_name()
+    cmd = (
+      f"source /opt/ros/{self.ros_distro}/setup.bash && "
+      "ros2 control list_controllers"
+    )
+    proc = subprocess.run(
+      ["bash", "-lc", cmd],
+      capture_output=True,
+      text=True,
+      timeout=20.0,
+    )
+    output = proc.stdout or ""
+    for line in output.splitlines():
+      if controller in line and "active" in line:
+        sys.stderr.write(f"UR3e bridge: {controller} is active\n")
+        return
+
+    sys.stderr.write(
+        f"UR3e bridge: WARNING — {controller} is not active; "
+        "joint moves will not animate the mock robot.\n"
+    )
+    if output.strip():
+      sys.stderr.write(output.strip() + "\n")
+
+  def _new_driver_manager(self) -> Ur3eRosDriverManager:
+    return Ur3eRosDriverManager(
+        ros_distro=self.ros_distro,
+        ur_type=self.ur_type,
+        robot_ip=self.robot_ip,
+        reverse_ip=self.reverse_ip,
+        use_mock_hardware=self.use_mock_hardware,
+        initial_joint_deg=self.initial_joint_deg,
+        ceiling_mount_height_m=self.ceiling_mount_height_m,
+    )
 
   def status(self) -> RobotStatus:
     with self._lock:
@@ -99,7 +156,14 @@ class Ur3eRosBridge:
       if self._connecting:
         raise RuntimeError("Connect already in progress.")
       if self._status.connected:
-        return {"ok": True, "already_connected": True, **self.status().to_dict()}
+        mode = "simulation" if self.use_mock_hardware else "hardware"
+        return {
+            "ok": True,
+            "already_connected": True,
+            "mode": mode,
+            "use_mock_hardware": self.use_mock_hardware,
+            **self.status().to_dict(),
+        }
 
       if self._node is not None or self._spin_thread is not None:
         self._shutdown_ros_unlocked()
@@ -194,35 +258,36 @@ class Ur3eRosBridge:
       return False
     return proc.returncode == 0
 
+  def _start_driver_unlocked(self) -> None:
+    Ur3eRosDriverManager.stop_stale_launches()
+    self._driver = self._new_driver_manager()
+    try:
+      self._driver.start()
+    except Exception:
+      if self._driver is not None:
+        self._driver.stop()
+      self._driver = None
+      raise
+
   def _ensure_driver_running_unlocked(self) -> None:
     if self._driver is not None and self._driver.running:
-      sys.stderr.write("UR3e bridge: reusing active driver subprocess\n")
-    elif self._external_driver_running():
-      if self._joint_states_publishing(timeout_s=8.0):
-        sys.stderr.write("UR3e bridge: attaching to existing ur_control launch\n")
-        self._driver = None
+      if self._driver.controller_manager_ready():
+        sys.stderr.write("UR3e bridge: reusing active driver subprocess\n")
       else:
         sys.stderr.write(
-            "UR3e bridge: stale ur_control launch (no /joint_states) — restarting driver…\n"
+            "UR3e bridge: driver process present but controller manager not ready — restarting…\n"
         )
-        Ur3eRosDriverManager.stop_stale_launches()
-        self._driver = Ur3eRosDriverManager(
-          ros_distro=self.ros_distro,
-          ur_type=self.ur_type,
-          robot_ip=self.robot_ip,
-          use_mock_hardware=self.use_mock_hardware,
+        self._driver.stop()
+        self._driver = None
+
+    if self._driver is None or not self._driver.running:
+      if self._external_driver_running():
+        sys.stderr.write(
+            "UR3e bridge: restarting ur_control for HyperFusion ceiling-mount description…\n"
         )
-        self._driver.start()
-    else:
-      sys.stderr.write("UR3e bridge: starting ur_robot_driver (may take ~2 min)…\n")
-      Ur3eRosDriverManager.stop_stale_launches()
-      self._driver = Ur3eRosDriverManager(
-        ros_distro=self.ros_distro,
-        ur_type=self.ur_type,
-        robot_ip=self.robot_ip,
-        use_mock_hardware=self.use_mock_hardware,
-      )
-      self._driver.start()
+      else:
+        sys.stderr.write("UR3e bridge: starting ur_robot_driver (may take ~2 min)…\n")
+      self._start_driver_unlocked()
 
     Ur3eRosDriverManager.ensure_joint_states_stamper_for_distro(self.ros_distro)
 
@@ -234,7 +299,13 @@ class Ur3eRosBridge:
         return
       except RuntimeError as exc:
         last_exc = exc
-        if attempt == 0 and "joint_states" in str(exc):
+        message = str(exc).lower()
+        retryable = (
+            "joint_states" in message
+            or "controller manager" in message
+            or "ur driver exited" in message
+        )
+        if attempt == 0 and retryable:
           sys.stderr.write("UR3e bridge: retrying connect with a fresh driver…\n")
           Ur3eRosDriverManager.stop_stale_launches()
           if self._driver is not None:
@@ -251,15 +322,26 @@ class Ur3eRosBridge:
       if self._driver is not None:
         self._driver.stop()
         self._driver = None
-      self._driver = Ur3eRosDriverManager(
-        ros_distro=self.ros_distro,
-        ur_type=self.ur_type,
-        robot_ip=self.robot_ip,
-        use_mock_hardware=self.use_mock_hardware,
-      )
-      self._driver.start()
+      self._start_driver_unlocked()
     else:
       self._ensure_driver_running_unlocked()
+
+    if not self._joint_states_publishing(
+        timeout_s=15.0 if self.use_mock_hardware else 120.0
+    ):
+      if self.use_mock_hardware:
+        hint = (
+            "Check in WSL: ros2 control list_controllers && "
+            "ros2 topic echo /joint_states --once"
+        )
+      else:
+        hint = (
+            f"On the teach pendant: External Control → remote PC {self.reverse_ip}:50002 → Play. "
+            "Then in WSL: ss -tln | grep 50002 && ros2 topic echo /joint_states --once"
+        )
+      raise RuntimeError(
+          "UR driver is running but /joint_states is not publishing yet. " + hint
+      )
 
     if self._node is not None:
       return
@@ -290,18 +372,24 @@ class Ur3eRosBridge:
     self._trajectory_client = ActionClient(
       self._node,
       FollowJointTrajectory,
-      "/scaled_joint_trajectory_controller/follow_joint_trajectory",
+      self._joint_trajectory_action_topic(),
     )
 
     deadline = time.time() + 90.0
     while time.time() < deadline:
       if self._trajectory_client.server_is_ready():
-        sys.stderr.write("UR3e bridge: trajectory action server ready\n")
+        sys.stderr.write(
+            f"UR3e bridge: trajectory action server ready "
+            f"({self._joint_trajectory_action_topic()})\n"
+        )
         break
       time.sleep(0.2)
     else:
       self._trajectory_client = None
       self._status.fault = "Trajectory action server not ready; using pose fallback."
+
+    if self._trajectory_client is not None:
+      self._verify_joint_trajectory_controller_active()
 
     joint_event = threading.Event()
 
@@ -461,7 +549,7 @@ class Ur3eRosBridge:
     goal_msg.trajectory = traj
 
     send_future = self._trajectory_client.send_goal_async(goal_msg)
-    goal_handle = self._wait_future(send_future, 10.0)
+    goal_handle = self._wait_future(send_future, 30.0)
     if self._stop_requested.is_set():
       return False
     if goal_handle is None or not goal_handle.accepted:
@@ -476,9 +564,6 @@ class Ur3eRosBridge:
     if self._stop_requested.is_set():
       return False
 
-    with self._lock:
-      for index, name in enumerate(CANONICAL_JOINT_NAMES):
-        self._latest_joint_positions[name] = target[index]
     return True
 
   def move_l(
@@ -591,7 +676,7 @@ class Ur3eRosBridge:
     goal_msg.trajectory = traj
 
     send_future = self._trajectory_client.send_goal_async(goal_msg)
-    goal_handle = self._wait_future(send_future, 10.0)
+    goal_handle = self._wait_future(send_future, 30.0)
     if goal_handle is None or not goal_handle.accepted:
       raise RuntimeError("Trajectory goal rejected by controller.")
 
@@ -657,6 +742,11 @@ class Ur3eRosBridge:
         self._wait_future(cancel_future, 2.0)
       except Exception:
         pass
+    try:
+      from hyperfusion_ur3e.moveit.scan_planner import get_scan_planner
+      get_scan_planner(ros_distro=self.ros_distro, ur_type=self.ur_type).cancel_active_move()
+    except Exception:
+      pass
     if self._status.connected:
       self._status.driver_state = "idle"
 
@@ -686,3 +776,156 @@ class Ur3eRosBridge:
       self._status.connected = False
       self._status.driver_state = "disconnected"
       self._connecting = False
+
+  def plan_hemisphere_scan(self, body: Dict[str, Any]) -> Dict[str, Any]:
+    """MoveIt IK + collision check for hemisphere scan TCP poses."""
+    from hyperfusion_ur3e.moveit.scan_planner import ScanPoseTarget, WorkspaceBox, get_scan_planner
+    from hyperfusion_ur3e.driver.driver_manager import CANONICAL_JOINT_NAMES
+
+    if not self._status.connected:
+      raise RuntimeError("Robot not connected — start the UR driver before planning.")
+
+    if not self._latest_joint_positions:
+      raise RuntimeError("Joint states not available — wait for /joint_states after connect.")
+
+    seed_joints = [
+        float(self._latest_joint_positions.get(name, 0.0)) for name in CANONICAL_JOINT_NAMES
+    ]
+
+    poses = body.get("poses")
+    if not isinstance(poses, list) or not poses:
+      raise ValueError("poses must be a non-empty list.")
+
+    workspace_cfg = body.get("workspace", {})
+    workspace = WorkspaceBox(
+      enabled=bool(workspace_cfg.get("enabled", False)),
+      length_m=float(workspace_cfg.get("length_m", 0.6)),
+      width_m=float(workspace_cfg.get("width_m", 0.6)),
+      height_m=float(workspace_cfg.get("height_m", 0.65)),
+    )
+
+    targets: List[ScanPoseTarget] = []
+    for entry in poses:
+      if not isinstance(entry, dict):
+        continue
+      targets.append(
+        ScanPoseTarget(
+          index=int(entry.get("index", len(targets))),
+          x_m=float(entry["x"]),
+          y_m=float(entry["y"]),
+          z_m=float(entry["z"]),
+          rx=float(entry.get("rx", 0.0)),
+          ry=float(entry.get("ry", 0.0)),
+          rz=float(entry.get("rz", 0.0)),
+          tool_z_x=float(entry.get("tool_z_x", 0.0)),
+          tool_z_y=float(entry.get("tool_z_y", 0.0)),
+          tool_z_z=float(entry.get("tool_z_z", -1.0)),
+        )
+      )
+
+    planner = get_scan_planner(ros_distro=self.ros_distro, ur_type=self.ur_type)
+    planner.apply_home_joints_from_body(body)
+    results = planner.plan_poses(targets, workspace, initial_seed=seed_joints)
+
+    payload_results = []
+    reachable_count = 0
+    unreachable_count = 0
+    failure_summary: Dict[str, int] = {}
+    for item in results:
+      if item.reachable:
+        reachable_count += 1
+      else:
+        unreachable_count += 1
+        reason = item.error or "unknown"
+        failure_summary[reason] = failure_summary.get(reason, 0) + 1
+      payload_results.append(
+        {
+          "index": item.index,
+          "reachable": item.reachable,
+          "joints": item.joint_positions,
+          "error": item.error or None,
+        }
+      )
+
+    return {
+      "ok": True,
+      "results": payload_results,
+      "reachable_count": reachable_count,
+      "unreachable_count": unreachable_count,
+      "failure_summary": failure_summary,
+      "planner": "moveit",
+    }
+
+  def execute_scan_waypoint(self, body: Dict[str, Any]) -> Dict[str, Any]:
+    """Collision-aware MoveIt plan+execute for one scan waypoint."""
+    from hyperfusion_ur3e.moveit.scan_planner import get_scan_planner, workspace_from_dict
+
+    if not self._status.connected:
+      raise RuntimeError("Robot not connected.")
+    self._stop_requested.clear()
+
+    joints = body.get("joints")
+    if not isinstance(joints, list) or len(joints) != 6:
+      raise ValueError("joints must be a list of 6 floats (radians).")
+
+    workspace_cfg = body.get("workspace")
+    workspace = workspace_from_dict(workspace_cfg) if isinstance(workspace_cfg, dict) else None
+
+    planner = get_scan_planner(ros_distro=self.ros_distro, ur_type=self.ur_type)
+    planner.apply_home_joints_from_body(body)
+    tcp_target = body.get("tcp")
+    require_home_first = bool(body.get("require_home_first", False))
+    return planner.execute_single_waypoint(
+      [float(v) for v in joints],
+      workspace=workspace,
+      tcp_target=tcp_target if isinstance(tcp_target, dict) else None,
+      stop_event=self._stop_requested,
+      require_home_first=require_home_first,
+    )
+
+  def execute_move_home(self, body: Dict[str, Any]) -> Dict[str, Any]:
+    """Collision-aware MoveIt motion to the configured scan home pose."""
+    from hyperfusion_ur3e.moveit.scan_planner import get_scan_planner, workspace_from_dict
+
+    if not self._status.connected:
+      raise RuntimeError("Robot not connected.")
+    self._stop_requested.clear()
+
+    workspace_cfg = body.get("workspace")
+    workspace = workspace_from_dict(workspace_cfg) if isinstance(workspace_cfg, dict) else None
+
+    planner = get_scan_planner(ros_distro=self.ros_distro, ur_type=self.ur_type)
+    planner.apply_home_joints_from_body(body)
+    return planner.execute_move_home(
+      workspace=workspace,
+      stop_event=self._stop_requested,
+    )
+
+  def execute_hemisphere_scan(self, body: Dict[str, Any]) -> Dict[str, Any]:
+    """Collision-aware MoveIt execution for planned joint waypoints."""
+    from hyperfusion_ur3e.moveit.scan_planner import get_scan_planner, workspace_from_dict
+
+    if not self._status.connected:
+      raise RuntimeError("Robot not connected.")
+    self._stop_requested.clear()
+
+    waypoints_raw = body.get("waypoints")
+    if not isinstance(waypoints_raw, list) or not waypoints_raw:
+      raise ValueError("waypoints must be a non-empty list.")
+
+    waypoints: List[List[float]] = []
+    for entry in waypoints_raw:
+      joints = entry.get("joints") if isinstance(entry, dict) else entry
+      if not isinstance(joints, list) or len(joints) != 6:
+        raise ValueError("Each waypoint must include 6 joint positions (radians).")
+      waypoints.append([float(v) for v in joints])
+
+    workspace_cfg = body.get("workspace")
+    workspace = workspace_from_dict(workspace_cfg) if isinstance(workspace_cfg, dict) else None
+
+    planner = get_scan_planner(ros_distro=self.ros_distro, ur_type=self.ur_type)
+    return planner.execute_waypoints(
+      waypoints,
+      workspace=workspace,
+      stop_event=self._stop_requested,
+    )

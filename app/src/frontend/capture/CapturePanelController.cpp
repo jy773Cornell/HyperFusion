@@ -1,17 +1,17 @@
-﻿// Capture tab orchestration implementation (recorder, stage scan sequence, writer).
+// Capture tab orchestration implementation (recorder, stage scan sequence, writer).
 #include "frontend/capture/CapturePanelController.hpp"
 
 #include "adapters/lumo/LumoDeviceTypes.hpp"
 #include "adapters/zaber/ZaberStageProfile.hpp"
-#include "backend/CameraCoordinator.hpp"
-#include "backend/CaptureWriterWorker.hpp"
-#include "backend/DualCameraScanOrchestrator.hpp"
+#include "backend/camera/CameraCoordinator.hpp"
+#include "backend/camera/CaptureWriterWorker.hpp"
+#include "backend/camera/DualCameraScanOrchestrator.hpp"
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/LighthouseTypes.hpp"
-#include "backend/LighthouseWorker.hpp"
-#include "backend/StageWorker.hpp"
-#include "backend/processing/CapturePostProcessorWorker.hpp"
-#include "backend/processing/Gsam2ServerManager.hpp"
+#include "backend/light/LighthouseTypes.hpp"
+#include "backend/light/LighthouseWorker.hpp"
+#include "backend/stage/StageWorker.hpp"
+#include "backend/camera/processing/CapturePostProcessorWorker.hpp"
+#include "backend/camera/processing/Gsam2ServerManager.hpp"
 #include "frontend/widgets/LumoCameraUi.hpp"
 #include "frontend/widgets/MainWindow.hpp"
 #include "frontend/widgets/StreamPaneHelpers.hpp"
@@ -271,7 +271,7 @@ QWidget *hf::capture::CapturePanelController::createStreamTab()
     layout->setSpacing(8);
 
     host_->captureStreamEmptyLabel_ = new QLabel(
-        QStringLiteral("Select one or more connected cameras under Capture â†’ Cameras."),
+        QStringLiteral("Select one or more connected cameras under Capture → Cameras."),
         host_->captureStreamPage_);
     host_->captureStreamEmptyLabel_->setAlignment(Qt::AlignCenter);
     host_->captureStreamEmptyLabel_->setWordWrap(true);
@@ -591,7 +591,7 @@ void hf::capture::CapturePanelController::updateRecorderControls()
         else
         {
             host_->captureRecorderRecordBtn_->setToolTip(
-                tr("Record reflectance .raw frames locally without stage scanning â€” press Stop when done"));
+                tr("Record reflectance .raw frames locally without stage scanning — press Stop when done"));
         }
     }
 
@@ -650,7 +650,7 @@ void hf::capture::CapturePanelController::updateGsamServerUi()
     switch (state)
     {
     case GsamState::Starting:
-        label = QStringLiteral("Connectingâ€¦");
+        label = QStringLiteral("Connecting…");
         textColor = QStringLiteral("#b8860b");
         borderColor = QStringLiteral("#e6c200");
         break;
@@ -731,7 +731,7 @@ void hf::capture::CapturePanelController::updateRecorderStatus()
         {
             setIndicator(QStringLiteral("#f39c12"));
             host_->captureRecorderStatusLabel_->setText(
-                tr("Processing previous capture in backgroundâ€¦"));
+                tr("Processing previous capture in background…"));
             return;
         }
 
@@ -748,14 +748,14 @@ void hf::capture::CapturePanelController::updateRecorderStatus()
     if (!useStageForCapture())
     {
         host_->captureRecorderStatusLabel_->setText(
-            tr("%1 â€” reflectance â€” saving frames (press Stop when finished)").arg(activityPrefix));
+            tr("%1 — reflectance — saving frames (press Stop when finished)").arg(activityPrefix));
         return;
     }
 
     if (host_->stageWorker_ != nullptr && host_->stageWorker_->currentState() == StageState::Homing
         && host_->stageHomingKind_ == StageHomingKind::BeforeCapture)
     {
-        host_->captureRecorderStatusLabel_->setText(tr("%1 â€” homing stageâ€¦").arg(activityPrefix));
+        host_->captureRecorderStatusLabel_->setText(tr("%1 — homing stage…").arg(activityPrefix));
         return;
     }
 
@@ -773,16 +773,16 @@ void hf::capture::CapturePanelController::updateRecorderStatus()
     switch (captureScanPhase_)
     {
     case CaptureScanPhase::Idle:
-        phaseDetail = tr("preparingâ€¦");
+        phaseDetail = tr("preparing…");
         break;
     case CaptureScanPhase::MoveToFirstRefPosition:
         phaseDetail =
             captureRecorderMode_ == CaptureRecorderMode::Record
-                ? tr("moving to first reference (before black reference)â€¦")
-                : tr("moving to first referenceâ€¦");
+                ? tr("moving to first reference (before black reference)…")
+                : tr("moving to first reference…");
         break;
     case CaptureScanPhase::MoveToTempStopPosition:
-        phaseDetail = tr("moving to temp stop (prepare transmittance)â€¦");
+        phaseDetail = tr("moving to temp stop (prepare transmittance)…");
         break;
     case CaptureScanPhase::MoveToWhiteRefScanOrigin:
     {
@@ -790,7 +790,7 @@ void hf::capture::CapturePanelController::updateRecorderStatus()
             captureRecordingIlluminationMode_ == CaptureIlluminationMode::Reflectance
                 ? tr("white reference")
                 : tr("bright reference");
-        phaseDetail = tr("moving to %1 scan originâ€¦").arg(refLabel);
+        phaseDetail = tr("moving to %1 scan origin…").arg(refLabel);
         break;
     }
     case CaptureScanPhase::BlackReference:
@@ -828,23 +828,23 @@ void hf::capture::CapturePanelController::updateRecorderStatus()
         break;
     }
     case CaptureScanPhase::MoveToSampleScanOrigin:
-        phaseDetail = tr("moving to sample scan originâ€¦");
+        phaseDetail = tr("moving to sample scan origin…");
         break;
     case CaptureScanPhase::SampleScan:
         if (captureScanTimingActive_)
         {
-            phaseDetail = tr("sample scan @ %1 mmâ€¦")
+            phaseDetail = tr("sample scan @ %1 mm…")
                               .arg(currentStageScanPositionMm(), 0, 'f', 1);
         }
         else
         {
-            phaseDetail = tr("sample scanâ€¦");
+            phaseDetail = tr("sample scan…");
         }
         break;
     }
 
     host_->captureRecorderStatusLabel_->setText(
-        QStringLiteral("%1 â€” %2 â€” %3").arg(activityPrefix, modeLabel, phaseDetail));
+        QStringLiteral("%1 — %2 — %3").arg(activityPrefix, modeLabel, phaseDetail));
 }
 
 void hf::capture::CapturePanelController::notifyCaptureRecordComplete()
@@ -863,7 +863,7 @@ void hf::capture::CapturePanelController::notifyCaptureRecordComplete()
     {
         const QString label = it->relativeRoot.isEmpty() ? it->baseName : it->relativeRoot;
         streamLines.push_back(
-            QStringLiteral("%1 â€” %2 sample frames").arg(label).arg(it->frameCount));
+            QStringLiteral("%1 — %2 sample frames").arg(label).arg(it->frameCount));
     }
 
     const QString details =
@@ -1121,7 +1121,7 @@ bool hf::capture::CapturePanelController::confirmCaptureStart(const LighthouseCo
     const QString modeText =
         modeLabels.isEmpty()
             ? QStringLiteral("(no illumination mode selected)")
-            : modeLabels.join(QStringLiteral(" â†’ "));
+            : modeLabels.join(QStringLiteral(" → "));
 
     const bool record = captureRecorderMode_ == CaptureRecorderMode::Record;
     const QString action = record ? QStringLiteral("recording") : QStringLiteral("preview");
@@ -1132,7 +1132,7 @@ bool hf::capture::CapturePanelController::confirmCaptureStart(const LighthouseCo
     box.setText(QStringLiteral("Ready to start %1?").arg(action));
     box.setInformativeText(
         QStringLiteral("%1 sequence: %2\n\n"
-                       "Illumination hoods are prepared manually during the scan â€” follow the "
+                       "Illumination hoods are prepared manually during the scan — follow the "
                        "on-screen prompts.\n"
                        "Lighthouse outputs are set only at connect/disconnect.\n\n"
                        "Controller status:\n%3")
@@ -1191,7 +1191,7 @@ void hf::capture::CapturePanelController::startCurrentCaptureMode()
 
     captureRecordingIlluminationMode_ = capturePendingIlluminationModes_[captureCurrentModeIndex_];
 
-    host_->appendLog(QStringLiteral("%1: starting %2 mode (%3 of %4)â€¦")
+    host_->appendLog(QStringLiteral("%1: starting %2 mode (%3 of %4)…")
                   .arg(captureSequenceLogPrefix())
                   .arg(captureIlluminationFolderName(captureRecordingIlluminationMode_))
                   .arg(captureCurrentModeIndex_ + 1)
@@ -1239,7 +1239,7 @@ void hf::capture::CapturePanelController::beginCaptureMoveToFirstRefPosition()
             : QStringLiteral("bright reference");
 
     captureScanPhase_ = CaptureScanPhase::MoveToFirstRefPosition;
-    host_->appendLog(QStringLiteral("%1 (%2): moving to first %3 position %4 mm before black reference @ %5 mm/sâ€¦")
+    host_->appendLog(QStringLiteral("%1 (%2): moving to first %3 position %4 mm before black reference @ %5 mm/s…")
                   .arg(captureSequenceLogPrefix())
                   .arg(captureIlluminationFolderName(captureRecordingIlluminationMode_))
                   .arg(refLabel)
@@ -1253,7 +1253,7 @@ void hf::capture::CapturePanelController::beginCaptureMoveToTempStopPosition()
 {
     const double targetMm = hf::hardwareConfig().tempStopPositionMm;
     captureScanPhase_ = CaptureScanPhase::MoveToTempStopPosition;
-    host_->appendLog(QStringLiteral("%1: moving to temp stop position %2 mm before transmittance scan @ %3 mm/sâ€¦")
+    host_->appendLog(QStringLiteral("%1: moving to temp stop position %2 mm before transmittance scan @ %3 mm/s…")
                   .arg(captureSequenceLogPrefix())
                   .arg(targetMm, 0, 'f', 2)
                   .arg(captureScanPlan_.operationSpeedMmPerSec, 0, 'f', 1));
@@ -1364,7 +1364,7 @@ void hf::capture::CapturePanelController::beginCaptureBlackReference()
     captureScanPhase_ = CaptureScanPhase::BlackReference;
     captureBlackRefFramesCollected_ = {0, 0};
 
-    host_->appendLog(QStringLiteral("%1: closing shutters for black reference (%2 frames per camera)â€¦")
+    host_->appendLog(QStringLiteral("%1: closing shutters for black reference (%2 frames per camera)…")
                   .arg(captureSequenceLogPrefix())
                   .arg(captureScanPlan_.blackReferenceFrameCount));
 
@@ -1374,7 +1374,7 @@ void hf::capture::CapturePanelController::beginCaptureBlackReference()
         if (captureScanPhase_ != CaptureScanPhase::BlackReference)
             return;
 
-        host_->appendLog(QStringLiteral("%1: collecting black reference framesâ€¦").arg(captureSequenceLogPrefix()));
+        host_->appendLog(QStringLiteral("%1: collecting black reference frames…").arg(captureSequenceLogPrefix()));
     });
     updateRecorderStatus();
 }
@@ -1386,7 +1386,7 @@ void hf::capture::CapturePanelController::onCaptureBlackReferenceComplete()
 
     captureScanPhase_ = CaptureScanPhase::Idle;
 
-    host_->appendLog(QStringLiteral("%1: black reference complete â€” opening shutters for white referenceâ€¦")
+    host_->appendLog(QStringLiteral("%1: black reference complete — opening shutters for white reference…")
                   .arg(captureSequenceLogPrefix()));
 
     setSelectedCameraShutters(true);
@@ -1450,7 +1450,7 @@ void hf::capture::CapturePanelController::beginCaptureMoveToWhiteRefScanOrigin()
             : QStringLiteral("bright reference");
 
     captureScanPhase_ = CaptureScanPhase::MoveToWhiteRefScanOrigin;
-    host_->appendLog(QStringLiteral("%1 (%2): moving to %3 scan origin %4 mm @ %5 mm/sâ€¦")
+    host_->appendLog(QStringLiteral("%1 (%2): moving to %3 scan origin %4 mm @ %5 mm/s…")
                   .arg(captureSequenceLogPrefix())
                   .arg(captureIlluminationFolderName(captureRecordingIlluminationMode_))
                   .arg(refLabel)
@@ -1472,7 +1472,7 @@ void hf::capture::CapturePanelController::beginCaptureWhiteReferenceScan()
             ? QStringLiteral("white-reference")
             : QStringLiteral("bright-reference");
 
-    host_->appendLog(QStringLiteral("%1: %2 scan â€” %3 frames per camera @ %4 mm/s (stage travel %5 mm)â€¦")
+    host_->appendLog(QStringLiteral("%1: %2 scan — %3 frames per camera @ %4 mm/s (stage travel %5 mm)…")
                   .arg(captureSequenceLogPrefix())
                   .arg(refLabel)
                   .arg(captureScanPlan_.whiteReferenceFrameCount)
@@ -1502,7 +1502,7 @@ void hf::capture::CapturePanelController::onCaptureWhiteReferenceSequenceComplet
 
     if (!selectedCamerasReachedWhiteReferenceTarget())
     {
-        failCaptureSequence(QStringLiteral("%1: white/bright reference incomplete â€” check frame rate and "
+        failCaptureSequence(QStringLiteral("%1: white/bright reference incomplete — check frame rate and "
                                           "reference positions.")
                                 .arg(captureSequenceLogPrefix()));
         return;
@@ -1646,7 +1646,7 @@ void hf::capture::CapturePanelController::beginCaptureSampleScan()
     captureSampleScanTimerExtendCount_ = 0;
     captureStagePositionKnown_ = false;
     captureScanPhase_ = CaptureScanPhase::MoveToSampleScanOrigin;
-    host_->appendLog(QStringLiteral("%1 (%2): moving to sample scan origin %3 mm @ %4 mm/sâ€¦")
+    host_->appendLog(QStringLiteral("%1 (%2): moving to sample scan origin %3 mm @ %4 mm/s…")
                   .arg(captureSequenceLogPrefix())
                   .arg(captureIlluminationFolderName(captureRecordingIlluminationMode_))
                   .arg(captureScanPlan_.sampleScanOriginMm, 0, 'f', 2)
@@ -1751,7 +1751,7 @@ void hf::capture::CapturePanelController::extendSampleScanTimer()
     ++captureSampleScanTimerExtendCount_;
     if (captureSampleScanTimerExtendCount_ == 1 || captureSampleScanTimerExtendCount_ % 5 == 0)
     {
-        host_->appendLog(QStringLiteral("%1: sample scan still in progress (entered=%2, frames=%3/%4) â€” "
+        host_->appendLog(QStringLiteral("%1: sample scan still in progress (entered=%2, frames=%3/%4) — "
                                   "extending scan timer.")
                       .arg(captureSequenceLogPrefix())
                       .arg(selectedCamerasEnteredSampleWindow() ? QStringLiteral("yes")
@@ -1870,7 +1870,7 @@ void hf::capture::CapturePanelController::onCaptureRelativeScanComplete()
             return;
         }
 
-        failCaptureSequence(QStringLiteral("%1: white/bright reference incomplete â€” not all cameras "
+        failCaptureSequence(QStringLiteral("%1: white/bright reference incomplete — not all cameras "
                                           "reached %2 frames.")
                                 .arg(captureSequenceLogPrefix())
                                 .arg(captureScanPlan_.whiteReferenceFrameCount));
@@ -1896,7 +1896,7 @@ void hf::capture::CapturePanelController::onCaptureSampleScanComplete()
     if (captureRecorderMode_ == CaptureRecorderMode::Record && !selectedCamerasHaveSampleFrames())
     {
         failCaptureSequence(
-            QStringLiteral("%1: sample scan finished with no sample frames â€” check stage position, "
+            QStringLiteral("%1: sample scan finished with no sample frames — check stage position, "
                            "scan speed, and camera streaming.")
                 .arg(captureSequenceLogPrefix()));
         return;
@@ -1941,7 +1941,7 @@ void hf::capture::CapturePanelController::completeCaptureModeSequence()
     {
         captureRecordingIlluminationMode_ = capturePendingIlluminationModes_[captureCurrentModeIndex_];
 
-        host_->appendLog(QStringLiteral("%1: starting %2 mode (%3 of %4)â€¦")
+        host_->appendLog(QStringLiteral("%1: starting %2 mode (%3 of %4)…")
                       .arg(captureSequenceLogPrefix())
                       .arg(captureIlluminationFolderName(captureRecordingIlluminationMode_))
                       .arg(captureCurrentModeIndex_ + 1)
@@ -2036,12 +2036,12 @@ void hf::capture::CapturePanelController::runCapturePostProcessingIfEnabled()
         if (state != hf::processing::Gsam2ServerManager::State::Running)
         {
             host_->appendLog(QStringLiteral(
-                "Capture post-process: GSAM segmentation enabled but server is not running â€” "
+                "Capture post-process: GSAM segmentation enabled but server is not running — "
                 "start the GSAM server or disable segmentation."));
         }
     }
 
-    host_->appendLog(QStringLiteral("Capture post-process: started in backgroundâ€¦"));
+    host_->appendLog(QStringLiteral("Capture post-process: started in background…"));
 
   capturePostProcessorWorker_->requestProcess(
         lastEndedCaptureSessionSummary_,
@@ -2115,7 +2115,7 @@ void hf::capture::CapturePanelController::startPreview()
 
     host_->appendLog(QStringLiteral("Capture preview: per-camera reference positions from hyperfusion.cfg, "
                               "sample origin %1 mm, total scan %2 mm, target length %3 mm @ %4 mm/s "
-                              "(no save)â€¦")
+                              "(no save)…")
                   .arg(plan.sampleScanOriginMm, 0, 'f', 2)
                   .arg(plan.sampleScanTotalDistanceMm, 0, 'f', 2)
                   .arg(plan.sampleScanLengthMm, 0, 'f', 2)
@@ -2424,7 +2424,7 @@ bool hf::capture::CapturePanelController::selectedCaptureCameraStreaming(QString
         if (ui.state != CameraState::Streaming && ui.state != CameraState::Armed
             && ui.state != CameraState::Configured && ui.state != CameraState::Initialized)
         {
-            errorMessage = QStringLiteral("%1 is not streaming â€” connect and wait for preview first.")
+            errorMessage = QStringLiteral("%1 is not streaming — connect and wait for preview first.")
                                .arg(host_->profileTabNameForUi(ui));
             return false;
         }
@@ -2520,7 +2520,7 @@ bool hf::capture::CapturePanelController::useStageForCapture() const
     if (host_->captureUseStageForRecordingCheck_ == nullptr || !host_->captureUseStageForRecordingCheck_->isChecked())
         return false;
 
-    // Keep staged routing during homing/moves â€” stage state is Homing, not Connected.
+    // Keep staged routing during homing/moves — stage state is Homing, not Connected.
     if (captureStageSequenceActive_)
         return true;
 
@@ -2801,7 +2801,7 @@ void hf::capture::CapturePanelController::startRecord()
         && capturePostProcessorWorker_->queueStatus().outstandingTotal() > 0)
     {
         host_->appendLog(QStringLiteral(
-            "Capture record: post-processing is still running â€” wait for it to finish."));
+            "Capture record: post-processing is still running — wait for it to finish."));
         return;
     }
 
@@ -2844,13 +2844,13 @@ void hf::capture::CapturePanelController::startRecord()
             return;
         }
 
-        host_->appendLog(QStringLiteral("Capture record: reflectance only â†’ %1 (%2). "
+        host_->appendLog(QStringLiteral("Capture record: reflectance only → %1 (%2). "
                                   "Press Stop when finished.")
                       .arg(captureWriterWorker_->sessionDirectory(), reason));
         return;
     }
 
-    host_->appendLog(QStringLiteral("Capture record: illumination folders â€” %1 (reflectance first, then "
+    host_->appendLog(QStringLiteral("Capture record: illumination folders — %1 (reflectance first, then "
                               "transmittance when both selected)")
                   .arg(modeFolders.join(QStringLiteral(", "))));
 
@@ -2864,7 +2864,7 @@ void hf::capture::CapturePanelController::startRecord()
         return;
     }
 
-    host_->appendLog(QStringLiteral("Capture record: session %1 â€” per-camera white/bright ref from cfg, "
+    host_->appendLog(QStringLiteral("Capture record: session %1 — per-camera white/bright ref from cfg, "
                               "sample origin %2 mm, total scan %3 mm, target length %4 mm @ %5 mm/s.")
                   .arg(captureWriterWorker_->sessionDirectory())
                   .arg(plan.sampleScanOriginMm, 0, 'f', 2)

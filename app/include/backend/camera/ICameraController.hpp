@@ -2,7 +2,7 @@
 #pragma once
 
 #include "adapters/lumo/LumoDeviceTypes.hpp"
-#include "backend/CameraTypes.hpp"
+#include "backend/camera/CameraTypes.hpp"
 
 #include <string>
 

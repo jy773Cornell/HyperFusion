@@ -42,6 +42,9 @@ controller_manager:
     ur_configuration_controller:
       type: ur_controllers/URConfigurationController
 
+    friction_model_controller:
+      type: ur_controllers/FrictionModelController
+
     tool_contact_controller:
       type: ur_controllers/ToolContactController
 
@@ -194,6 +197,10 @@ force_mode_controller:
     tf_prefix: "$(var tf_prefix)"
 
 freedrive_mode_controller:
+  ros__parameters:
+    tf_prefix: "$(var tf_prefix)"
+
+friction_model_controller:
   ros__parameters:
     tf_prefix: "$(var tf_prefix)"
 

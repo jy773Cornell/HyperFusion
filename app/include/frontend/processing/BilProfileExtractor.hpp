@@ -1,7 +1,7 @@
 // Extracts 16-bit DN profiles from BIL hyperspectral frames at a spatial/band cursor.
 #pragma once
 
-#include "backend/CameraTypes.hpp"
+#include "backend/camera/CameraTypes.hpp"
 
 #include <cstdint>
 #include <vector>

@@ -1,7 +1,7 @@
 // Extracts one spatial RGB scan line from a BIL hyperspectral frame (band × width).
 #pragma once
 
-#include "backend/CameraTypes.hpp"
+#include "backend/camera/CameraTypes.hpp"
 
 #include <cstdint>
 #include <vector>

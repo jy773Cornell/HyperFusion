@@ -1,5 +1,5 @@
 // In-place BIL bad-pixel replacement for SWIR3 frames (backend/processing).
-#include "backend/processing/SwirBprApply.hpp"
+#include "backend/camera/processing/SwirBprApply.hpp"
 
 #include <algorithm>
 #include <optional>

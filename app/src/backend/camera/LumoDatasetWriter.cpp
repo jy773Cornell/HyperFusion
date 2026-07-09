@@ -1,4 +1,4 @@
-#include "backend/LumoDatasetWriter.hpp"
+#include "backend/camera/LumoDatasetWriter.hpp"
 
 #include <QDir>
 #include <QFile>

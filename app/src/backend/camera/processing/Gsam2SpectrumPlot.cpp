@@ -1,5 +1,5 @@
 // Multi-ROI reflectance spectrum plot export (mean ± 1σ vs wavelength).
-#include "backend/processing/Gsam2SpectrumPlot.hpp"
+#include "backend/camera/processing/Gsam2SpectrumPlot.hpp"
 
 #include <QColor>
 #include <QFont>

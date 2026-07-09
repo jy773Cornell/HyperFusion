@@ -1,6 +1,7 @@
 # Default UR3e sidecar settings (overridden by CLI args from HyperFusion hyperfusion.cfg).
 robot:
   ip: "192.168.0.10"
+  reverse_ip: "192.168.1.20"
   dashboard_port: 29999
   rtde_port: 30004
 
@@ -21,3 +22,7 @@ use_mock_hardware: true
 
 # Warm ur_robot_driver in background when sidecar starts (faster UI Connect).
 prestart_driver: false
+
+# Ceiling mount for HyperFusion enclosure (robot on top face, tray at Z=0).
+ceiling_mount: true
+ceiling_mount_height_m: 0.65

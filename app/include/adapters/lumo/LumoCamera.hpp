@@ -2,7 +2,7 @@
 #pragma once
 
 #include "adapters/lumo/LumoDeviceTypes.hpp"
-#include "backend/ICameraController.hpp"
+#include "backend/camera/ICameraController.hpp"
 
 #include <condition_variable>
 #include <cstdint>

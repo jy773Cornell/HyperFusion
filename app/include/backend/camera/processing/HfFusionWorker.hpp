@@ -1,7 +1,7 @@
 // Background worker for manual/offline hf_fusion session runs (backend/offline).
 #pragma once
 
-#include "backend/processing/HfFusionRunner.hpp"
+#include "backend/camera/processing/HfFusionRunner.hpp"
 
 #include <atomic>
 #include <condition_variable>

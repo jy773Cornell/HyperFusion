@@ -1,9 +1,9 @@
 // WSL GSAM2 HTTP server lifecycle manager (QProcess sidecar).
-#include "backend/processing/Gsam2ServerManager.hpp"
+#include "backend/camera/processing/Gsam2ServerManager.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/processing/Gsam2SegmentationClient.hpp"
-#include "backend/processing/GsamWslPathUtil.hpp"
+#include "backend/camera/processing/Gsam2SegmentationClient.hpp"
+#include "backend/camera/processing/GsamWslPathUtil.hpp"
 
 #include <QTimer>
 

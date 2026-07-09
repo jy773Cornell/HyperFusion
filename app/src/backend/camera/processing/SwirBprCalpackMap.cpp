@@ -1,5 +1,5 @@
 // Loads SWIR3 BPR mask from Specim calpack ZIP entries (backend/processing).
-#include "backend/processing/SwirBprCalpackMap.hpp"
+#include "backend/camera/processing/SwirBprCalpackMap.hpp"
 
 #include <QFile>
 

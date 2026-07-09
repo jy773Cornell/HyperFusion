@@ -1,7 +1,7 @@
 // Background waterfall builder: RGB lines from streamed frames stacked for Qt display.
 #pragma once
 
-#include "backend/CameraTypes.hpp"
+#include "backend/camera/CameraTypes.hpp"
 #include "frontend/processing/RgbBandExtractor.hpp"
 
 #include <QImage>

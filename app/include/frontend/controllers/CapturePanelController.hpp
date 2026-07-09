@@ -2,8 +2,8 @@
 // UI widgets remain on MainWindow; this controller owns capture state and sequence logic.
 #pragma once
 
-#include "backend/CaptureWriterTypes.hpp"
-#include "backend/CameraTypes.hpp"
+#include "backend/camera/CaptureWriterTypes.hpp"
+#include "backend/camera/CameraTypes.hpp"
 
 #include <QElapsedTimer>
 #include <QObject>

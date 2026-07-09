@@ -2,9 +2,9 @@
 #pragma once
 
 #include "adapters/lumo/LumoDeviceTypes.hpp"
-#include "backend/CameraTypes.hpp"
-#include "backend/LighthouseTypes.hpp"
-#include "backend/StageTypes.hpp"
+#include "backend/camera/CameraTypes.hpp"
+#include "backend/light/LighthouseTypes.hpp"
+#include "backend/stage/StageTypes.hpp"
 #include "frontend/controllers/CapturePanelController.hpp"
 #include "frontend/logging/AppLogSession.hpp"
 #include "frontend/widgets/LumoCameraUi.hpp"
@@ -71,6 +71,7 @@ class ProfilePlotWidget;
 class StageAxisWidget;
 class Ur3eJointBarWidget;
 class Ur3eScanRoutePlanWidget;
+class Ur3eHemisphereScanSettingsWidget;
 class WaterfallDisplayWidget;
 } // namespace ui
 
@@ -236,6 +237,7 @@ private:
     QPushButton *ur3eSyncJointsBtn_ = nullptr;
     QPushButton *ur3eStartRvizBtn_ = nullptr;
     QPushButton *ur3eStartMoveItBtn_ = nullptr;
+    ui::Ur3eHemisphereScanSettingsWidget *ur3eHemisphereScanSettings_ = nullptr;
     QTimer *ur3ePosePollTimer_ = nullptr;
     QLabel *captureCamerasEmptyLabel_ = nullptr;
     QCheckBox *captureCamera1Check_ = nullptr;

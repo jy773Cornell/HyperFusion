@@ -140,6 +140,34 @@ class SidecarHttpHandler(BaseHTTPRequestHandler):
             self._send_json(200, bridge.stop())
             return
 
+        if path == "/plan_hemisphere_scan":
+            try:
+                self._send_json(200, bridge.plan_hemisphere_scan(body))
+            except Exception as exc:
+                self._send_json(500, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/execute_hemisphere_scan":
+            try:
+                self._send_json(200, bridge.execute_hemisphere_scan(body))
+            except Exception as exc:
+                self._send_json(500, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/execute_scan_waypoint":
+            try:
+                self._send_json(200, bridge.execute_scan_waypoint(body))
+            except Exception as exc:
+                self._send_json(500, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/execute_move_home":
+            try:
+                self._send_json(200, bridge.execute_move_home(body))
+            except Exception as exc:
+                self._send_json(500, {"ok": False, "error": str(exc)})
+            return
+
         self._send_json(404, {"ok": False, "error": "not found"})
 
     def _shutdown_server(self) -> None:

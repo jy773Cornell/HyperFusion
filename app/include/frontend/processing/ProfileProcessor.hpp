@@ -10,7 +10,7 @@
 #include <mutex>
 #include <thread>
 
-#include "backend/CameraTypes.hpp"
+#include "backend/camera/CameraTypes.hpp"
 
 namespace ui
 {

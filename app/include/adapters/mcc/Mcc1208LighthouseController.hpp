@@ -1,7 +1,7 @@
 #pragma once
 
 #include "adapters/mcc/MccUniversalLibrary.hpp"
-#include "backend/ILighthouseController.hpp"
+#include "backend/light/ILighthouseController.hpp"
 
 #include <functional>
 #include <string>

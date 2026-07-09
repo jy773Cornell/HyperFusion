@@ -1,7 +1,7 @@
 // In-place BIL bad-pixel replacement for SWIR3 frames (backend/processing).
 #pragma once
 
-#include "backend/CameraTypes.hpp"
+#include "backend/camera/CameraTypes.hpp"
 
 #include <cstdint>
 #include <vector>

@@ -15,6 +15,8 @@ namespace hf::ur3e
 {
 namespace
 {
+constexpr double kMockInitialJointDeg[6] = {0.0, -150.0, 120.0, 0.0, 90.0, 0.0};
+
 QStringList wslBashArguments(const QString &script)
 {
     const hf::HardwareConfig::Ur3eConfig &cfg = hf::hardwareConfig().ur3e;
@@ -175,6 +177,8 @@ QString Ur3eServerManager::buildLaunchCommand() const
         QStringLiteral("./venv/bin/ur3e_server --host 0.0.0.0 --port %1")
             .arg(cfg.serverPort);
     serverArgs += QStringLiteral(" --robot-ip %1").arg(cfg.robotIp);
+    if (!cfg.reverseIp.trimmed().isEmpty())
+        serverArgs += QStringLiteral(" --reverse-ip %1").arg(cfg.reverseIp.trimmed());
     serverArgs += QStringLiteral(" --dashboard-port %1").arg(cfg.dashboardPort);
     serverArgs += QStringLiteral(" --rtde-port %1").arg(cfg.rtdePort);
     serverArgs += QStringLiteral(" --max-linear-speed %1").arg(cfg.maxLinearSpeedMPerS, 0, 'g', 6);
@@ -187,6 +191,15 @@ QString Ur3eServerManager::buildLaunchCommand() const
     serverArgs += QStringLiteral(" --ur-type %1").arg(cfg.urType);
     if (cfg.prestartDriver)
         serverArgs += QStringLiteral(" --prestart-driver");
+    if (cfg.useMockHardware)
+    {
+        QStringList jointDegParts;
+        for (int jointIndex = 0; jointIndex < 6; ++jointIndex)
+            jointDegParts << QString::number(kMockInitialJointDeg[jointIndex], 'g', 6);
+        serverArgs += QStringLiteral(" --initial-joint-deg %1").arg(jointDegParts.join(QLatin1Char(',')));
+    }
+    serverArgs += QStringLiteral(" --ceiling-mount-height-mm %1")
+                      .arg(cfg.workspaceHeightMm, 0, 'f', 1);
 
     const QString extraShell = cfg.wslBashCommand.trimmed();
     const QString rosDistro = cfg.rosDistro.trimmed().isEmpty() ? QStringLiteral("jazzy")

@@ -1,6 +1,6 @@
 // Reflectance cube to display RGB: VNIR sRGB integration or SWIR false-color wavelength ranges.
-#include "backend/processing/HsiToColor.hpp"
-#include "backend/processing/IlluminantTables.hpp"
+#include "backend/camera/processing/HsiToColor.hpp"
+#include "backend/camera/processing/IlluminantTables.hpp"
 
 #include <QDir>
 #include <QFileInfo>

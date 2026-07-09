@@ -2,8 +2,8 @@
 #include "frontend/controllers/StagePanelController.hpp"
 
 #include "adapters/zaber/ZaberStageController.hpp"
-#include "backend/CameraTypes.hpp"
-#include "backend/StageWorker.hpp"
+#include "backend/camera/CameraTypes.hpp"
+#include "backend/stage/StageWorker.hpp"
 #include "frontend/widgets/MainWindow.hpp"
 #include "frontend/utils/SerialPortEnumerator.hpp"
 #include "frontend/widgets/StageAxisWidget.hpp"

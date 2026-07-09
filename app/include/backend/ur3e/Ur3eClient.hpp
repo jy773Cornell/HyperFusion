@@ -3,10 +3,12 @@
 
 #include <QString>
 #include <QStringList>
+#include <QJsonObject>
 #include <vector>
 
 namespace hf::ur3e
 {
+struct Ur3eScanTcpPose;
 struct Ur3eTcpPose
 {
     double x = 0.0;
@@ -66,6 +68,14 @@ struct Ur3eJointsMoveResult
     std::vector<double> positionsRad;
 };
 
+struct Ur3eScanWaypointMoveResult
+{
+    bool ok = false;
+    QString errorMessage;
+    bool stopped = false;
+    bool skipped = false;
+};
+
 bool ur3eServerHealthCheck(const QString &serverUrl,
                            Ur3eHealthStatus *status = nullptr,
                            QString *errorMessage = nullptr);
@@ -94,6 +104,34 @@ Ur3eJointsMoveResult ur3eMoveJoints(const QString &serverUrl,
                                     bool waitUntilDone,
                                     QString *errorMessage = nullptr);
 
+Ur3eScanWaypointMoveResult ur3eExecuteScanWaypoint(const QString &serverUrl,
+                                                   const std::vector<double> &positionsRad,
+                                                   const Ur3eScanTcpPose *tcpPose = nullptr,
+                                                   QString *errorMessage = nullptr,
+                                                   bool requireHomeFirst = false);
+
+Ur3eScanWaypointMoveResult ur3eExecuteMoveHome(const QString &serverUrl,
+                                               QString *errorMessage = nullptr);
+
 bool ur3eStopMotion(const QString &serverUrl, QString *errorMessage = nullptr);
+
+QJsonObject ur3ePostJsonRequest(const QString &serverUrl,
+                                const QString &path,
+                                const QJsonObject &body,
+                                int timeoutMs,
+                                QString *errorMessage = nullptr);
+
+struct Ur3eHemisphereScanExecuteResult
+{
+    bool ok = false;
+    QString errorMessage;
+    int executedCount = 0;
+    bool stopped = false;
+};
+
+Ur3eHemisphereScanExecuteResult ur3eExecuteHemisphereScan(
+    const QString &serverUrl,
+    const std::vector<std::vector<double>> &waypointsRad,
+    QString *errorMessage = nullptr);
 
 } // namespace hf::ur3e

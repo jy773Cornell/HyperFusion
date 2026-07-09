@@ -1,7 +1,7 @@
 #pragma once
 
 #include "adapters/zaber/ZaberStageProfile.hpp"
-#include "backend/IStageController.hpp"
+#include "backend/stage/IStageController.hpp"
 
 #include <atomic>
 #include <condition_variable>

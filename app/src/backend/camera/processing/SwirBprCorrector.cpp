@@ -1,7 +1,7 @@
 // SWIR3 static calpack BPR (backend/processing layer).
-#include "backend/processing/SwirBprCorrector.hpp"
+#include "backend/camera/processing/SwirBprCorrector.hpp"
 
-#include "backend/processing/SwirBprApply.hpp"
+#include "backend/camera/processing/SwirBprApply.hpp"
 
 #include <algorithm>
 

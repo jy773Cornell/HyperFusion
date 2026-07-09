@@ -114,6 +114,33 @@ void AppSettingsStore::saveLighthouseSettings(const PersistedLighthouseSettings 
     settings.setValue(QStringLiteral("light/transmittancePercent"), lighthouse.transmittancePercent);
 }
 
+PersistedUr3eHemisphereScanSettings AppSettingsStore::loadUr3eHemisphereScan()
+{
+    QSettings &settings = storage();
+    PersistedUr3eHemisphereScanSettings scan;
+    scan.sphereRadiusMm =
+        settings.value(QStringLiteral("ur3e/hemisphereScan/sphereRadiusMm"), 500.0).toDouble();
+    scan.horizontalPoints =
+        settings.value(QStringLiteral("ur3e/hemisphereScan/horizontalPoints"), 12).toInt();
+    scan.verticalPoints =
+        settings.value(QStringLiteral("ur3e/hemisphereScan/verticalPoints"), 5).toInt();
+    scan.thetaMinDeg =
+        settings.value(QStringLiteral("ur3e/hemisphereScan/thetaMinDeg"), 30.0).toDouble();
+    scan.thetaMaxDeg =
+        settings.value(QStringLiteral("ur3e/hemisphereScan/thetaMaxDeg"), 90.0).toDouble();
+    return scan;
+}
+
+void AppSettingsStore::saveUr3eHemisphereScan(const PersistedUr3eHemisphereScanSettings &scan)
+{
+    QSettings &settings = storage();
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/sphereRadiusMm"), scan.sphereRadiusMm);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/horizontalPoints"), scan.horizontalPoints);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/verticalPoints"), scan.verticalPoints);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/thetaMinDeg"), scan.thetaMinDeg);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/thetaMaxDeg"), scan.thetaMaxDeg);
+}
+
 void AppSettingsStore::saveCameraSettings(const std::size_t cameraIndex,
                                           const PersistedCameraSettings &camera)
 {

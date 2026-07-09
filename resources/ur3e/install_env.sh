@@ -161,6 +161,10 @@ if [[ "$SKIP_VENV" == false ]]; then
 fi
 
 echo ""
+echo "Real robot on LAN (one-time, from Windows PowerShell as Administrator):"
+echo "  cd resources/ur3e && .\\install_env.ps1 -SetupRobotNetwork -ShutdownWsl"
+echo "  # or: .\\scripts\\setup_wsl_robot_network.ps1 -ShutdownWsl"
+echo ""
 echo "==> UR3e environment ready."
 echo "Simulation server:"
 echo "  cd $SCRIPT_DIR && source /opt/ros/\$ROS_DISTRO/setup.bash && ./venv/bin/ur3e_server --use-mock-hardware --port 8766"

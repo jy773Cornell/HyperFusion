@@ -1,6 +1,6 @@
 #pragma once
 
-#include "backend/IStageController.hpp"
+#include "backend/stage/IStageController.hpp"
 
 #include "adapters/zaber/ZaberStageProfile.hpp"
 

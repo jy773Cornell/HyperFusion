@@ -1,7 +1,7 @@
 // Stage tab orchestration: Zaber worker, homing, motion, and position polling.
 #pragma once
 
-#include "backend/StageTypes.hpp"
+#include "backend/stage/StageTypes.hpp"
 
 #include <QObject>
 #include <QString>

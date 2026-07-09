@@ -68,8 +68,16 @@ QString Ur3eRvizManager::buildLaunchCommand() const
         return QStringLiteral("source /opt/ros/%1/setup.bash && exec rviz2").arg(rosDistro);
     }
 
-    return QStringLiteral("export HYPERFUSION_UR3E_REPO='%1' && sed 's/\\r$//' '%2' | bash -s %3 %4")
-        .arg(repoLinux, scriptPath, rosDistro, urType);
+    return QStringLiteral(
+               "export HYPERFUSION_UR3E_REPO='%1' && "
+               "export HYPERFUSION_CEILING_MOUNT='true' && "
+               "export HYPERFUSION_CEILING_MOUNT_HEIGHT_M='%2' && "
+               "sed 's/\\r$//' '%3' | bash -s %4 %5")
+        .arg(repoLinux,
+             QString::number(cfg.workspaceHeightMm / 1000.0, 'f', 4),
+             scriptPath,
+             rosDistro,
+             urType);
 }
 
 void Ur3eRvizManager::start()

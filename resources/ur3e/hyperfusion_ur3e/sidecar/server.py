@@ -30,12 +30,20 @@ _bridge: Optional[Ur3eRosBridge] = None
 _bridge_lock = threading.Lock()
 
 
+def _parse_initial_joint_deg(raw: str) -> list[float]:
+    parts = [p.strip() for p in str(raw).split(",") if p.strip()]
+    if len(parts) != 6:
+        raise ValueError("initial_joint_deg must contain 6 comma-separated degree values.")
+    return [float(p) for p in parts]
+
+
 def get_bridge(args: argparse.Namespace) -> Ur3eRosBridge:
     global _bridge
     with _bridge_lock:
         if _bridge is None:
             _bridge = Ur3eRosBridge(
                 robot_ip=args.robot_ip,
+                reverse_ip=args.reverse_ip,
                 dashboard_port=args.dashboard_port,
                 rtde_port=args.rtde_port,
                 max_linear_speed_m_per_s=args.max_linear_speed,
@@ -43,6 +51,8 @@ def get_bridge(args: argparse.Namespace) -> Ur3eRosBridge:
                 ros_distro=args.ros_distro,
                 ur_type=args.ur_type,
                 use_mock_hardware=args.use_mock_hardware,
+                initial_joint_deg=args.initial_joint_deg,
+                ceiling_mount_height_m=args.ceiling_mount_height_mm / 1000.0,
             )
         return _bridge
 
@@ -58,6 +68,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=int(server_cfg.get("port", 8766)))
     parser.add_argument("--config", default=str(DEFAULT_CONFIG))
     parser.add_argument("--robot-ip", default=str(robot_cfg.get("ip", "192.168.0.10")))
+    parser.add_argument(
+        "--reverse-ip",
+        default=str(robot_cfg.get("reverse_ip", "0.0.0.0")),
+        help="PC LAN IP the robot reaches for External Control (script_sender port 50002).",
+    )
     parser.add_argument("--dashboard-port", type=int, default=int(robot_cfg.get("dashboard_port", 29999)))
     parser.add_argument("--rtde-port", type=int, default=int(robot_cfg.get("rtde_port", 30004)))
     parser.add_argument(
@@ -84,6 +99,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=bool(cfg.get("prestart_driver", False)),
         help="Warm up ur_robot_driver in background after HTTP server starts.",
     )
+    parser.add_argument(
+        "--initial-joint-deg",
+        default="0,-150,120,0,90,0",
+        help="Mock-only home pose (degrees): pan,lift,elbow,wrist1,wrist2,wrist3.",
+    )
+    parser.add_argument(
+        "--ceiling-mount-height-mm",
+        type=float,
+        default=float(cfg.get("ceiling_mount_height_m", 0.65)) * 1000.0,
+        help="Ceiling mount height in mm (matches workspace_height_mm / Z=0 tray floor).",
+    )
     return parser
 
 
@@ -97,6 +123,14 @@ def _prestart_driver_async(args: argparse.Namespace) -> None:
             )
         except Exception as exc:
             sys.stderr.write(f"UR3e sidecar: prestart failed: {exc}\n")
+            try:
+                bridge = get_bridge(args)
+                with bridge._lock:
+                    if bridge._driver is not None:
+                        bridge._driver.stop()
+                        bridge._driver = None
+            except Exception:
+                pass
 
     threading.Thread(target=_run, daemon=True, name="ur3e-prestart").start()
 
@@ -104,6 +138,7 @@ def _prestart_driver_async(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = build_arg_parser()
     args = parser.parse_args()
+    args.initial_joint_deg = _parse_initial_joint_deg(args.initial_joint_deg)
 
     bridge_supplier = lambda: get_bridge(args)
     SidecarHttpHandler.get_bridge = staticmethod(bridge_supplier)

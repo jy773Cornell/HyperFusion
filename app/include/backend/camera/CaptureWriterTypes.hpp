@@ -1,7 +1,7 @@
 #pragma once
 
 #include "adapters/lumo/CalpackBandCatalog.hpp"
-#include "backend/CameraTypes.hpp"
+#include "backend/camera/CameraTypes.hpp"
 
 #include <QMap>
 #include <QString>

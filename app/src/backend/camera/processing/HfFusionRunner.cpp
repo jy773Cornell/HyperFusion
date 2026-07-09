@@ -1,5 +1,5 @@
 // One-shot subprocess runner for the hf_fusion Python pipeline (backend/offline).
-#include "backend/processing/HfFusionRunner.hpp"
+#include "backend/camera/processing/HfFusionRunner.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
 
@@ -14,6 +14,7 @@
 #include <QRegularExpression>
 
 #include <algorithm>
+#include <cmath>
 
 namespace hf::processing
 {
@@ -464,33 +465,44 @@ bool fusionPrerequisitesMet(const QString &sessionDirectory,
         return false;
     }
 
-    // Order-only QA: masks (by their roi-id) must match the expected row-major order
-    // derived from the masks' upper-left corner (top-to-bottom, then left-to-right).
-    auto verifyRowMajorRoiIds = [](const QVector<MaskQaPoint> &points,
-                                   const QString &cameraName,
-                                   QString *errorMessage) -> bool {
-        for (int i = 0; i < points.size(); ++i)
-        {
-            const int expectedRoi = i + 1; // ROI ids are expected to be 1..N.
-            if (points[i].roi != expectedRoi)
-            {
-                if (errorMessage != nullptr)
-                    *errorMessage = QStringLiteral(
-                                         "%1 mask ROI ordering mismatch: expected roi #%2 at index %3 (row-major by upper-left), got roi #%4")
-                                         .arg(cameraName)
-                                         .arg(expectedRoi)
-                                         .arg(i + 1)
-                                         .arg(points[i].roi);
-                return false;
-            }
-        }
-        return true;
+    // Pair ROIs the same way as hf_fusion (left-to-right by centroid x, then y) and
+    // reject only if a matched pair is implausibly far apart. GSAM roi ids are
+    // detection-order labels (1..N), not spatial indices.
+    auto sortByCentroidX = [](QVector<MaskQaPoint> &points) {
+        std::sort(points.begin(), points.end(), [](const MaskQaPoint &a, const MaskQaPoint &b) {
+            if (a.centroidXmm != b.centroidXmm)
+                return a.centroidXmm < b.centroidXmm;
+            return a.centroidYmm < b.centroidYmm;
+        });
     };
 
-    if (!verifyRowMajorRoiIds(fxPoints, QStringLiteral("FX10e"), detail))
-        return false;
-    if (!verifyRowMajorRoiIds(swPoints, QStringLiteral("SWIR3"), detail))
-        return false;
+    QVector<MaskQaPoint> fxSorted = fxPoints;
+    QVector<MaskQaPoint> swSorted = swPoints;
+    sortByCentroidX(fxSorted);
+    sortByCentroidX(swSorted);
+
+    constexpr double kMaxPairDistanceMm = 50.0;
+    for (int i = 0; i < fxSorted.size(); ++i)
+    {
+        const double dx = fxSorted[i].centroidXmm - swSorted[i].centroidXmm;
+        const double dy = fxSorted[i].centroidYmm - swSorted[i].centroidYmm;
+        const double distance = std::sqrt(dx * dx + dy * dy);
+        if (distance > kMaxPairDistanceMm)
+        {
+            if (detail != nullptr)
+            {
+                *detail = QStringLiteral(
+                               "GSAM centroid pairing distance too large for pair %1: %2 mm "
+                               "(fx roi #%3 vs sw roi #%4, max %5 mm)")
+                               .arg(i + 1)
+                               .arg(distance, 0, 'f', 1)
+                               .arg(fxSorted[i].roi)
+                               .arg(swSorted[i].roi)
+                               .arg(kMaxPairDistanceMm, 0, 'f', 1);
+            }
+            return false;
+        }
+    }
 
     if (detail != nullptr)
         detail->clear();

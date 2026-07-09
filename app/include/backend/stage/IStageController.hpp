@@ -1,6 +1,6 @@
 #pragma once
 
-#include "backend/StageTypes.hpp"
+#include "backend/stage/StageTypes.hpp"
 
 class IStageController
 {

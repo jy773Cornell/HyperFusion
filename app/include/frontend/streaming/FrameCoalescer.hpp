@@ -1,7 +1,7 @@
 // Latest-wins frame slots per camera for detector/profile preview (waterfall bypasses this).
 #pragma once
 
-#include "backend/CameraTypes.hpp"
+#include "backend/camera/CameraTypes.hpp"
 
 #include <array>
 #include <atomic>

@@ -46,6 +46,15 @@ struct PersistedLighthouseSettings
     int transmittancePercent = 40;
 };
 
+struct PersistedUr3eHemisphereScanSettings
+{
+    double sphereRadiusMm = 500.0;
+    int horizontalPoints = 12;
+    int verticalPoints = 5;
+    double thetaMinDeg = 30.0;
+    double thetaMaxDeg = 90.0;
+};
+
 class AppSettingsStore
 {
 public:
@@ -62,6 +71,9 @@ public:
 
     static PersistedLighthouseSettings loadLighthouseSettings();
     static void saveLighthouseSettings(const PersistedLighthouseSettings &settings);
+
+    static PersistedUr3eHemisphereScanSettings loadUr3eHemisphereScan();
+    static void saveUr3eHemisphereScan(const PersistedUr3eHemisphereScanSettings &settings);
 
     static void sync();
 };

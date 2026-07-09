@@ -4,7 +4,7 @@
 // applySettings/arm/start run on a dedicated SdkLifecycleRunner Qt thread when
 // requiresGuiThreadForSdkLifecycle() (SWIR3 cam007 serial during Initialize must not run on the
 // camera control thread; main GUI thread must stay free for Windows responsiveness).
-#include "backend/CameraWorker.hpp"
+#include "backend/camera/CameraWorker.hpp"
 
 #include <QCoreApplication>
 #include <QThread>

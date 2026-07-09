@@ -1,6 +1,6 @@
-#include "backend/processing/ReferenceBuilder.hpp"
+#include "backend/camera/processing/ReferenceBuilder.hpp"
 
-#include "backend/processing/ReferenceSpectrumStats.hpp"
+#include "backend/camera/processing/ReferenceSpectrumStats.hpp"
 
 #include <cmath>
 namespace hf::processing

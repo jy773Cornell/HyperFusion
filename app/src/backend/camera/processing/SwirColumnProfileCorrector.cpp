@@ -1,5 +1,5 @@
 // SWIR3 column profile destripe implementation (backend/processing layer).
-#include "backend/processing/SwirColumnProfileCorrector.hpp"
+#include "backend/camera/processing/SwirColumnProfileCorrector.hpp"
 
 #include <algorithm>
 #include <cmath>

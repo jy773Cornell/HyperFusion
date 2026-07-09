@@ -1,4 +1,4 @@
-#include "backend/processing/IlluminantTables.hpp"
+#include "backend/camera/processing/IlluminantTables.hpp"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -116,9 +116,9 @@ QString defaultIlluminantsJsonPath()
 {
     const QStringList candidates = {
         QDir(QCoreApplication::applicationDirPath())
-            .filePath(QStringLiteral("backend/processing/reference/D_illuminants.json")),
+            .filePath(QStringLiteral("backend/camera/processing/reference/D_illuminants.json")),
         QStringLiteral(HF_APP_SOURCE_DIR)
-            + QStringLiteral("/src/backend/processing/reference/D_illuminants.json"),
+            + QStringLiteral("/src/backend/camera/processing/reference/D_illuminants.json"),
     };
 
     for (const QString &path : candidates)

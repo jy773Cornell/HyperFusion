@@ -2,8 +2,8 @@
 #pragma once
 
 #include "adapters/lumo/LumoDeviceTypes.hpp"
-#include "backend/CameraTypes.hpp"
-#include "backend/SdkLifecycleRunner.hpp"
+#include "backend/camera/CameraTypes.hpp"
+#include "backend/camera/SdkLifecycleRunner.hpp"
 #include "frontend/processing/ProfileProcessor.hpp"
 #include "frontend/processing/WaterfallProcessor.hpp"
 #include "frontend/streaming/CameraStreamPipeline.hpp"

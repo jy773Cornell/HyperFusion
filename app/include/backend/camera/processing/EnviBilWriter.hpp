@@ -1,7 +1,7 @@
 // ENVI BIL float32 writer for preprocessed hyperspectral output.
 #pragma once
 
-#include "backend/processing/EnviBilReader.hpp"
+#include "backend/camera/processing/EnviBilReader.hpp"
 
 #include <QDateTime>
 #include <QString>

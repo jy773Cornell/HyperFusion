@@ -2,7 +2,7 @@
 #pragma once
 
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/processing/EnviBilReader.hpp"
+#include "backend/camera/processing/EnviBilReader.hpp"
 
 #include <QString>
 

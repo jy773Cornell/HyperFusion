@@ -4,7 +4,7 @@
 #include "frontend/widgets/MainWindow.hpp"
 #include "adapters/zaber/ZaberStageProfile.hpp"
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/StageWorker.hpp"
+#include "backend/stage/StageWorker.hpp"
 #include "frontend/widgets/MainWindowTabHelpers.hpp"
 #include "frontend/widgets/OperationWaitDialog.hpp"
 #include "frontend/widgets/StageAxisWidget.hpp"

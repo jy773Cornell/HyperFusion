@@ -2,7 +2,9 @@
 #include "backend/ur3e/Ur3eClient.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/processing/GsamWslPathUtil.hpp"
+#include "backend/camera/processing/GsamWslPathUtil.hpp"
+#include "backend/ur3e/Ur3eHemisphereScanReachability.hpp"
+#include "backend/ur3e/Ur3eWorkspaceBoundary.hpp"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -35,7 +37,20 @@ QString wslLocalEndpoint(const QString &serverUrl, const QString &path)
         .arg(path.startsWith(QLatin1Char('/')) ? path : QStringLiteral("/") + path);
 }
 
+QByteArray runWslCurl(const QStringList &curlArgs,
+                      const int timeoutMs,
+                      QString *errorMessage,
+                      const bool allowHttpErrorBody);
+
 QByteArray runWslCurl(const QStringList &curlArgs, const int timeoutMs, QString *errorMessage)
+{
+    return runWslCurl(curlArgs, timeoutMs, errorMessage, false);
+}
+
+QByteArray runWslCurl(const QStringList &curlArgs,
+                      const int timeoutMs,
+                      QString *errorMessage,
+                      const bool allowHttpErrorBody)
 {
     QStringList wslArgs;
     const QString distro = wslDistroArgument();
@@ -67,7 +82,8 @@ QByteArray runWslCurl(const QStringList &curlArgs, const int timeoutMs, QString 
     const QByteArray stdoutPayload = process.readAllStandardOutput();
     const QByteArray stderrPayload = process.readAllStandardError();
 
-    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
+    if (process.exitStatus() != QProcess::NormalExit
+        || (process.exitCode() != 0 && !(allowHttpErrorBody && !stdoutPayload.trimmed().isEmpty())))
     {
         if (errorMessage != nullptr)
         {
@@ -136,7 +152,7 @@ QJsonObject postJson(const QString &serverUrl,
 
     const QString wslBodyPath = hf::processing::windowsPathToWsl(tempFile.fileName());
     const QStringList curlArgs = {
-        QStringLiteral("-sfS"),
+        QStringLiteral("-sS"),
         QStringLiteral("-m"),
         QString::number(qMax(1, timeoutMs / 1000)),
         QStringLiteral("-X"),
@@ -148,7 +164,7 @@ QJsonObject postJson(const QString &serverUrl,
         wslLocalEndpoint(serverUrl, path),
     };
 
-    const QByteArray payload = runWslCurl(curlArgs, timeoutMs, errorMessage);
+    const QByteArray payload = runWslCurl(curlArgs, timeoutMs, errorMessage, true);
     if (payload.isEmpty() && (errorMessage == nullptr || !errorMessage->isEmpty()))
         return {};
 
@@ -160,7 +176,15 @@ QJsonObject postJson(const QString &serverUrl,
         return {};
     }
 
-    return doc.object();
+    const QJsonObject response = doc.object();
+    if (!response.value(QStringLiteral("ok")).toBool(false))
+    {
+        const QString serverError = response.value(QStringLiteral("error")).toString();
+        if (!serverError.isEmpty() && errorMessage != nullptr)
+            *errorMessage = serverError;
+    }
+
+    return response;
 }
 
 Ur3eTcpPose poseFromJsonArray(const QJsonArray &values)
@@ -205,6 +229,57 @@ QJsonArray positionsToJsonArray(const std::vector<double> &positions)
     for (const double value : positions)
         array.append(value);
     return array;
+}
+
+Ur3eScanWaypointMoveResult parseScanMotionResponse(const QJsonObject &response, const QString &localError)
+{
+    Ur3eScanWaypointMoveResult result;
+    if (response.isEmpty())
+    {
+        result.errorMessage = localError;
+        return result;
+    }
+
+    if (response.value(QStringLiteral("stopped")).toBool(false))
+    {
+        result.stopped = true;
+        result.errorMessage = response.value(QStringLiteral("error")).toString(
+            QStringLiteral("Motion stopped."));
+        return result;
+    }
+
+    if (response.value(QStringLiteral("skipped")).toBool(false))
+    {
+        result.skipped = true;
+        result.errorMessage = response.value(QStringLiteral("error")).toString(
+            QStringLiteral("no collision-free path"));
+        return result;
+    }
+
+    if (!response.value(QStringLiteral("ok")).toBool(false))
+    {
+        result.errorMessage = response.value(QStringLiteral("error")).toString(localError);
+        return result;
+    }
+
+    result.ok = true;
+    return result;
+}
+
+QJsonObject buildScanMotionRequestBody()
+{
+    const Ur3eWorkspaceBoundary boundary =
+        workspaceBoundaryFromConfig(hf::hardwareConfig().ur3e);
+    QJsonObject workspace;
+    workspace.insert(QStringLiteral("enabled"), boundary.enabled);
+    workspace.insert(QStringLiteral("length_m"), boundary.lengthM());
+    workspace.insert(QStringLiteral("width_m"), boundary.widthM());
+    workspace.insert(QStringLiteral("height_m"), boundary.heightM());
+
+    QJsonObject body;
+    body.insert(QStringLiteral("workspace"), workspace);
+    appendUr3eScanHomeJointsToJson(body);
+    return body;
 }
 
 void fillHealthStatus(const QJsonObject &response, Ur3eHealthStatus *status)
@@ -257,8 +332,9 @@ Ur3eConnectResult ur3eConnectRobot(const QString &serverUrl,
         body.insert(QStringLiteral("ip"), robotIp.trimmed());
 
     QString localError;
+    const int connectTimeoutMs = qMax(30000, hf::hardwareConfig().ur3e.connectTimeoutMs);
     const QJsonObject response =
-        postJson(serverUrl, QStringLiteral("/connect"), body, 240000, &localError);
+        postJson(serverUrl, QStringLiteral("/connect"), body, connectTimeoutMs, &localError);
     if (response.isEmpty())
     {
         result.errorMessage = localError;
@@ -276,8 +352,15 @@ Ur3eConnectResult ur3eConnectRobot(const QString &serverUrl,
     }
 
     result.ok = true;
-    result.useMockHardware = response.value(QStringLiteral("use_mock_hardware")).toBool(
-        response.value(QStringLiteral("mode")).toString() == QStringLiteral("simulation"));
+    const hf::HardwareConfig::Ur3eConfig &cfg = hf::hardwareConfig().ur3e;
+    if (response.contains(QStringLiteral("use_mock_hardware")))
+        result.useMockHardware = response.value(QStringLiteral("use_mock_hardware")).toBool(cfg.useMockHardware);
+    else if (response.value(QStringLiteral("mode")).toString() == QStringLiteral("simulation"))
+        result.useMockHardware = true;
+    else if (response.value(QStringLiteral("mode")).toString() == QStringLiteral("hardware"))
+        result.useMockHardware = false;
+    else
+        result.useMockHardware = cfg.useMockHardware;
     result.driverState = response.value(QStringLiteral("driver_state")).toString();
     return result;
 }
@@ -435,11 +518,113 @@ Ur3eJointsMoveResult ur3eMoveJoints(const QString &serverUrl,
     return result;
 }
 
+Ur3eScanWaypointMoveResult ur3eExecuteScanWaypoint(const QString &serverUrl,
+                                                   const std::vector<double> &positionsRad,
+                                                   const Ur3eScanTcpPose *tcpPose,
+                                                   QString *errorMessage,
+                                                   const bool requireHomeFirst)
+{
+    QJsonObject body = buildScanMotionRequestBody();
+    body.insert(QStringLiteral("joints"), positionsToJsonArray(positionsRad));
+    if (requireHomeFirst)
+        body.insert(QStringLiteral("require_home_first"), true);
+    if (tcpPose != nullptr)
+    {
+        QJsonObject tcp;
+        tcp.insert(QStringLiteral("x_m"), tcpPose->xM);
+        tcp.insert(QStringLiteral("y_m"), tcpPose->yM);
+        tcp.insert(QStringLiteral("z_m"), tcpPose->zM);
+        tcp.insert(QStringLiteral("rx"), tcpPose->rxRad);
+        tcp.insert(QStringLiteral("ry"), tcpPose->ryRad);
+        tcp.insert(QStringLiteral("rz"), tcpPose->rzRad);
+        tcp.insert(QStringLiteral("tool_z_x"), tcpPose->toolZMx);
+        tcp.insert(QStringLiteral("tool_z_y"), tcpPose->toolZMy);
+        tcp.insert(QStringLiteral("tool_z_z"), tcpPose->toolZMz);
+        body.insert(QStringLiteral("tcp"), tcp);
+    }
+
+    QString localError;
+    const QJsonObject response = postJson(
+        serverUrl, QStringLiteral("/execute_scan_waypoint"), body, 180000, &localError);
+    Ur3eScanWaypointMoveResult result = parseScanMotionResponse(response, localError);
+    if (errorMessage != nullptr && !result.ok && !result.stopped && !result.skipped)
+        *errorMessage = result.errorMessage;
+    else if (errorMessage != nullptr && (result.stopped || result.skipped))
+        *errorMessage = result.errorMessage;
+    return result;
+}
+
+Ur3eScanWaypointMoveResult ur3eExecuteMoveHome(const QString &serverUrl, QString *errorMessage)
+{
+    QString localError;
+    const QJsonObject response = postJson(
+        serverUrl,
+        QStringLiteral("/execute_move_home"),
+        buildScanMotionRequestBody(),
+        180000,
+        &localError);
+    Ur3eScanWaypointMoveResult result = parseScanMotionResponse(response, localError);
+    if (errorMessage != nullptr && !result.ok)
+        *errorMessage = result.errorMessage;
+    return result;
+}
+
 bool ur3eStopMotion(const QString &serverUrl, QString *errorMessage)
 {
     const QJsonObject response =
         postJson(serverUrl, QStringLiteral("/stop"), QJsonObject(), 10000, errorMessage);
     return !response.isEmpty() && response.value(QStringLiteral("ok")).toBool(false);
+}
+
+QJsonObject ur3ePostJsonRequest(const QString &serverUrl,
+                                const QString &path,
+                                const QJsonObject &body,
+                                const int timeoutMs,
+                                QString *errorMessage)
+{
+    return postJson(serverUrl, path, body, timeoutMs, errorMessage);
+}
+
+Ur3eHemisphereScanExecuteResult ur3eExecuteHemisphereScan(
+    const QString &serverUrl,
+    const std::vector<std::vector<double>> &waypointsRad,
+    QString *errorMessage)
+{
+    Ur3eHemisphereScanExecuteResult result;
+    QJsonArray waypoints;
+    for (const std::vector<double> &joints : waypointsRad)
+    {
+        QJsonObject entry;
+        entry.insert(QStringLiteral("joints"), positionsToJsonArray(joints));
+        waypoints.append(entry);
+    }
+
+    QJsonObject body;
+    body.insert(QStringLiteral("waypoints"), waypoints);
+
+    QString localError;
+    const QJsonObject response = postJson(
+        serverUrl, QStringLiteral("/execute_hemisphere_scan"), body, 3600000, &localError);
+    if (response.isEmpty())
+    {
+        result.errorMessage = localError;
+        if (errorMessage != nullptr)
+            *errorMessage = localError;
+        return result;
+    }
+
+    if (!response.value(QStringLiteral("ok")).toBool(false))
+    {
+        result.errorMessage = response.value(QStringLiteral("error")).toString(localError);
+        if (errorMessage != nullptr)
+            *errorMessage = result.errorMessage;
+        return result;
+    }
+
+    result.ok = true;
+    result.executedCount = response.value(QStringLiteral("executed")).toInt(0);
+    result.stopped = response.value(QStringLiteral("stopped")).toBool(false);
+    return result;
 }
 
 } // namespace hf::ur3e

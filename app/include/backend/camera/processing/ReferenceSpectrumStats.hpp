@@ -1,8 +1,8 @@
 // Per-band statistics for reference spectra plots and validation.
 #pragma once
 
-#include "backend/processing/EnviBilReader.hpp"
-#include "backend/processing/ReferenceBuilder.hpp"
+#include "backend/camera/processing/EnviBilReader.hpp"
+#include "backend/camera/processing/ReferenceBuilder.hpp"
 
 #include <QString>
 

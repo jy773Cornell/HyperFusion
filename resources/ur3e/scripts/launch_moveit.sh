@@ -40,6 +40,10 @@ while (( SECONDS < stamped_deadline )); do
   sleep 1
 done
 
+echo "UR3e MoveIt: stopping any existing move_group (prevents duplicate /move_action)…" >&2
+pkill -f "moveit_ros_move_group/move_group" 2>/dev/null || true
+sleep 1
+
 echo "UR3e MoveIt: starting MoveIt + RViz (ur_type=${UR_TYPE})…" >&2
 
 MOVEIT_LAUNCH="${SCRIPT_DIR}/../launch/hyperfusion_moveit.launch.py"

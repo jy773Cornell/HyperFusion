@@ -1,5 +1,5 @@
 // Background worker for manual/offline hf_fusion session runs (backend/offline).
-#include "backend/processing/HfFusionWorker.hpp"
+#include "backend/camera/processing/HfFusionWorker.hpp"
 
 HfFusionWorker::HfFusionWorker() = default;
 

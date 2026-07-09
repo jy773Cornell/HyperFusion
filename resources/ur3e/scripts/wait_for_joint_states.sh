@@ -24,7 +24,7 @@ done
 
 echo "UR3e MoveIt: ERROR — /joint_states not publishing after ${TIMEOUT_S}s." >&2
 echo "  Connect the robot in HyperFusion first (sidecar runs joint_states_stamper) and confirm:" >&2
-echo "    ros2 topic echo /joint_states --once" >&2
 echo "    ros2 topic echo /joint_state_broadcaster/joint_states --once" >&2
+echo "    ros2 topic echo /joint_states --once" >&2
 echo "    ros2 control list_controllers" >&2
 exit 1

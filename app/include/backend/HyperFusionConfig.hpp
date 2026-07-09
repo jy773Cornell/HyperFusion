@@ -3,6 +3,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <array>
 #include <cstddef>
 
 namespace hf
@@ -107,9 +108,12 @@ struct HardwareConfig
         QString ur3eRepoLinux;
         int serverPort = 8766;
         QString robotIp = QStringLiteral("192.168.0.10");
+        QString reverseIp = QStringLiteral("0.0.0.0");
         int dashboardPort = 29999;
         int rtdePort = 30004;
         bool prestartDriver = false;
+        /// HTTP /connect client timeout (ms). Driver startup can take ~2 min per attempt.
+        int connectTimeoutMs = 480000;
         QString rosDistro = QStringLiteral("jazzy");
         QString urType = QStringLiteral("ur3e");
         bool useMockHardware = true;
@@ -117,6 +121,13 @@ struct HardwareConfig
         double maxLinearAccelMPerS2 = 0.3;
         /// "move_j" (joint sliders) or "move_l" (linear TCP; uses current /pose target).
         QString motionType = QStringLiteral("move_j");
+        /// Ceiling-mount workspace cube (mm). Tray centered at origin; Z=0 bottom, Z=height mount plane.
+        bool workspaceBoundaryEnabled = true;
+        double workspaceLengthMm = 600.0;
+        double workspaceWidthMm = 600.0;
+        double workspaceHeightMm = 650.0;
+        /// Scan / retreat home pose (degrees): shoulder_pan, lift, elbow, wrist_1, wrist_2, wrist_3.
+        std::array<double, 6> homeJointsDeg = {0.0, -150.0, 120.0, 0.0, 90.0, 0.0};
     };
 
     Ur3eConfig ur3e;

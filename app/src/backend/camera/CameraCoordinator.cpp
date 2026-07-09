@@ -1,5 +1,5 @@
 // Multi-camera coordinator implementation.
-#include "backend/CameraCoordinator.hpp"
+#include "backend/camera/CameraCoordinator.hpp"
 
 #include <sstream>
 #include <stdexcept>

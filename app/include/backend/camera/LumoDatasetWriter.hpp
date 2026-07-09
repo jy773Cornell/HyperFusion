@@ -1,6 +1,6 @@
 #pragma once
 
-#include "backend/CaptureWriterTypes.hpp"
+#include "backend/camera/CaptureWriterTypes.hpp"
 
 #include <QDateTime>
 #include <QFile>

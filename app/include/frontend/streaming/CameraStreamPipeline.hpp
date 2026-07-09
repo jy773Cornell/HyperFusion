@@ -1,7 +1,7 @@
 // Coalesced dual-camera stream display pipeline: frame ingress, worker dispatch, capped GUI refresh.
 #pragma once
 
-#include "backend/CameraTypes.hpp"
+#include "backend/camera/CameraTypes.hpp"
 #include "frontend/processing/BilProfileExtractor.hpp"
 #include "frontend/processing/DetectorFrameProcessor.hpp"
 #include "frontend/processing/ProfileProcessor.hpp"

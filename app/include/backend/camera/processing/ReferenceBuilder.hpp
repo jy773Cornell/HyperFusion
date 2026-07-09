@@ -1,7 +1,7 @@
 // Builds one BIL row reference (mean over scan lines) from ENVI cubes.
 #pragma once
 
-#include "backend/processing/EnviBilReader.hpp"
+#include "backend/camera/processing/EnviBilReader.hpp"
 
 #include <QString>
 #include <vector>

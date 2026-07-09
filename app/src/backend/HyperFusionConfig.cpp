@@ -894,6 +894,8 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
             }
             else if (key == QStringLiteral("robot_ip"))
                 config.ur3e.robotIp = value;
+            else if (key == QStringLiteral("reverse_ip"))
+                config.ur3e.reverseIp = value;
             else if (key == QStringLiteral("dashboard_port"))
             {
                 bool ok = false;
@@ -918,6 +920,16 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 config.ur3e.prestartDriver =
                     lower == QStringLiteral("true") || lower == QStringLiteral("1")
                     || lower == QStringLiteral("yes");
+            }
+            else if (key == QStringLiteral("connect_timeout_ms"))
+            {
+                bool ok = false;
+                const int timeoutMs = value.toInt(&ok);
+                if (!ok || timeoutMs < 30000)
+                    warnings.push_back(
+                        QStringLiteral("Invalid ur3e connect_timeout_ms (min 30000): %1").arg(value));
+                else
+                    config.ur3e.connectTimeoutMs = timeoutMs;
             }
             else if (key == QStringLiteral("ros_distro"))
                 config.ur3e.rosDistro = value;
@@ -952,6 +964,66 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 else
                     warnings.push_back(
                         QStringLiteral("Invalid ur3e motion_type (use move_j or move_l): %1").arg(value));
+            }
+            else if (key == QStringLiteral("workspace_boundary_enabled"))
+            {
+                const QString lower = value.trimmed().toLower();
+                config.ur3e.workspaceBoundaryEnabled =
+                    lower.isEmpty() || lower == QStringLiteral("true") || lower == QStringLiteral("1")
+                    || lower == QStringLiteral("yes");
+            }
+            else if (key == QStringLiteral("workspace_length_mm"))
+            {
+                if (!hasNumber || numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral("Invalid ur3e workspace_length_mm: %1").arg(value));
+                else
+                    config.ur3e.workspaceLengthMm = numericValue;
+            }
+            else if (key == QStringLiteral("workspace_width_mm"))
+            {
+                if (!hasNumber || numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral("Invalid ur3e workspace_width_mm: %1").arg(value));
+                else
+                    config.ur3e.workspaceWidthMm = numericValue;
+            }
+            else if (key == QStringLiteral("workspace_height_mm"))
+            {
+                if (!hasNumber || numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral("Invalid ur3e workspace_height_mm: %1").arg(value));
+                else
+                    config.ur3e.workspaceHeightMm = numericValue;
+            }
+            else if (key == QStringLiteral("home_joints_deg"))
+            {
+                const QStringList parts = value.split(QLatin1Char(','), Qt::SkipEmptyParts);
+                if (parts.size() != 6)
+                {
+                    warnings.push_back(
+                        QStringLiteral("Invalid ur3e home_joints_deg (need 6 comma-separated values): %1")
+                            .arg(value));
+                }
+                else
+                {
+                    bool allOk = true;
+                    std::array<double, 6> parsed{};
+                    for (int jointIndex = 0; jointIndex < 6; ++jointIndex)
+                    {
+                        bool ok = false;
+                        const double jointDeg = parts[jointIndex].trimmed().toDouble(&ok);
+                        if (!ok)
+                        {
+                            allOk = false;
+                            break;
+                        }
+                        parsed[static_cast<std::size_t>(jointIndex)] = jointDeg;
+                    }
+                    if (allOk)
+                        config.ur3e.homeJointsDeg = parsed;
+                    else
+                        warnings.push_back(
+                            QStringLiteral("Invalid ur3e home_joints_deg (non-numeric value): %1")
+                                .arg(value));
+                }
             }
             else
                 warnings.push_back(QStringLiteral("Unknown key in [ur3e]: %1").arg(key));
@@ -1099,12 +1171,20 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "dashboard_port = 29999\n"
         << "rtde_port = 30004\n"
         << "prestart_driver = false\n"
+        << "connect_timeout_ms = 480000\n"
         << "ros_distro = jazzy\n"
         << "ur_type = ur3e\n"
         << "use_mock_hardware = true\n"
         << "max_linear_speed_m_per_s = 0.05\n"
         << "max_linear_accel_m_per_s2 = 0.3\n"
-        << "motion_type = move_j\n";
+        << "motion_type = move_j\n"
+        << "# Workspace boundary cube (mm). Tray centered at origin; Z=0 tray bottom, Z=height robot mount.\n"
+        << "workspace_boundary_enabled = true\n"
+        << "workspace_length_mm = 600\n"
+        << "workspace_width_mm = 600\n"
+        << "workspace_height_mm = 650\n"
+        << "# Scan home pose (degrees): pan, lift, elbow, wrist_1, wrist_2, wrist_3.\n"
+        << "home_joints_deg = 0,-150,120,0,90,0\n";
 
     if (!file.commit())
     {

@@ -1,6 +1,7 @@
 // UR3e robot settings tab UI layout (wiring handled by Ur3ePanelController).
 #include "frontend/widgets/MainWindow.hpp"
 #include "frontend/widgets/Ur3eJointBarWidget.hpp"
+#include "frontend/widgets/Ur3eHemisphereScanSettingsWidget.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
 
@@ -152,11 +153,14 @@ QWidget *MainWindow::createUr3eSettingsTab()
     auxRow->addWidget(ur3eStartMoveItBtn_, 1);
     jointsLayout->addLayout(auxRow);
 
+    ur3eHemisphereScanSettings_ = new ui::Ur3eHemisphereScanSettingsWidget(page);
+
     ur3ePosePollTimer_ = new QTimer(this);
     ur3ePosePollTimer_->setInterval(500);
 
     layout->addWidget(connBox);
     layout->addWidget(jointsBox);
+    layout->addWidget(ur3eHemisphereScanSettings_);
     layout->addStretch();
 
     ur3eSettingsPage_ = page;

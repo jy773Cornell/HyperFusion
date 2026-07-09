@@ -17,11 +17,11 @@
 #include "adapters/zaber/ZaberStageController.hpp"
 #include "adapters/zaber/ZaberStageProfile.hpp"
 #include "adapters/lumo/CalpackBandCatalog.hpp"
-#include "backend/StageWorker.hpp"
+#include "backend/stage/StageWorker.hpp"
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/DualCameraScanOrchestrator.hpp"
-#include "backend/LighthouseWorker.hpp"
-#include "backend/CameraCoordinator.hpp"
+#include "backend/camera/DualCameraScanOrchestrator.hpp"
+#include "backend/light/LighthouseWorker.hpp"
+#include "backend/camera/CameraCoordinator.hpp"
 #include "adapters/mcc/Mcc1208LighthouseController.hpp"
 #include "frontend/widgets/DetectorCrosshairWidget.hpp"
 #include "frontend/widgets/ProfilePlotWidget.hpp"
@@ -37,9 +37,9 @@
 #include "frontend/processing/WavelengthLookup.hpp"
 
 #include "frontend/settings/AppSettingsStore.hpp"
-#include "backend/CaptureWriterWorker.hpp"
-#include "backend/processing/CapturePostProcessorWorker.hpp"
-#include "backend/processing/Gsam2ServerManager.hpp"
+#include "backend/camera/CaptureWriterWorker.hpp"
+#include "backend/camera/processing/CapturePostProcessorWorker.hpp"
+#include "backend/camera/processing/Gsam2ServerManager.hpp"
 
 #include <algorithm>
 #include <atomic>

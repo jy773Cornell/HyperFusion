@@ -3,7 +3,7 @@
 // Red saturation overlay is applied on the detector view only (not waterfall).
 #pragma once
 
-#include "backend/CameraTypes.hpp"
+#include "backend/camera/CameraTypes.hpp"
 
 #include <cstdint>
 #include <vector>

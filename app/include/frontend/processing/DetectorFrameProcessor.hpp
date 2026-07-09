@@ -1,7 +1,7 @@
 // Background worker: converts streamed BIL frames to detector QImages off the GUI thread.
 #pragma once
 
-#include "backend/CameraTypes.hpp"
+#include "backend/camera/CameraTypes.hpp"
 
 #include <QImage>
 

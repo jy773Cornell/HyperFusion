@@ -1,4 +1,4 @@
-#include "backend/processing/EnviBilWriter.hpp"
+#include "backend/camera/processing/EnviBilWriter.hpp"
 
 #include <QFile>
 #include <QFileInfo>

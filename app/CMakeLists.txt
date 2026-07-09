@@ -75,6 +75,8 @@ qt_add_executable(app WIN32
     src/frontend/widgets/LightSettingsTab.cpp
     src/frontend/widgets/Ur3eJointBarWidget.cpp
     src/frontend/widgets/Ur3eScanRoutePlanWidget.cpp
+    src/frontend/widgets/Ur3eHemisphereScanSettingsWidget.cpp
+    src/frontend/widgets/Ur3eHemisphereScanPreviewWidget.cpp
     src/frontend/widgets/Ur3eStreamTab.cpp
     src/frontend/widgets/Ur3eSettingsTab.cpp
     src/frontend/widgets/CaptureSettingsTab.cpp
@@ -89,6 +91,8 @@ qt_add_executable(app WIN32
     include/frontend/widgets/StageAxisWidget.hpp
     include/frontend/widgets/IntensityBarWidget.hpp
     include/frontend/widgets/Ur3eScanRoutePlanWidget.hpp
+    include/frontend/widgets/Ur3eHemisphereScanSettingsWidget.hpp
+    include/frontend/widgets/Ur3eHemisphereScanPreviewWidget.hpp
     include/frontend/widgets/Ur3eJointBarWidget.hpp
     include/frontend/widgets/LumoCameraUi.hpp
     include/frontend/widgets/WaterfallDisplayWidget.hpp
@@ -123,77 +127,83 @@ qt_add_executable(app WIN32
     src/frontend/settings/AppSettingsStore.cpp
     include/frontend/settings/AppSettingsStore.hpp
     # backend — device-agnostic workers, orchestration, I/O
-    src/backend/CameraWorker.cpp
-    src/backend/SdkLifecycleRunner.cpp
-    src/backend/StageWorker.cpp
-    src/backend/LighthouseWorker.cpp
-    src/backend/LumoDatasetWriter.cpp
-    src/backend/CaptureWriterWorker.cpp
+    src/backend/camera/CameraWorker.cpp
+    src/backend/camera/SdkLifecycleRunner.cpp
+    src/backend/stage/StageWorker.cpp
+    src/backend/light/LighthouseWorker.cpp
+    src/backend/camera/LumoDatasetWriter.cpp
+    src/backend/camera/CaptureWriterWorker.cpp
     src/backend/HyperFusionConfig.cpp
-    src/backend/DualCameraScanOrchestrator.cpp
-    src/backend/ICameraController.cpp
-    src/backend/CameraCoordinator.cpp
-    src/backend/processing/EnviBilReader.cpp
-    src/backend/processing/ReferenceSpectrumStats.cpp
-    src/backend/processing/ReferenceSpectrumPlot.cpp
-    src/backend/processing/CapturePostProcessor.cpp
-    src/backend/processing/CapturePostProcessorWorker.cpp
-    src/backend/processing/HfFusionRunner.cpp
-    src/backend/processing/HfFusionWorker.cpp
-    src/backend/processing/Gsam2SegmentationClient.cpp
-    src/backend/processing/Gsam2ServerManager.cpp
-    src/backend/processing/Gsam2RoiAnalysis.cpp
-    src/backend/processing/Gsam2SpectrumPlot.cpp
-    src/backend/processing/GsamWslPathUtil.cpp
+    src/backend/camera/DualCameraScanOrchestrator.cpp
+    src/backend/camera/ICameraController.cpp
+    src/backend/camera/CameraCoordinator.cpp
+    src/backend/camera/processing/EnviBilReader.cpp
+    src/backend/camera/processing/ReferenceSpectrumStats.cpp
+    src/backend/camera/processing/ReferenceSpectrumPlot.cpp
+    src/backend/camera/processing/CapturePostProcessor.cpp
+    src/backend/camera/processing/CapturePostProcessorWorker.cpp
+    src/backend/camera/processing/HfFusionRunner.cpp
+    src/backend/camera/processing/HfFusionWorker.cpp
+    src/backend/camera/processing/Gsam2SegmentationClient.cpp
+    src/backend/camera/processing/Gsam2ServerManager.cpp
+    src/backend/camera/processing/Gsam2RoiAnalysis.cpp
+    src/backend/camera/processing/Gsam2SpectrumPlot.cpp
+    src/backend/camera/processing/GsamWslPathUtil.cpp
     src/backend/ur3e/Ur3eClient.cpp
+    src/backend/ur3e/Ur3eHemisphereScan.cpp
+    src/backend/ur3e/Ur3eHemisphereScanReachability.cpp
+    src/backend/ur3e/Ur3eWorkspaceBoundary.cpp
     src/backend/ur3e/Ur3eMoveItManager.cpp
     src/backend/ur3e/Ur3eRvizManager.cpp
     src/backend/ur3e/Ur3eServerManager.cpp
     src/backend/ur3e/Ur3eWslLogUtil.cpp
     src/backend/ur3e/Ur3eWslPathUtil.cpp
-    src/backend/processing/IlluminantTables.cpp
-    src/backend/processing/ReferenceBuilder.cpp
-    src/backend/processing/EnviBilWriter.cpp
-    src/backend/processing/FlatFieldCorrector.cpp
-    src/backend/processing/HsiToColor.cpp
-    src/backend/processing/SwirBprCorrector.cpp
-    src/backend/processing/SwirBprCalpackMap.cpp
-    src/backend/processing/SwirBprApply.cpp
-    src/backend/processing/SwirColumnProfileCorrector.cpp
-    include/backend/CameraTypes.hpp
-    include/backend/ICameraController.hpp
-    include/backend/CameraWorker.hpp
-    include/backend/SdkLifecycleRunner.hpp
-    include/backend/StageTypes.hpp
-    include/backend/IStageController.hpp
-    include/backend/StageWorker.hpp
-    include/backend/LighthouseTypes.hpp
-    include/backend/ILighthouseController.hpp
-    include/backend/LighthouseWorker.hpp
-    include/backend/CaptureWriterTypes.hpp
-    include/backend/LumoDatasetWriter.hpp
-    include/backend/CaptureWriterWorker.hpp
+    src/backend/camera/processing/IlluminantTables.cpp
+    src/backend/camera/processing/ReferenceBuilder.cpp
+    src/backend/camera/processing/EnviBilWriter.cpp
+    src/backend/camera/processing/FlatFieldCorrector.cpp
+    src/backend/camera/processing/HsiToColor.cpp
+    src/backend/camera/processing/SwirBprCorrector.cpp
+    src/backend/camera/processing/SwirBprCalpackMap.cpp
+    src/backend/camera/processing/SwirBprApply.cpp
+    src/backend/camera/processing/SwirColumnProfileCorrector.cpp
+    include/backend/camera/CameraTypes.hpp
+    include/backend/camera/ICameraController.hpp
+    include/backend/camera/CameraWorker.hpp
+    include/backend/camera/SdkLifecycleRunner.hpp
+    include/backend/stage/StageTypes.hpp
+    include/backend/stage/IStageController.hpp
+    include/backend/stage/StageWorker.hpp
+    include/backend/light/LighthouseTypes.hpp
+    include/backend/light/ILighthouseController.hpp
+    include/backend/light/LighthouseWorker.hpp
+    include/backend/camera/CaptureWriterTypes.hpp
+    include/backend/camera/LumoDatasetWriter.hpp
+    include/backend/camera/CaptureWriterWorker.hpp
     include/backend/HyperFusionConfig.hpp
-    include/backend/DualCameraScanOrchestrator.hpp
-    include/backend/CameraCoordinator.hpp
-    include/backend/processing/Gsam2ServerManager.hpp
-    include/backend/processing/Gsam2SegmentationClient.hpp
-    include/backend/processing/Gsam2RoiAnalysis.hpp
-    include/backend/processing/Gsam2SpectrumPlot.hpp
-    include/backend/processing/GsamWslPathUtil.hpp
+    include/backend/camera/DualCameraScanOrchestrator.hpp
+    include/backend/camera/CameraCoordinator.hpp
+    include/backend/camera/processing/Gsam2ServerManager.hpp
+    include/backend/camera/processing/Gsam2SegmentationClient.hpp
+    include/backend/camera/processing/Gsam2RoiAnalysis.hpp
+    include/backend/camera/processing/Gsam2SpectrumPlot.hpp
+    include/backend/camera/processing/GsamWslPathUtil.hpp
     include/backend/ur3e/Ur3eClient.hpp
+    include/backend/ur3e/Ur3eHemisphereScan.hpp
+    include/backend/ur3e/Ur3eHemisphereScanReachability.hpp
+    include/backend/ur3e/Ur3eWorkspaceBoundary.hpp
     include/backend/ur3e/Ur3eServerManager.hpp
     include/backend/ur3e/Ur3eMoveItManager.hpp
     include/backend/ur3e/Ur3eRvizManager.hpp
     include/backend/ur3e/Ur3eWslLogUtil.hpp
     include/backend/ur3e/Ur3eWslPathUtil.hpp
-    include/backend/processing/CapturePostProcessor.hpp
-    include/backend/processing/HfFusionRunner.hpp
-    include/backend/processing/HfFusionWorker.hpp
-    include/backend/processing/SwirBprCorrector.hpp
-    include/backend/processing/SwirBprCalpackMap.hpp
-    include/backend/processing/SwirBprApply.hpp
-    include/backend/processing/SwirColumnProfileCorrector.hpp
+    include/backend/camera/processing/CapturePostProcessor.hpp
+    include/backend/camera/processing/HfFusionRunner.hpp
+    include/backend/camera/processing/HfFusionWorker.hpp
+    include/backend/camera/processing/SwirBprCorrector.hpp
+    include/backend/camera/processing/SwirBprCalpackMap.hpp
+    include/backend/camera/processing/SwirBprApply.hpp
+    include/backend/camera/processing/SwirColumnProfileCorrector.hpp
     # adapters — vendor SDK / hardware
     src/adapters/zaber/ZaberStageController.cpp
     src/adapters/zaber/ZaberStageConfigurator.cpp
@@ -342,17 +352,17 @@ if(EXISTS "${HF_CALIBRATION_DIR}")
         COMMENT "Copying calibration packs to output directory")
 endif()
 
-set(HF_PROCESSING_REFERENCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/processing/reference")
+set(HF_PROCESSING_REFERENCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/backend/camera/processing/reference")
 if(EXISTS "${HF_PROCESSING_REFERENCE_DIR}")
     add_custom_command(
         TARGET app POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:app>/backend/processing/reference"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:app>/backend/camera/processing/reference"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${HF_PROCESSING_REFERENCE_DIR}/D_illuminants.json"
-                "$<TARGET_FILE_DIR:app>/backend/processing/reference/D_illuminants.json"
+                "$<TARGET_FILE_DIR:app>/backend/camera/processing/reference/D_illuminants.json"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 "${HF_PROCESSING_REFERENCE_DIR}/D_illuminants.mat"
-                "$<TARGET_FILE_DIR:app>/backend/processing/reference/D_illuminants.mat"
+                "$<TARGET_FILE_DIR:app>/backend/camera/processing/reference/D_illuminants.mat"
         COMMENT "Copying preprocessing illuminant reference tables")
 endif()
 

@@ -1,7 +1,7 @@
 // Dedicated background thread for frame polling during active acquisition.
 #pragma once
 
-#include "backend/ICameraController.hpp"
+#include "backend/camera/ICameraController.hpp"
 
 #include <atomic>
 #include <functional>

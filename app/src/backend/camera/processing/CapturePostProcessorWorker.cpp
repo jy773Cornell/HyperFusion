@@ -1,4 +1,4 @@
-#include "backend/processing/CapturePostProcessorWorker.hpp"
+#include "backend/camera/processing/CapturePostProcessorWorker.hpp"
 
 CapturePostProcessorWorker::CapturePostProcessorWorker() = default;
 

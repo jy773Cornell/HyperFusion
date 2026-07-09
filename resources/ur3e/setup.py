@@ -12,6 +12,7 @@ setup(
         ("share/ament_index/resource_index/packages", ["resource/" + package_name]),
         (os.path.join("share", package_name, "launch"), glob("launch/*.py")),
         (os.path.join("share", package_name, "config"), glob("config/*")),
+        (os.path.join("share", package_name, "urdf"), glob("urdf/*")),
         (os.path.join("share", package_name, "scripts"), glob("scripts/*.sh")),
     ],
     install_requires=["PyYAML>=6.0", "numpy>=1.26"],

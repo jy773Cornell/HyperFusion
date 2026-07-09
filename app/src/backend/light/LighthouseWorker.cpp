@@ -1,4 +1,4 @@
-#include "backend/LighthouseWorker.hpp"
+#include "backend/light/LighthouseWorker.hpp"
 
 #include <future>
 

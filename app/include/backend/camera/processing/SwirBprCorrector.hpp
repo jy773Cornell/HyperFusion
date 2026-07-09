@@ -2,8 +2,8 @@
 // Static calpack mask only. For SWIR3 column destripe see SwirColumnProfileCorrector.
 #pragma once
 
-#include "backend/CameraTypes.hpp"
-#include "backend/processing/SwirBprCalpackMap.hpp"
+#include "backend/camera/CameraTypes.hpp"
+#include "backend/camera/processing/SwirBprCalpackMap.hpp"
 
 #include <QString>
 

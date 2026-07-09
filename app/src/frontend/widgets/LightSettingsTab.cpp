@@ -2,8 +2,8 @@
 // MainWindow method definitions extracted from MainWindow.cpp for clarity.
 #include "frontend/controllers/LightPanelController.hpp"
 #include "frontend/widgets/MainWindow.hpp"
-#include "backend/LighthouseTypes.hpp"
-#include "backend/LighthouseWorker.hpp"
+#include "backend/light/LighthouseTypes.hpp"
+#include "backend/light/LighthouseWorker.hpp"
 #include "frontend/widgets/IntensityBarWidget.hpp"
 
 #include <QCheckBox>

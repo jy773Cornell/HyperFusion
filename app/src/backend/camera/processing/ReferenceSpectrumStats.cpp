@@ -1,4 +1,4 @@
-#include "backend/processing/ReferenceSpectrumStats.hpp"
+#include "backend/camera/processing/ReferenceSpectrumStats.hpp"
 
 #include <cmath>
 

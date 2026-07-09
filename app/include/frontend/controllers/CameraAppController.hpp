@@ -7,7 +7,7 @@
 #include <memory>
 #include <string>
 
-#include "backend/CameraTypes.hpp"
+#include "backend/camera/CameraTypes.hpp"
 
 class LumoCamera;
 class CameraCoordinator;

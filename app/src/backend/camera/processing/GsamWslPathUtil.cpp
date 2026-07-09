@@ -1,5 +1,5 @@
 // Windows ↔ WSL path helpers for GSAM2 sidecar integration.
-#include "backend/processing/GsamWslPathUtil.hpp"
+#include "backend/camera/processing/GsamWslPathUtil.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
 

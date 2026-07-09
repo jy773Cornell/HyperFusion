@@ -1,0 +1,175 @@
+# One-time Windows + WSL network setup for UR3e real-robot control.
+# The ROS driver runs in WSL; the robot must reach the PC reverse ports on the LAN NIC.
+# Idempotent - safe to re-run. Does not run wsl --shutdown unless -ShutdownWsl is passed.
+# Usage (from repo):
+#   .\resources\ur3e\scripts\setup_wsl_robot_network.ps1
+# Firewall rules require an elevated (Administrator) PowerShell.
+param(
+    [switch]$SkipFirewall,
+    [switch]$ShutdownWsl,
+    [int[]]$ReversePorts = @(50001, 50002, 50003, 50004)
+)
+
+$ErrorActionPreference = "Stop"
+
+function Test-IsAdministrator {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $principal = New-Object Security.Principal.WindowsPrincipal($identity)
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Ensure-WslMirroredNetworking {
+    $wslConfigPath = Join-Path $env:USERPROFILE ".wslconfig"
+    $desiredLines = @(
+        "networkingMode=mirrored",
+        "localhostForwarding=true"
+    )
+    $sectionHeader = "[wsl2]"
+    $changed = $false
+
+    if (-not (Test-Path -LiteralPath $wslConfigPath)) {
+        @(
+            "# HyperFusion UR3e - allow robot (External Control) to reach the WSL ROS driver."
+            $sectionHeader
+            $desiredLines
+            ""
+        ) | Set-Content -LiteralPath $wslConfigPath -Encoding utf8
+        Write-Host "==> Created $wslConfigPath with mirrored networking + localhostForwarding"
+        return $true
+    }
+
+    $lines = Get-Content -LiteralPath $wslConfigPath
+    $updated = New-Object System.Collections.Generic.List[string]
+    $inWsl2 = $false
+    $present = @{}
+
+    foreach ($line in $lines) {
+        if ($line -match '^\s*\[wsl2\]\s*$') {
+            $inWsl2 = $true
+            $updated.Add($line)
+            continue
+        }
+        if ($inWsl2 -and $line -match '^\s*\[') {
+            $inWsl2 = $false
+        }
+        if ($inWsl2 -and $line -match '^\s*(networkingMode|localhostForwarding)\s*=') {
+            $key = ($line -split '=')[0].Trim()
+            $present[$key] = $true
+            continue
+        }
+        $updated.Add($line)
+    }
+
+    foreach ($desired in $desiredLines) {
+        $key = ($desired -split '=')[0].Trim()
+        if (-not $present.ContainsKey($key)) {
+            if ($updated.Count -gt 0 -and $updated[$updated.Count - 1].Trim() -ne "") {
+                $updated.Add("")
+            }
+            if ($updated -notmatch '^\s*\[wsl2\]\s*$') {
+                $updated.Add($sectionHeader)
+            }
+            $updated.Add($desired)
+            $changed = $true
+            Write-Host "==> Added to ${wslConfigPath}: $desired"
+        }
+    }
+
+    if ($changed) {
+        $updated | Set-Content -LiteralPath $wslConfigPath -Encoding utf8
+    } else {
+        Write-Host "==> $wslConfigPath already has mirrored networking settings"
+    }
+    return $changed
+}
+
+function Ensure-UrPortProxyRules {
+    param(
+        [int[]]$Ports,
+        [string]$ListenAddress = "0.0.0.0",
+        [string]$ConnectAddress = "127.0.0.1"
+    )
+
+    if (-not (Test-IsAdministrator)) {
+        Write-Warning @'
+Port proxy rules were not added (requires Administrator PowerShell).
+Mirrored WSL alone does not expose driver ports on the LAN IP. Re-run as admin, or run:
+  netsh interface portproxy add v4tov4 listenaddress=0.0.0.0 listenport=50002 connectaddress=127.0.0.1 connectport=50002
+(repeat for 50001, 50003, 50004)
+'@
+        return
+    }
+
+    foreach ($port in $Ports) {
+        $existing = netsh interface portproxy show v4tov4 | Select-String -Pattern "^\s*$ListenAddress\s+$port\s+"
+        if ($existing) {
+            Write-Host "==> Port proxy already exists: ${ListenAddress}:$port -> ${ConnectAddress}:$port"
+            continue
+        }
+        netsh interface portproxy add v4tov4 `
+            listenaddress=$ListenAddress `
+            listenport=$port `
+            connectaddress=$ConnectAddress `
+            connectport=$port | Out-Null
+        Write-Host "==> Added port proxy: ${ListenAddress}:$port -> ${ConnectAddress}:$port"
+    }
+}
+
+function Ensure-UrReverseFirewallRules {
+    param([int[]]$Ports)
+
+    if ($SkipFirewall) {
+        Write-Host "==> Skipping firewall rules (-SkipFirewall)"
+        return
+    }
+
+    if (-not (Test-IsAdministrator)) {
+        Write-Warning @'
+Firewall rules were not added (requires Administrator PowerShell).
+Re-run as admin, or run manually for each port (50001-50004):
+  New-NetFirewallRule -DisplayName "UR Reverse PORT" -Direction Inbound -Protocol TCP -LocalPort PORT -Action Allow
+'@
+        return
+    }
+
+    foreach ($port in $Ports) {
+        $ruleName = "HyperFusion UR Reverse $port"
+        $existing = Get-NetFirewallRule -DisplayName $ruleName -ErrorAction SilentlyContinue
+        if ($existing) {
+            Write-Host "==> Firewall rule already exists: $ruleName"
+            continue
+        }
+        New-NetFirewallRule `
+            -DisplayName $ruleName `
+            -Direction Inbound `
+            -Protocol TCP `
+            -LocalPort $port `
+            -Action Allow `
+            -Profile Any | Out-Null
+        Write-Host "==> Added firewall rule: $ruleName (TCP $port inbound)"
+    }
+}
+
+Write-Host "==> HyperFusion UR3e - WSL robot network setup"
+$wslConfigChanged = Ensure-WslMirroredNetworking
+Ensure-UrReverseFirewallRules -Ports $ReversePorts
+Ensure-UrPortProxyRules -Ports $ReversePorts
+
+if ($ShutdownWsl) {
+    Write-Host "==> Shutting down WSL (applies .wslconfig changes)..."
+    & wsl.exe --shutdown
+    Write-Host "==> WSL shutdown complete. Re-open Ubuntu before connecting to the robot."
+} elseif ($wslConfigChanged) {
+    Write-Host ""
+    Write-Host "IMPORTANT: Restart WSL so mirrored networking takes effect:"
+    Write-Host "  wsl --shutdown"
+    Write-Host "Then reopen Ubuntu and verify:"
+    Write-Host "  ip -4 addr show"
+    Write-Host "  ping -c 2 192.168.1.10"
+}
+
+Write-Host ""
+Write-Host "Teach pendant External Control: set remote PC IP to your robot-LAN adapter (e.g. 192.168.1.20)."
+Write-Host "Verify from Windows (after driver is running):"
+Write-Host "  Test-NetConnection -ComputerName 192.168.1.20 -Port 50002"
+Write-Host "Done."

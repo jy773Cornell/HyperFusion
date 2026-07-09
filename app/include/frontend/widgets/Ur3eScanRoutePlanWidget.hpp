@@ -1,14 +1,16 @@
 // Scan-route planning pane for the UR3e stream tab (frontend/ui layer).
 #pragma once
 
-#include <QWidget>
+#include "backend/ur3e/Ur3eHemisphereScan.hpp"
+#include "backend/ur3e/Ur3eHemisphereScanReachability.hpp"
+#include "backend/ur3e/Ur3eWorkspaceBoundary.hpp"
 
-class QLabel;
-class QListWidget;
-class QPushButton;
+#include <QWidget>
 
 namespace ui
 {
+class Ur3eHemisphereScanPreviewWidget;
+
 class Ur3eScanRoutePlanWidget : public QWidget
 {
     Q_OBJECT
@@ -16,20 +18,16 @@ class Ur3eScanRoutePlanWidget : public QWidget
 public:
     explicit Ur3eScanRoutePlanWidget(QWidget *parent = nullptr);
 
-    [[nodiscard]] QListWidget *routeList() const { return routeList_; }
+    void setScanParams(const hf::ur3e::Ur3eHemisphereScanParams &params);
+    void setWorkspaceBoundary(const hf::ur3e::Ur3eWorkspaceBoundary &boundary);
+    void setScanPlan(const hf::ur3e::Ur3eHemisphereScanPlan &plan);
+    void clearScanPlan();
+    void beginScanExecution();
+    void setActiveScanPoint(int pointIndex);
+    void markScanPointCompleted(int pointIndex);
+    void endScanExecution();
 
 private:
-    void onAddWaypoint();
-    void onRemoveWaypoint();
-    void onClearRoute();
-    void updateStatus();
-
-    QLabel *canvasLabel_ = nullptr;
-    QListWidget *routeList_ = nullptr;
-    QLabel *statusLabel_ = nullptr;
-    QPushButton *addBtn_ = nullptr;
-    QPushButton *removeBtn_ = nullptr;
-    QPushButton *clearBtn_ = nullptr;
-    int nextWaypointId_ = 1;
+    Ur3eHemisphereScanPreviewWidget *previewWidget_ = nullptr;
 };
 } // namespace ui

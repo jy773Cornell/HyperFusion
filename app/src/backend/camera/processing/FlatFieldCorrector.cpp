@@ -1,6 +1,6 @@
-#include "backend/processing/FlatFieldCorrector.hpp"
+#include "backend/camera/processing/FlatFieldCorrector.hpp"
 
-#include "backend/processing/EnviBilWriter.hpp"
+#include "backend/camera/processing/EnviBilWriter.hpp"
 
 #include <algorithm>
 #include <cmath>

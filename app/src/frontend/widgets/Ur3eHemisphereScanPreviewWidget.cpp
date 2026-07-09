@@ -1,0 +1,804 @@
+// 3D preview of UR3e hemisphere scan over the sample tray (frontend/ui layer).
+#include "frontend/widgets/Ur3eHemisphereScanPreviewWidget.hpp"
+
+#include "backend/ur3e/Ur3eHemisphereScanReachability.hpp"
+#include "backend/ur3e/Ur3eWorkspaceBoundary.hpp"
+
+#include <QWheelEvent>
+#include <QFont>
+#include <QFontMetrics>
+#include <QPainter>
+#include <QPainterPath>
+#include <QPaintEvent>
+#include <QPalette>
+#include <QTimer>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <vector>
+
+namespace ui
+{
+namespace
+{
+constexpr double kPi = 3.14159265358979323846;
+constexpr double kTrayLengthM = hf::ur3e::kSampleTrayLengthM;
+constexpr double kTrayWidthM = hf::ur3e::kSampleTrayWidthM;
+constexpr double kTrayHeightM = hf::ur3e::kSampleTrayHeightM;
+constexpr double kNormalDisplayLengthM = 0.018;
+// Default orbit: front-right, looking slightly down at tray + hemisphere (not inverted).
+constexpr double kDefaultYawRad = 40.0 * kPi / 180.0;
+constexpr double kDefaultPitchRad = -30.0 * kPi / 180.0;
+constexpr double kDefaultZoomFactor = 0.68;
+constexpr double kSceneFitPadding = 2.65;
+
+hf::ur3e::Ur3eHemisphereScanPoint offsetScanPoint(const hf::ur3e::Ur3eHemisphereScanPoint &point)
+{
+    hf::ur3e::Ur3eHemisphereScanPoint shifted = point;
+    shifted.zM += hf::ur3e::kSampleTrayHeightM;
+    return shifted;
+}
+} // namespace
+
+Ur3eHemisphereScanPreviewWidget::Ur3eHemisphereScanPreviewWidget(QWidget *parent) : QWidget(parent)
+{
+    setMinimumHeight(200);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    setAutoFillBackground(true);
+    setMouseTracking(true);
+    setCursor(Qt::OpenHandCursor);
+
+    QPalette palette = this->palette();
+    palette.setColor(QPalette::Window, QColor(26, 26, 26));
+    setPalette(palette);
+
+    yawRad_ = kDefaultYawRad;
+    pitchRad_ = kDefaultPitchRad;
+    zoomFactor_ = kDefaultZoomFactor;
+    params_ = hf::ur3e::Ur3eHemisphereScanParams{};
+    workspaceBoundary_ = hf::ur3e::Ur3eWorkspaceBoundary{};
+    rebuildScanPoints();
+
+    flashTimer_ = new QTimer(this);
+    flashTimer_->setInterval(80);
+    connect(flashTimer_, &QTimer::timeout, this, [this]() {
+        if (!executionActive_ || executionActivePointIndex_ < 0)
+            return;
+        flashPulse_ = (flashPulse_ + 1) % 16;
+        update();
+    });
+}
+
+void Ur3eHemisphereScanPreviewWidget::resetCameraView()
+{
+    yawRad_ = kDefaultYawRad;
+    pitchRad_ = kDefaultPitchRad;
+    zoomFactor_ = kDefaultZoomFactor;
+}
+
+Ur3eHemisphereScanPreviewWidget::Vec3 Ur3eHemisphereScanPreviewWidget::sceneCenter() const
+{
+    constexpr double minZ = 0.0;
+    double maxZ = kTrayHeightM + params_.sphereRadiusM;
+    if (workspaceBoundary_.enabled)
+        maxZ = std::max(maxZ, workspaceBoundary_.heightM());
+    return Vec3{0.0, 0.0, (minZ + maxZ) * 0.5};
+}
+
+Ur3eHemisphereScanPreviewWidget::Vec3d
+Ur3eHemisphereScanPreviewWidget::rotateView(const Vec3d &point) const
+{
+    const double yawX = point.x * std::cos(yawRad_) - point.y * std::sin(yawRad_);
+    const double yawY = point.x * std::sin(yawRad_) + point.y * std::cos(yawRad_);
+    const double pitchY = yawY * std::cos(pitchRad_) - point.z * std::sin(pitchRad_);
+    const double pitchZ = yawY * std::sin(pitchRad_) + point.z * std::cos(pitchRad_);
+    return {yawX, pitchY, pitchZ};
+}
+
+void Ur3eHemisphereScanPreviewWidget::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton)
+    {
+        dragging_ = true;
+        lastDragPos_ = event->pos();
+        setCursor(Qt::ClosedHandCursor);
+        event->accept();
+        return;
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void Ur3eHemisphereScanPreviewWidget::mouseMoveEvent(QMouseEvent *event)
+{
+    if (dragging_)
+    {
+        const QPoint delta = event->pos() - lastDragPos_;
+        lastDragPos_ = event->pos();
+        yawRad_ += static_cast<double>(delta.x()) * 0.012;
+        pitchRad_ += static_cast<double>(delta.y()) * 0.012;
+        pitchRad_ = std::clamp(pitchRad_, -1.45, 1.45);
+        update();
+        event->accept();
+        return;
+    }
+    QWidget::mouseMoveEvent(event);
+}
+
+void Ur3eHemisphereScanPreviewWidget::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton && dragging_)
+    {
+        dragging_ = false;
+        setCursor(Qt::OpenHandCursor);
+        event->accept();
+        return;
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
+void Ur3eHemisphereScanPreviewWidget::wheelEvent(QWheelEvent *event)
+{
+    const QPoint angleDelta = event->angleDelta();
+    if (angleDelta.y() == 0)
+    {
+        QWidget::wheelEvent(event);
+        return;
+    }
+
+    constexpr double kZoomStep = 1.12;
+    if (angleDelta.y() > 0)
+        zoomFactor_ *= kZoomStep;
+    else
+        zoomFactor_ /= kZoomStep;
+
+    zoomFactor_ = std::clamp(zoomFactor_, 0.2, 8.0);
+    update();
+    event->accept();
+}
+
+void Ur3eHemisphereScanPreviewWidget::setWorkspaceBoundary(
+    const hf::ur3e::Ur3eWorkspaceBoundary &boundary)
+{
+    workspaceBoundary_ = boundary;
+    workspaceBoundary_.normalize();
+    resetCameraView();
+    update();
+}
+
+void Ur3eHemisphereScanPreviewWidget::setScanParams(const hf::ur3e::Ur3eHemisphereScanParams &params)
+{
+    params_ = params;
+    hf::ur3e::normalizeHemisphereScanParams(params_);
+    rebuildScanPoints();
+    update();
+}
+
+void Ur3eHemisphereScanPreviewWidget::setScanPlan(const hf::ur3e::Ur3eHemisphereScanPlan &plan)
+{
+    executionActive_ = false;
+    executionResultsVisible_ = false;
+    executionActivePointIndex_ = -1;
+    flashPulse_ = 0;
+    if (flashTimer_ != nullptr)
+        flashTimer_->stop();
+    scanPoints_.clear();
+    scanPoints_.reserve(plan.points.size());
+    for (const hf::ur3e::Ur3ePlannedScanPoint &planned : plan.points)
+    {
+        PreviewScanPoint preview;
+        preview.point = offsetScanPoint(planned.gridPoint);
+        preview.reachabilityKnown = true;
+        preview.reachable = planned.reachable;
+        preview.executionCompleted = false;
+        scanPoints_.push_back(preview);
+    }
+    update();
+}
+
+void Ur3eHemisphereScanPreviewWidget::beginScanExecution()
+{
+    executionActive_ = true;
+    executionResultsVisible_ = false;
+    executionActivePointIndex_ = -1;
+    flashPulse_ = 0;
+    for (PreviewScanPoint &entry : scanPoints_)
+        entry.executionCompleted = false;
+    update();
+}
+
+void Ur3eHemisphereScanPreviewWidget::setActiveScanPoint(const int pointIndex)
+{
+    if (!executionActive_)
+        return;
+    if (pointIndex < 0 || pointIndex >= static_cast<int>(scanPoints_.size()))
+    {
+        executionActivePointIndex_ = -1;
+        if (flashTimer_ != nullptr)
+            flashTimer_->stop();
+        update();
+        return;
+    }
+
+    executionActivePointIndex_ = pointIndex;
+    flashPulse_ = 0;
+    if (flashTimer_ != nullptr && !flashTimer_->isActive())
+        flashTimer_->start();
+    update();
+}
+
+void Ur3eHemisphereScanPreviewWidget::markScanPointCompleted(const int pointIndex)
+{
+    if (pointIndex < 0 || pointIndex >= static_cast<int>(scanPoints_.size()))
+        return;
+    scanPoints_[static_cast<std::size_t>(pointIndex)].executionCompleted = true;
+    if (executionActivePointIndex_ == pointIndex)
+    {
+        executionActivePointIndex_ = -1;
+        if (flashTimer_ != nullptr)
+            flashTimer_->stop();
+    }
+    update();
+}
+
+void Ur3eHemisphereScanPreviewWidget::endScanExecution()
+{
+    executionActive_ = false;
+    executionResultsVisible_ = true;
+    executionActivePointIndex_ = -1;
+    flashPulse_ = 0;
+    if (flashTimer_ != nullptr)
+        flashTimer_->stop();
+    update();
+}
+
+void Ur3eHemisphereScanPreviewWidget::clearScanPlan()
+{
+    executionActive_ = false;
+    executionResultsVisible_ = false;
+    executionActivePointIndex_ = -1;
+    flashPulse_ = 0;
+    if (flashTimer_ != nullptr)
+        flashTimer_->stop();
+    rebuildScanPoints();
+    update();
+}
+
+void Ur3eHemisphereScanPreviewWidget::rebuildScanPoints()
+{
+    const std::vector<hf::ur3e::Ur3eHemisphereScanPoint> generated =
+        hf::ur3e::generateHemisphereScanPoints(params_);
+    scanPoints_.clear();
+    scanPoints_.reserve(generated.size());
+    for (const hf::ur3e::Ur3eHemisphereScanPoint &point : generated)
+    {
+        PreviewScanPoint preview;
+        preview.point = offsetScanPoint(point);
+        scanPoints_.push_back(preview);
+    }
+}
+
+Ur3eHemisphereScanPreviewWidget::ProjectedPoint
+Ur3eHemisphereScanPreviewWidget::projectPoint(const Vec3 &point,
+                                              const QRectF &bounds,
+                                              const double scale) const
+{
+    const Vec3 center = sceneCenter();
+    const Vec3d centered{point.x - center.x, point.y - center.y, point.z - center.z};
+    const Vec3d rotated = rotateView(centered);
+    ProjectedPoint projected;
+    projected.depth = rotated.z;
+    projected.screen =
+        QPointF(bounds.center().x() + rotated.x * scale, bounds.center().y() - rotated.y * scale);
+    return projected;
+}
+
+double Ur3eHemisphereScanPreviewWidget::sceneScale(const QRectF &bounds) const
+{
+    constexpr double minZ = 0.0;
+    const Vec3 center = sceneCenter();
+    double maxZ = kTrayHeightM + params_.sphereRadiusM;
+    if (workspaceBoundary_.enabled)
+        maxZ = std::max(maxZ, workspaceBoundary_.heightM());
+
+    double extentX = kTrayLengthM * 0.5;
+    double extentY = kTrayWidthM * 0.5;
+    if (workspaceBoundary_.enabled)
+    {
+        extentX = std::max(extentX, workspaceBoundary_.halfLengthM());
+        extentY = std::max(extentY, workspaceBoundary_.halfWidthM());
+    }
+
+    const double extentZ = std::max(center.z - minZ, maxZ - center.z);
+    const double extent = std::max({extentX, extentY, extentZ});
+    return std::min(bounds.width(), bounds.height()) / (extent * kSceneFitPadding);
+}
+
+void Ur3eHemisphereScanPreviewWidget::paintEvent(QPaintEvent *event)
+{
+    QWidget::paintEvent(event);
+
+    QPainter painter(this);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.fillRect(rect(), QColor(26, 26, 26));
+
+    const QRectF bounds = rect().adjusted(16.0, 16.0, -16.0, -16.0);
+    const double scale = sceneScale(bounds) * zoomFactor_;
+
+    if (workspaceBoundary_.enabled)
+        drawWorkspaceBoundary(painter, bounds, scale);
+    drawTray(painter, bounds, scale);
+    drawHemisphere(painter, bounds, scale);
+    drawScanNormals(painter, bounds, scale);
+    drawLegend(painter);
+}
+
+bool Ur3eHemisphereScanPreviewWidget::hasReachabilityLegend() const
+{
+    for (const PreviewScanPoint &entry : scanPoints_)
+    {
+        if (entry.reachabilityKnown)
+            return true;
+    }
+    return false;
+}
+
+void Ur3eHemisphereScanPreviewWidget::drawLegend(QPainter &painter) const
+{
+    if (scanPoints_.empty())
+        return;
+
+    struct LegendEntry
+    {
+        QColor color;
+        QString label;
+    };
+
+    std::vector<LegendEntry> entries;
+    entries.push_back({QColor(140, 140, 140), QStringLiteral("Preview")});
+    if (hasReachabilityLegend())
+    {
+        if (executionActive_ || executionResultsVisible_)
+        {
+            if (executionActive_)
+                entries.push_back({QColor(170, 90, 230), QStringLiteral("Current")});
+            entries.push_back({QColor(220, 190, 40), QStringLiteral("Pending")});
+            entries.push_back({QColor(60, 180, 75), QStringLiteral("Completed")});
+        }
+        else
+        {
+            entries.push_back({QColor(60, 180, 75), QStringLiteral("Reachable")});
+        }
+        entries.push_back({QColor(210, 45, 45), QStringLiteral("Unreachable")});
+    }
+
+    QFont legendFont = painter.font();
+    legendFont.setPointSize(9);
+    painter.setFont(legendFont);
+    const QFontMetrics metrics(legendFont);
+
+    constexpr int kSwatchSize = 10;
+    constexpr int kRowSpacing = 6;
+    constexpr int kItemSpacing = 14;
+    constexpr int kPadH = 10;
+    constexpr int kPadV = 6;
+
+    int contentWidth = 0;
+    for (const LegendEntry &entry : entries)
+        contentWidth += kSwatchSize + 6 + metrics.horizontalAdvance(entry.label) + kItemSpacing;
+    if (!entries.empty())
+        contentWidth -= kItemSpacing;
+
+    const int contentHeight = std::max(kSwatchSize, metrics.height());
+    const QRect legendRect(12,
+                           height() - contentHeight - kPadV * 2 - 12,
+                           contentWidth + kPadH * 2,
+                           contentHeight + kPadV * 2);
+
+    painter.save();
+    painter.setPen(QPen(QColor(80, 80, 80), 1.0));
+    painter.setBrush(QColor(26, 26, 26, 210));
+    painter.drawRoundedRect(legendRect, 4, 4);
+
+    int x = legendRect.left() + kPadH;
+    const int swatchY = legendRect.center().y() - kSwatchSize / 2;
+    const int textY = legendRect.top();
+    const int textHeight = legendRect.height();
+
+    for (const LegendEntry &entry : entries)
+    {
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(entry.color);
+        painter.drawRoundedRect(QRect(x, swatchY, kSwatchSize, kSwatchSize), 2, 2);
+        x += kSwatchSize + kRowSpacing;
+
+        painter.setPen(QColor(200, 200, 200));
+        painter.drawText(QRect(x, textY, metrics.horizontalAdvance(entry.label), textHeight),
+                         Qt::AlignVCenter,
+                         entry.label);
+        x += metrics.horizontalAdvance(entry.label) + kItemSpacing;
+    }
+
+    painter.restore();
+}
+
+void Ur3eHemisphereScanPreviewWidget::drawWorkspaceBoundary(QPainter &painter,
+                                                            const QRectF &bounds,
+                                                            const double scale) const
+{
+    const double halfLength = workspaceBoundary_.halfLengthM();
+    const double halfWidth = workspaceBoundary_.halfWidthM();
+    const double heightM = workspaceBoundary_.heightM();
+
+    const std::array<Vec3, 8> vertices = {
+        Vec3{-halfLength, -halfWidth, 0.0},
+        Vec3{halfLength, -halfWidth, 0.0},
+        Vec3{halfLength, halfWidth, 0.0},
+        Vec3{-halfLength, halfWidth, 0.0},
+        Vec3{-halfLength, -halfWidth, heightM},
+        Vec3{halfLength, -halfWidth, heightM},
+        Vec3{halfLength, halfWidth, heightM},
+        Vec3{-halfLength, halfWidth, heightM},
+    };
+
+    const std::array<std::pair<int, int>, 12> edges = {{
+        {0, 1}, {1, 2}, {2, 3}, {3, 0},
+        {4, 5}, {5, 6}, {6, 7}, {7, 4},
+        {0, 4}, {1, 5}, {2, 6}, {3, 7},
+    }};
+
+    struct Face
+    {
+        std::array<int, 4> indices;
+        QColor fill;
+        double depth = 0.0;
+    };
+
+    const std::array<Face, 6> faces = {{
+        {{0, 1, 2, 3}, QColor(120, 120, 120, 35)},
+        {{4, 5, 6, 7}, QColor(90, 110, 150, 55)},
+        {{0, 1, 5, 4}, QColor(100, 100, 100, 25)},
+        {{1, 2, 6, 5}, QColor(100, 100, 100, 25)},
+        {{2, 3, 7, 6}, QColor(100, 100, 100, 25)},
+        {{3, 0, 4, 7}, QColor(100, 100, 100, 25)},
+    }};
+
+    std::vector<Face> sortedFaces(faces.begin(), faces.end());
+    for (Face &face : sortedFaces)
+    {
+        double depthSum = 0.0;
+        for (const int index : face.indices)
+            depthSum += projectPoint(vertices[static_cast<std::size_t>(index)], bounds, scale).depth;
+        face.depth = depthSum / static_cast<double>(face.indices.size());
+    }
+    std::sort(sortedFaces.begin(),
+              sortedFaces.end(),
+              [](const Face &lhs, const Face &rhs) { return lhs.depth < rhs.depth; });
+
+    for (const Face &face : sortedFaces)
+    {
+        QPainterPath path;
+        bool first = true;
+        for (const int index : face.indices)
+        {
+            const QPointF point =
+                projectPoint(vertices[static_cast<std::size_t>(index)], bounds, scale).screen;
+            if (first)
+            {
+                path.moveTo(point);
+                first = false;
+            }
+            else
+            {
+                path.lineTo(point);
+            }
+        }
+        path.closeSubpath();
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(face.fill);
+        painter.drawPath(path);
+    }
+
+    painter.setPen(QPen(QColor(60, 60, 60), 1.5, Qt::SolidLine));
+    for (const auto &edge : edges)
+    {
+        const QPointF start =
+            projectPoint(vertices[static_cast<std::size_t>(edge.first)], bounds, scale).screen;
+        const QPointF end =
+            projectPoint(vertices[static_cast<std::size_t>(edge.second)], bounds, scale).screen;
+        painter.drawLine(start, end);
+    }
+
+    painter.setPen(QPen(QColor(70, 100, 160), 2.0, Qt::DashLine));
+    const std::array<std::pair<int, int>, 4> topEdges = {{{4, 5}, {5, 6}, {6, 7}, {7, 4}}};
+    for (const auto &edge : topEdges)
+    {
+        const QPointF start =
+            projectPoint(vertices[static_cast<std::size_t>(edge.first)], bounds, scale).screen;
+        const QPointF end =
+            projectPoint(vertices[static_cast<std::size_t>(edge.second)], bounds, scale).screen;
+        painter.drawLine(start, end);
+    }
+}
+
+void Ur3eHemisphereScanPreviewWidget::drawTray(QPainter &painter,
+                                               const QRectF &bounds,
+                                               const double scale) const
+{
+    const double halfLength = kTrayLengthM * 0.5;
+    const double halfWidth = kTrayWidthM * 0.5;
+
+    const std::array<Vec3, 8> vertices = {
+        Vec3{-halfLength, -halfWidth, 0.0},
+        Vec3{halfLength, -halfWidth, 0.0},
+        Vec3{halfLength, halfWidth, 0.0},
+        Vec3{-halfLength, halfWidth, 0.0},
+        Vec3{-halfLength, -halfWidth, kTrayHeightM},
+        Vec3{halfLength, -halfWidth, kTrayHeightM},
+        Vec3{halfLength, halfWidth, kTrayHeightM},
+        Vec3{-halfLength, halfWidth, kTrayHeightM},
+    };
+
+    struct Face
+    {
+        std::array<int, 4> indices;
+        QColor color;
+        double depth = 0.0;
+    };
+
+    const std::array<Face, 6> faces = {{
+        {{0, 1, 2, 3}, QColor(150, 145, 138)},
+        {{4, 5, 6, 7}, QColor(196, 190, 180)},
+        {{0, 1, 5, 4}, QColor(176, 170, 162)},
+        {{1, 2, 6, 5}, QColor(166, 160, 152)},
+        {{2, 3, 7, 6}, QColor(156, 150, 142)},
+        {{3, 0, 4, 7}, QColor(186, 180, 172)},
+    }};
+
+    std::vector<Face> sortedFaces(faces.begin(), faces.end());
+    for (Face &face : sortedFaces)
+    {
+        double depthSum = 0.0;
+        for (const int index : face.indices)
+            depthSum += projectPoint(vertices[static_cast<std::size_t>(index)], bounds, scale).depth;
+        face.depth = depthSum / static_cast<double>(face.indices.size());
+    }
+    std::sort(sortedFaces.begin(),
+              sortedFaces.end(),
+              [](const Face &lhs, const Face &rhs) { return lhs.depth < rhs.depth; });
+
+    for (const Face &face : sortedFaces)
+    {
+        QPainterPath path;
+        bool first = true;
+        for (const int index : face.indices)
+        {
+            const QPointF point =
+                projectPoint(vertices[static_cast<std::size_t>(index)], bounds, scale).screen;
+            if (first)
+            {
+                path.moveTo(point);
+                first = false;
+            }
+            else
+            {
+                path.lineTo(point);
+            }
+        }
+        path.closeSubpath();
+        painter.setPen(QPen(face.color.darker(115), 1.0));
+        painter.setBrush(face.color);
+        painter.drawPath(path);
+    }
+}
+
+void Ur3eHemisphereScanPreviewWidget::drawHemisphere(QPainter &painter,
+                                                     const QRectF &bounds,
+                                                     const double scale) const
+{
+    const double radius = params_.sphereRadiusM;
+    const int latitudeSteps = 14;
+    const int longitudeSteps = 24;
+
+    struct Triangle
+    {
+        std::array<QPointF, 3> points;
+        double depth = 0.0;
+        QColor color;
+    };
+
+    std::vector<Triangle> triangles;
+    triangles.reserve(static_cast<std::size_t>(latitudeSteps * longitudeSteps * 2));
+
+    const auto appendTriangle = [&](const Vec3 &a, const Vec3 &b, const Vec3 &c, const double shade) {
+        Triangle triangle;
+        const ProjectedPoint pa = projectPoint(a, bounds, scale);
+        const ProjectedPoint pb = projectPoint(b, bounds, scale);
+        const ProjectedPoint pc = projectPoint(c, bounds, scale);
+        triangle.points = {pa.screen, pb.screen, pc.screen};
+        triangle.depth = (pa.depth + pb.depth + pc.depth) / 3.0;
+        const int blue = static_cast<int>(std::clamp(150.0 + shade * 70.0, 110.0, 220.0));
+        triangle.color = QColor(90, blue, 235, 170);
+        triangles.push_back(triangle);
+    };
+
+    for (int latIndex = 0; latIndex < latitudeSteps; ++latIndex)
+    {
+        const double thetaMinRad = params_.thetaMinDeg * kPi / 180.0;
+        const double thetaMaxRad = params_.thetaMaxDeg * kPi / 180.0;
+        const double thetaA =
+            thetaMinRad
+            + (thetaMaxRad - thetaMinRad) * static_cast<double>(latIndex)
+                  / static_cast<double>(latitudeSteps);
+        const double thetaB =
+            thetaMinRad
+            + (thetaMaxRad - thetaMinRad) * static_cast<double>(latIndex + 1)
+                  / static_cast<double>(latitudeSteps);
+
+        for (int lonIndex = 0; lonIndex < longitudeSteps; ++lonIndex)
+        {
+            const double phiA =
+                2.0 * kPi * static_cast<double>(lonIndex) / static_cast<double>(longitudeSteps);
+            const double phiB =
+                2.0 * kPi * static_cast<double>(lonIndex + 1) / static_cast<double>(longitudeSteps);
+
+            const auto spherePoint = [&](const double theta, const double phi) -> Vec3 {
+                const double sinTheta = std::sin(theta);
+                return Vec3{radius * sinTheta * std::cos(phi),
+                          radius * sinTheta * std::sin(phi),
+                          kTrayHeightM + radius * std::cos(theta)};
+            };
+
+            const Vec3 p00 = spherePoint(thetaA, phiA);
+            const Vec3 p01 = spherePoint(thetaA, phiB);
+            const Vec3 p10 = spherePoint(thetaB, phiA);
+            const Vec3 p11 = spherePoint(thetaB, phiB);
+            const double shade = std::cos(thetaA);
+
+            appendTriangle(p00, p10, p11, shade);
+            appendTriangle(p00, p11, p01, shade);
+        }
+    }
+
+    std::sort(triangles.begin(),
+              triangles.end(),
+              [](const Triangle &lhs, const Triangle &rhs) { return lhs.depth < rhs.depth; });
+
+    for (const Triangle &triangle : triangles)
+    {
+        QPainterPath path;
+        path.moveTo(triangle.points[0]);
+        path.lineTo(triangle.points[1]);
+        path.lineTo(triangle.points[2]);
+        path.closeSubpath();
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(triangle.color);
+        painter.drawPath(path);
+    }
+
+    painter.setPen(QPen(QColor(70, 120, 200, 180), 1.0));
+    painter.setBrush(Qt::NoBrush);
+    for (int lonIndex = 0; lonIndex <= longitudeSteps; lonIndex += 3)
+    {
+        const double phi = 2.0 * kPi * static_cast<double>(lonIndex) / static_cast<double>(longitudeSteps);
+        QPainterPath meridian;
+        bool first = true;
+        for (int latIndex = 0; latIndex <= latitudeSteps; ++latIndex)
+        {
+            const double thetaMinRad = params_.thetaMinDeg * kPi / 180.0;
+            const double thetaMaxRad = params_.thetaMaxDeg * kPi / 180.0;
+            const double theta =
+                thetaMinRad
+                + (thetaMaxRad - thetaMinRad) * static_cast<double>(latIndex)
+                      / static_cast<double>(latitudeSteps);
+            const double sinTheta = std::sin(theta);
+            const Vec3 point{radius * sinTheta * std::cos(phi),
+                             radius * sinTheta * std::sin(phi),
+                             kTrayHeightM + radius * std::cos(theta)};
+            const QPointF screen = projectPoint(point, bounds, scale).screen;
+            if (first)
+            {
+                meridian.moveTo(screen);
+                first = false;
+            }
+            else
+            {
+                meridian.lineTo(screen);
+            }
+        }
+        painter.drawPath(meridian);
+    }
+}
+
+void Ur3eHemisphereScanPreviewWidget::drawScanNormals(QPainter &painter,
+                                                      const QRectF &bounds,
+                                                      const double scale) const
+{
+    for (int pointIndex = 0; pointIndex < static_cast<int>(scanPoints_.size()); ++pointIndex)
+    {
+        if (executionActive_ && pointIndex == executionActivePointIndex_)
+            continue;
+        drawScanPin(painter, bounds, scale, scanPoints_[static_cast<std::size_t>(pointIndex)], pointIndex);
+    }
+
+    if (executionActive_ && executionActivePointIndex_ >= 0
+        && executionActivePointIndex_ < static_cast<int>(scanPoints_.size()))
+    {
+        drawScanPin(painter,
+                    bounds,
+                    scale,
+                    scanPoints_[static_cast<std::size_t>(executionActivePointIndex_)],
+                    executionActivePointIndex_);
+    }
+}
+
+void Ur3eHemisphereScanPreviewWidget::drawScanPin(QPainter &painter,
+                                                  const QRectF &bounds,
+                                                  const double scale,
+                                                  const PreviewScanPoint &entry,
+                                                  const int pointIndex) const
+{
+    Q_UNUSED(pointIndex);
+
+    QColor pinColor(140, 140, 140);
+    if (entry.reachabilityKnown)
+    {
+        if (!entry.reachable)
+        {
+            pinColor = QColor(210, 45, 45);
+        }
+        else if (executionActive_ || executionResultsVisible_)
+        {
+            pinColor = entry.executionCompleted ? QColor(60, 180, 75) : QColor(220, 190, 40);
+        }
+        else
+        {
+            pinColor = QColor(60, 180, 75);
+        }
+    }
+
+    const bool isActive = executionActive_ && pointIndex == executionActivePointIndex_;
+    double lineWidth = 2.0;
+    if (isActive)
+    {
+        const double pulse =
+            0.5 + 0.5 * std::sin(static_cast<double>(flashPulse_) * kPi / 8.0);
+        const int red = static_cast<int>(std::clamp(150.0 + pulse * 70.0, 0.0, 255.0));
+        const int green = static_cast<int>(std::clamp(55.0 + pulse * 35.0, 0.0, 255.0));
+        const int blue = static_cast<int>(std::clamp(200.0 + pulse * 55.0, 0.0, 255.0));
+        pinColor = QColor(red, green, blue);
+        lineWidth = 3.0;
+    }
+
+    const Vec3 sphereCenter{0.0, 0.0, kTrayHeightM};
+    const Vec3 surface{entry.point.xM, entry.point.yM, entry.point.zM};
+    double dirX = surface.x - sphereCenter.x;
+    double dirY = surface.y - sphereCenter.y;
+    double dirZ = surface.z - sphereCenter.z;
+    const double length = std::sqrt(dirX * dirX + dirY * dirY + dirZ * dirZ);
+    if (length <= 1.0e-9)
+        return;
+
+    dirX /= length;
+    dirY /= length;
+    dirZ /= length;
+
+    const double halfLen = kNormalDisplayLengthM * 0.5;
+    const Vec3 pinStart{
+        surface.x - dirX * halfLen,
+        surface.y - dirY * halfLen,
+        surface.z - dirZ * halfLen,
+    };
+    const Vec3 pinEnd{
+        surface.x + dirX * halfLen,
+        surface.y + dirY * halfLen,
+        surface.z + dirZ * halfLen,
+    };
+
+    const QPointF start = projectPoint(pinStart, bounds, scale).screen;
+    const QPointF end = projectPoint(pinEnd, bounds, scale).screen;
+
+    painter.setPen(QPen(pinColor, lineWidth, Qt::SolidLine, Qt::RoundCap));
+    painter.drawLine(start, end);
+}
+} // namespace ui

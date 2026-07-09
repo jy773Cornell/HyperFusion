@@ -1,6 +1,6 @@
 #pragma once
 
-#include "backend/LighthouseTypes.hpp"
+#include "backend/light/LighthouseTypes.hpp"
 
 class ILighthouseController
 {

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "backend/ILighthouseController.hpp"
+#include "backend/light/ILighthouseController.hpp"
 
 #include <atomic>
 #include <condition_variable>

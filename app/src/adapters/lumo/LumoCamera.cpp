@@ -17,8 +17,8 @@
 #include "SI_sensor.h"
 #include "SI_types.h"
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/processing/SwirBprCorrector.hpp"
-#include "backend/processing/SwirColumnProfileCorrector.hpp"
+#include "backend/camera/processing/SwirBprCorrector.hpp"
+#include "backend/camera/processing/SwirColumnProfileCorrector.hpp"
 
 #include <QString>
 #endif

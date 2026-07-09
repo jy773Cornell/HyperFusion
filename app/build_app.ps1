@@ -26,7 +26,12 @@ param(
 
     [switch]$NoRun,
 
-    [switch]$NoClean
+    [switch]$NoClean,
+
+    # One-time WSL mirrored networking + UR reverse-port firewall (not run on every build by default).
+    [switch]$SetupUrRobotNetwork,
+
+    [switch]$ShutdownWslAfterUrNetworkSetup
 )
 
 $ErrorActionPreference = "Stop"
@@ -189,6 +194,18 @@ if (Test-Path -LiteralPath $mccDaqDir) {
         Copy-Item -LiteralPath $dll.FullName -Destination $exeDir -Force
     }
     Write-Host "==> Copied $($mccDlls.Count) MCC UL DLL(s) from $mccDaqDir to $exeDir"
+}
+
+if ($SetupUrRobotNetwork) {
+    $networkScript = Join-Path (Split-Path -Parent $AppDir) "resources\ur3e\scripts\setup_wsl_robot_network.ps1"
+    if (-not (Test-Path -LiteralPath $networkScript)) {
+        Write-Error "UR network setup script not found: $networkScript"
+    }
+    Write-Host "==> UR3e robot network setup (WSL mirrored + firewall)"
+    $netArgs = @()
+    if ($ShutdownWslAfterUrNetworkSetup) { $netArgs += "-ShutdownWsl" }
+    & $networkScript @netArgs
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
 if ($NoRun) {

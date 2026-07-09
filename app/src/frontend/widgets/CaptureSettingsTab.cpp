@@ -6,8 +6,8 @@
 #include "frontend/widgets/MainWindow.hpp"
 #include "adapters/zaber/ZaberStageProfile.hpp"
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/processing/Gsam2ServerManager.hpp"
-#include "backend/StageWorker.hpp"
+#include "backend/camera/processing/Gsam2ServerManager.hpp"
+#include "backend/stage/StageWorker.hpp"
 #include "frontend/widgets/MainWindowTabHelpers.hpp"
 
 #include <QCheckBox>
@@ -307,19 +307,23 @@ QWidget *MainWindow::createCaptureSettingsTab()
     preprocessingLayout->addWidget(gsamServerRow);
 
     auto *gsamPromptRow = new QWidget(preprocessingBox);
-    auto *gsamPromptLayout = new QFormLayout(gsamPromptRow);
+    auto *gsamPromptLayout = new QHBoxLayout(gsamPromptRow);
     gsamPromptLayout->setContentsMargins(0, 0, 0, 0);
-    gsamPromptLayout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
-    gsamPromptLayout->setRowWrapPolicy(QFormLayout::DontWrapRows);
+    gsamPromptLayout->setSpacing(6);
+    auto *gsamPromptLabel = new QLabel(QStringLiteral("GSAM prompt"), gsamPromptRow);
+    gsamPromptLabel->setMinimumWidth(88);
     captureGsamPromptEdit_ = new QLineEdit(gsamPromptRow);
     captureGsamPromptEdit_->setPlaceholderText(QStringLiteral("sample."));
     captureGsamPromptEdit_->setToolTip(tr("GroundingDINO text prompt (e.g. \"grape. leaf.\")."));
+    auto *maxSamplesLabel = new QLabel(QStringLiteral("Max samples"), gsamPromptRow);
     captureGsamSampleCountSpin_ = new QSpinBox(gsamPromptRow);
     captureGsamSampleCountSpin_->setRange(1, 100);
     captureGsamSampleCountSpin_->setValue(5);
     captureGsamSampleCountSpin_->setToolTip(tr("Maximum number of detections (intended sample count)."));
-    gsamPromptLayout->addRow(QStringLiteral("GSAM prompt"), captureGsamPromptEdit_);
-    gsamPromptLayout->addRow(QStringLiteral("Max samples"), captureGsamSampleCountSpin_);
+    gsamPromptLayout->addWidget(gsamPromptLabel);
+    gsamPromptLayout->addWidget(captureGsamPromptEdit_, 1);
+    gsamPromptLayout->addWidget(maxSamplesLabel);
+    gsamPromptLayout->addWidget(captureGsamSampleCountSpin_);
     preprocessingLayout->addWidget(gsamPromptRow);
 
     captureRunHfFusionCheck_ =
@@ -333,10 +337,11 @@ QWidget *MainWindow::createCaptureSettingsTab()
     preprocessingLayout->addWidget(captureRunHfFusionCheck_);
 
     captureRunFusionManualBtn_ =
-        new QPushButton(QStringLiteral("Run fusion on session\u2026"), page);
+        new QPushButton(QStringLiteral("Run fusion on session\u2026"), preprocessingBox);
     captureRunFusionManualBtn_->setToolTip(
         tr("Re-run spectral fusion on a saved session (all illumination modes with "
            "fx10e + swir3). Available anytime; does not require a new scan."));
+    preprocessingLayout->addWidget(captureRunFusionManualBtn_);
 
     auto *metadataBox = new QGroupBox(QStringLiteral("Metadata"), page);
     captureMetadataBox_ = metadataBox;
@@ -426,7 +431,6 @@ QWidget *MainWindow::createCaptureSettingsTab()
     layout->addWidget(captureModesBox_);
     layout->addWidget(positionBox);
     layout->addWidget(preprocessingBox);
-    layout->addWidget(captureRunFusionManualBtn_);
     if (capturePanel() != nullptr)
     {
         capturePanel()->wireSettingsTabConnections();

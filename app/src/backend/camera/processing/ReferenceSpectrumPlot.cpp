@@ -1,5 +1,5 @@
 // Mean ± 1σ reference spectrum plot export (intensity DN vs wavelength).
-#include "backend/processing/ReferenceSpectrumPlot.hpp"
+#include "backend/camera/processing/ReferenceSpectrumPlot.hpp"
 
 #include <QDir>
 #include <QFileInfo>

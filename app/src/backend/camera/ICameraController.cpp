@@ -1,6 +1,6 @@
 // Default ICameraController implementations for optional APIs (e.g. shutter control).
 // Backends that do not support a feature inherit these safe NotImplemented responses.
-#include "backend/ICameraController.hpp"
+#include "backend/camera/ICameraController.hpp"
 
 bool ICameraController::openShutter(CameraError &error)
 {

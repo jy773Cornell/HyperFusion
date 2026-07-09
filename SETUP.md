@@ -215,7 +215,21 @@ Universal Robots **UR3e** control runs as a **WSL sidecar** (same pattern as GSA
 | **Robot on LAN** | Default IP `192.168.0.10` (edit `[ur3e]` in `hyperfusion.cfg`) |
 | **Lab safety** | E-stop accessible; no motion until explicit connect from the UR3e tab |
 
-If WSL cannot ping the robot, enable mirrored networking in `%USERPROFILE%\.wslconfig` (`networkingMode=mirrored`), then `wsl --shutdown`.
+If WSL cannot ping the robot, or the teach pendant reports **cannot reach remote PC**, run the one-time network setup (mirrored WSL + inbound firewall for UR reverse ports):
+
+```powershell
+cd D:\Pototypy\HyperFusion\resources\ur3e
+.\install_env.ps1 -SetupRobotNetwork -ShutdownWsl
+```
+
+Or after a build:
+
+```powershell
+cd D:\Pototypy\HyperFusion\app
+.\build_app.ps1 -NoRun -SetupUrRobotNetwork -ShutdownWslAfterUrNetworkSetup
+```
+
+Firewall rules require **Administrator** PowerShell. The script is idempotent and does **not** run on every compile unless you pass those flags.
 
 ### 6.2 One-time WSL setup
 

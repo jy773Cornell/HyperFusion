@@ -4,18 +4,18 @@
 
 #include "adapters/lumo/LumoDeviceTypes.hpp"
 #include "adapters/zaber/ZaberStageProfile.hpp"
-#include "backend/CameraCoordinator.hpp"
-#include "backend/CaptureWriterWorker.hpp"
-#include "backend/DualCameraScanOrchestrator.hpp"
+#include "backend/camera/CameraCoordinator.hpp"
+#include "backend/camera/CaptureWriterWorker.hpp"
+#include "backend/camera/DualCameraScanOrchestrator.hpp"
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/LighthouseTypes.hpp"
-#include "backend/LighthouseWorker.hpp"
-#include "backend/StageWorker.hpp"
-#include "backend/processing/CapturePostProcessor.hpp"
-#include "backend/processing/CapturePostProcessorWorker.hpp"
-#include "backend/processing/Gsam2ServerManager.hpp"
-#include "backend/processing/HfFusionRunner.hpp"
-#include "backend/processing/HfFusionWorker.hpp"
+#include "backend/light/LighthouseTypes.hpp"
+#include "backend/light/LighthouseWorker.hpp"
+#include "backend/stage/StageWorker.hpp"
+#include "backend/camera/processing/CapturePostProcessor.hpp"
+#include "backend/camera/processing/CapturePostProcessorWorker.hpp"
+#include "backend/camera/processing/Gsam2ServerManager.hpp"
+#include "backend/camera/processing/HfFusionRunner.hpp"
+#include "backend/camera/processing/HfFusionWorker.hpp"
 #include "frontend/controllers/CameraPanelController.hpp"
 #include "frontend/controllers/LightPanelController.hpp"
 #include "frontend/controllers/StagePanelController.hpp"
@@ -988,7 +988,6 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
       preprocessingHardwareReady && useStageRecording && !scanActive;
   const bool preprocessingEnabled = preprocessingBoxEnabled;
   if (host_->capturePreprocessingBox_ != nullptr) {
-    host_->capturePreprocessingBox_->setEnabled(preprocessingBoxEnabled);
     if (!preprocessingBoxEnabled && !scanActive) {
       if (!preprocessingHardwareReady) {
         if (!stageConnected && !anyCameraConnected) {
@@ -1085,9 +1084,9 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
                  "(e.g. reflectance and transmittance)."));
   }
   if (host_->captureGsamPromptEdit_ != nullptr)
-    host_->captureGsamPromptEdit_->setEnabled(gsamSegmentationEnabled);
+    host_->captureGsamPromptEdit_->setEnabled(true);
   if (host_->captureGsamSampleCountSpin_ != nullptr)
-    host_->captureGsamSampleCountSpin_->setEnabled(gsamSegmentationEnabled);
+    host_->captureGsamSampleCountSpin_->setEnabled(true);
 
   updateGsamServerUi();
 
@@ -1214,8 +1213,6 @@ void hf::capture::CapturePanelController::updateSessionUiLock() {
     host_->captureModesBox_->setEnabled(false);
   if (host_->capturePositionBox_ != nullptr && scanActive)
     host_->capturePositionBox_->setEnabled(false);
-  if (host_->capturePreprocessingBox_ != nullptr && scanActive)
-    host_->capturePreprocessingBox_->setEnabled(false);
 
   if (!scanActive)
     syncCaptureIlluminationModeControls();

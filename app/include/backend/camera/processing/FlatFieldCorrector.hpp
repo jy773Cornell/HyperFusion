@@ -2,8 +2,8 @@
 // using one averaged reference row (mean over reference frames, spatial x preserved).
 #pragma once
 
-#include "backend/processing/EnviBilReader.hpp"
-#include "backend/processing/ReferenceBuilder.hpp"
+#include "backend/camera/processing/EnviBilReader.hpp"
+#include "backend/camera/processing/ReferenceBuilder.hpp"
 
 #include <QString>
 #include <functional>

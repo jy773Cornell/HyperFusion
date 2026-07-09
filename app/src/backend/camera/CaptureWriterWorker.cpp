@@ -1,6 +1,6 @@
-#include "backend/CaptureWriterWorker.hpp"
+#include "backend/camera/CaptureWriterWorker.hpp"
 
-#include "backend/LumoDatasetWriter.hpp"
+#include "backend/camera/LumoDatasetWriter.hpp"
 
 CaptureWriterWorker::CaptureWriterWorker()
     : writer_(std::make_unique<LumoDatasetWriter>())

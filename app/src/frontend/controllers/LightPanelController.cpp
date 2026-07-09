@@ -2,7 +2,7 @@
 #include "frontend/controllers/LightPanelController.hpp"
 
 #include "adapters/mcc/Mcc1208LighthouseController.hpp"
-#include "backend/LighthouseWorker.hpp"
+#include "backend/light/LighthouseWorker.hpp"
 #include "backend/HyperFusionConfig.hpp"
 #include "frontend/settings/AppSettingsStore.hpp"
 #include "frontend/controllers/UiSettingsController.hpp"

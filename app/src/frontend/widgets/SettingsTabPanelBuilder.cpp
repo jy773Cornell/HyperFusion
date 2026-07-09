@@ -12,7 +12,7 @@ QWidget *MainWindow::createSettingsPanel()
     auto *layout = new QVBoxLayout(panel);
 
     settingsTabs_ = new QTabWidget(panel);
-    settingsTabs_->addTab(createCameraSettingsTab(), QStringLiteral("Camera"));
+    settingsTabs_->addTab(createCameraSettingsTab(), QStringLiteral("Cameras"));
     settingsTabs_->addTab(createStageSettingsTab(), QStringLiteral("Stage"));
     settingsTabs_->addTab(createLightSettingsTab(), QStringLiteral("Light"));
     settingsTabs_->addTab(createUr3eSettingsTab(), QStringLiteral("UR3e"));

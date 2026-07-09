@@ -71,8 +71,20 @@ QString Ur3eMoveItManager::buildLaunchCommand() const
             .arg(rosDistro, urType);
     }
 
-    return QStringLiteral("export HYPERFUSION_UR3E_REPO='%1' && sed 's/\\r$//' '%2' | bash -s %3 %4")
-        .arg(repoLinux, scriptPath, rosDistro, urType);
+    return QStringLiteral(
+               "export HYPERFUSION_UR3E_REPO='%1' && "
+               "export HYPERFUSION_CEILING_MOUNT='true' && "
+               "export HYPERFUSION_CEILING_MOUNT_HEIGHT_M='%2' && "
+               "export HYPERFUSION_USE_MOCK_HARDWARE='%6' && "
+               "pkill -f 'moveit_ros_move_group/move_group' 2>/dev/null || true; "
+               "sleep 1; "
+               "sed 's/\\r$//' '%3' | bash -s %4 %5")
+        .arg(repoLinux,
+             QString::number(cfg.workspaceHeightMm / 1000.0, 'f', 4),
+             scriptPath,
+             rosDistro,
+             urType,
+             cfg.useMockHardware ? QStringLiteral("true") : QStringLiteral("false"));
 }
 
 void Ur3eMoveItManager::start()

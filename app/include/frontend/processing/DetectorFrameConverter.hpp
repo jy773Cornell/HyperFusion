@@ -1,7 +1,7 @@
 // Converts camera frame packets into Qt images for detector views (RGB with saturation marks).
 #pragma once
 
-#include "backend/CameraTypes.hpp"
+#include "backend/camera/CameraTypes.hpp"
 
 class QImage;
 

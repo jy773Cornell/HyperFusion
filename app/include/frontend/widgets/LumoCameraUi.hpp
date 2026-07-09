@@ -3,7 +3,7 @@
 
 #include "adapters/lumo/LumoDeviceTypes.hpp"
 #include "adapters/lumo/CalpackBandCatalog.hpp"
-#include "backend/CameraTypes.hpp"
+#include "backend/camera/CameraTypes.hpp"
 
 #include <cstddef>
 #include <memory>

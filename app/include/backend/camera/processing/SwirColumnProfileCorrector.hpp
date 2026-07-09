@@ -2,7 +2,7 @@
 // Backend/processing layer; replaces per-pixel adaptive BPR for vertical comb artifacts.
 #pragma once
 
-#include "backend/CameraTypes.hpp"
+#include "backend/camera/CameraTypes.hpp"
 
 #include <cstddef>
 #include <cstdint>

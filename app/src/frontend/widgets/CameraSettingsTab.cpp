@@ -1,11 +1,11 @@
-ï»¿// Camera settings tab and per-sensor Lumo configuration group.
+// Camera settings tab and per-sensor Lumo configuration group.
 // MainWindow method definitions extracted from MainWindow.cpp for clarity.
 #include "frontend/controllers/CameraPanelController.hpp"
 #include "frontend/controllers/UiSettingsController.hpp"
 #include "frontend/widgets/MainWindow.hpp"
 #include "adapters/lumo/LumoCamera.hpp"
 #include "adapters/lumo/LumoDeviceTypes.hpp"
-#include "backend/CameraCoordinator.hpp"
+#include "backend/camera/CameraCoordinator.hpp"
 #include "backend/HyperFusionConfig.hpp"
 #include "frontend/processing/Overexposure.hpp"
 #include "frontend/widgets/MainWindowTabHelpers.hpp"
@@ -231,7 +231,7 @@ QWidget *MainWindow::createLumoCameraGroup(QWidget *parent,
         const QString calpackPath = cameraPanel()->ensureCalibrationPackResolved(ui);
         if (calpackPath.isEmpty())
         {
-            appendLog(QStringLiteral("%1: calibration pack (.scp) not found â€” place it under calibration/%2/ beside app.exe.")
+            appendLog(QStringLiteral("%1: calibration pack (.scp) not found — place it under calibration/%2/ beside app.exe.")
                           .arg(cameraLabel,
                                ui.sensorKind == LumoSensorKind::Swir3Ni ? QStringLiteral("swir")
                                                                         : QStringLiteral("fx10e")));
@@ -262,7 +262,7 @@ QWidget *MainWindow::createLumoCameraGroup(QWidget *parent,
         const QString grabberNote = ui.sensorKind == LumoSensorKind::Swir3Ni
                                         ? QStringLiteral("NI IMAQdx \u2014 stop Grab in NI MAX before connect")
                                         : QStringLiteral("Pleora eBUS picker may appear");
-        appendLog(QString("%1: connect camera â€” profile %2, calpack %3 (%4; not ready until Initialized).")
+        appendLog(QString("%1: connect camera — profile %2, calpack %3 (%4; not ready until Initialized).")
                       .arg(cameraLabel,
                            ui.deviceCombo->currentText(),
                            QFileInfo(calpackPath).fileName(),

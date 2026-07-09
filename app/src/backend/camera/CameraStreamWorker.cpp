@@ -1,5 +1,5 @@
 // Frame polling loop on a dedicated thread (separate from camera control commands).
-#include "backend/CameraStreamWorker.hpp"
+#include "backend/camera/CameraStreamWorker.hpp"
 
 #include <chrono>
 

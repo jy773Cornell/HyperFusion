@@ -1,7 +1,7 @@
 // Threaded camera worker interface for control commands and frame streaming.
 #pragma once
 
-#include "backend/ICameraController.hpp"
+#include "backend/camera/ICameraController.hpp"
 
 #include <atomic>
 #include <condition_variable>
