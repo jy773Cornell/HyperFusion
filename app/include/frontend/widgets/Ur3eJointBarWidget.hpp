@@ -50,6 +50,8 @@ signals:
 
     void dragFinished();
 
+    void targetChanged(double radians);
+
 
 
 protected:

@@ -27,13 +27,16 @@ else
 fi
 
 source "/opt/ros/${ROS_DISTRO}/setup.bash"
+export ROS_LOCALHOST_ONLY=1
 
 "${SCRIPT_DIR}/wait_for_joint_states.sh" "${ROS_DISTRO}" 120
 
 echo "UR3e MoveIt: waiting for /joint_states_stamped (timeout 30s)…" >&2
 stamped_deadline=$((SECONDS + 30))
+PROBE="${HYPERFUSION_UR3E_REPO}/scripts/probe_joint_states.py"
+PY="${HYPERFUSION_UR3E_REPO}/venv/bin/python"
 while (( SECONDS < stamped_deadline )); do
-  if ros2 topic echo /joint_states_stamped sensor_msgs/msg/JointState --once --timeout 2 >/dev/null 2>&1; then
+  if [[ -x "${PY}" && -f "${PROBE}" ]] && timeout 8 "${PY}" "${PROBE}" 6; then
     echo "UR3e MoveIt: /joint_states_stamped is live." >&2
     break
   fi
@@ -41,7 +44,7 @@ while (( SECONDS < stamped_deadline )); do
 done
 
 echo "UR3e MoveIt: stopping any existing move_group (prevents duplicate /move_action)…" >&2
-pkill -f "moveit_ros_move_group/move_group" 2>/dev/null || true
+pkill -f "moveit_ros_move_group/[m]ove_group" 2>/dev/null || true
 sleep 1
 
 echo "UR3e MoveIt: starting MoveIt + RViz (ur_type=${UR_TYPE})…" >&2

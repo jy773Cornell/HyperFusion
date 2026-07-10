@@ -29,6 +29,7 @@ else
 fi
 
 source "/opt/ros/${ROS_DISTRO}/setup.bash"
+export ROS_LOCALHOST_ONLY=1
 
 # Robot model + TF come from the running driver (robot_state_publisher). Wait for joints first.
 "${SCRIPT_DIR}/wait_for_joint_states.sh" "${ROS_DISTRO}" 120

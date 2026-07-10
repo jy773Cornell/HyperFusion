@@ -149,8 +149,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     resize(1550, 920);
     setMinimumSize(1180, 760);
 
+    (void)hf::loadHardwareConfig();
+    useUr3e_ = hf::hardwareConfig().ur3e.useUr3e;
+
     stagePanel_ = std::make_unique<hf::stage::StagePanelController>(this);
-    ur3ePanel_ = std::make_unique<hf::ur3e::Ur3ePanelController>(this);
+    if (useUr3e_)
+        ur3ePanel_ = std::make_unique<hf::ur3e::Ur3ePanelController>(this);
     lightPanel_ = std::make_unique<hf::light::LightPanelController>(this);
     cameraPanel_ = std::make_unique<hf::camera::CameraPanelController>(this);
     settingsPanel_ = std::make_unique<hf::settings::UiSettingsController>(this);
@@ -211,8 +215,11 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 
     stagePanel_->initializeWorker();
     stagePanel_->wireSettingsTabConnections();
-    ur3ePanel_->applyHardwareConfigToUi();
-    ur3ePanel_->wireSettingsTabConnections();
+    if (useUr3e_)
+    {
+        ur3ePanel_->applyHardwareConfigToUi();
+        ur3ePanel_->wireSettingsTabConnections();
+    }
     lightPanel_->initializeWorker();
 
     capturePanel_->initializeWorkers();
@@ -226,10 +233,14 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
             appendLog(hf::log::Channel::App,
                       QStringLiteral("Session log file: %1").arg(sessionLog_.filePath()));
         }
+        if (useUr3e_ && ur3ePanel_ != nullptr)
+            ur3ePanel_->startSidecarOnLaunch();
+    });
+
+    // Defer GSAM2 so WSL is not hammered at the same moment as UR3e startup.
+    QTimer::singleShot(3000, this, [this]() {
         if (capturePanel_ != nullptr)
             capturePanel_->tryAutoStartGsamServer();
-        if (ur3ePanel_ != nullptr)
-            ur3ePanel_->startSidecarOnLaunch();
     });
 }
 
@@ -253,7 +264,7 @@ void MainWindow::onSettingsTabChanged(const int index)
 {
     if (index == kSettingsTabStage)
         stagePanel_->refreshComPortList();
-    else if (index == kSettingsTabCapture)
+    else if (index == captureSettingsTabIndex_)
     {
         capturePanel_->updateCamerasList();
         if (stagePanel_->worker() != nullptr)
@@ -261,16 +272,16 @@ void MainWindow::onSettingsTabChanged(const int index)
     }
     else if (index == kSettingsTabLight)
         lightPanel_->syncUiFromBackend();
-    else if (index == kSettingsTabUr3e && ur3ePanel_ != nullptr)
+    else if (ur3eSettingsTabIndex_ >= 0 && index == ur3eSettingsTabIndex_ && ur3ePanel_ != nullptr)
         ur3ePanel_->refreshUi();
 
-    if (streamTabs_ != nullptr && index == kSettingsTabUr3e)
+    if (streamTabs_ != nullptr && ur3eStreamTabIndex_ >= 0 && index == ur3eSettingsTabIndex_)
     {
         QSignalBlocker blocker(streamTabs_);
-        streamTabs_->setCurrentIndex(kStreamTabUr3e);
+        streamTabs_->setCurrentIndex(ur3eStreamTabIndex_);
     }
 
-    if (streamTabs_ != nullptr && streamTabs_->currentIndex() == kStreamTabCapture
+    if (streamTabs_ != nullptr && streamTabs_->currentIndex() == captureStreamTabIndex_
         && cameraPanel_ != nullptr)
     {
         cameraPanel_->refreshWaterfallDisplayTargets();
@@ -279,10 +290,10 @@ void MainWindow::onSettingsTabChanged(const int index)
 
 void MainWindow::onStreamTabChanged(const int index)
 {
-    if (settingsTabs_ != nullptr && index == kStreamTabUr3e)
+    if (settingsTabs_ != nullptr && ur3eStreamTabIndex_ >= 0 && index == ur3eStreamTabIndex_)
     {
         QSignalBlocker blocker(settingsTabs_);
-        settingsTabs_->setCurrentIndex(kSettingsTabUr3e);
+        settingsTabs_->setCurrentIndex(ur3eSettingsTabIndex_);
         if (ur3ePanel_ != nullptr)
             ur3ePanel_->refreshUi();
     }
@@ -330,7 +341,16 @@ QWidget *MainWindow::createStreamTabsPanel()
     streamTabs_->addTab(ui::CameraStreamTabBuilder::buildCameraStreamTab(
                             this, cameraPanel_->profileTabNameForUi(camera2Ui_), camera2Ui_, streamHooks),
                         cameraPanel_->profileTabNameForUi(camera2Ui_));
-    streamTabs_->addTab(createUr3eStreamTab(), QStringLiteral("UR3e"));
+    if (useUr3e_)
+    {
+        ur3eStreamTabIndex_ = streamTabs_->count();
+        streamTabs_->addTab(createUr3eStreamTab(), QStringLiteral("UR3e"));
+    }
+    else
+    {
+        ur3eStreamTabIndex_ = -1;
+    }
+    captureStreamTabIndex_ = streamTabs_->count();
     streamTabs_->addTab(capturePanel_->createStreamTab(), QStringLiteral("Capture"));
 
     connect(streamTabs_, &QTabWidget::currentChanged, this, &MainWindow::onStreamTabChanged);
@@ -435,7 +455,7 @@ bool MainWindow::performGracefulShutdown()
         });
     }
 
-    if (ur3ePanel_ != nullptr)
+    if (useUr3e_ && ur3ePanel_ != nullptr)
     {
         if (ur3ePanel_->isRobotConnected())
         {

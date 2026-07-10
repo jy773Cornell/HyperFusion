@@ -11,11 +11,14 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence
 
+os.environ.setdefault("ROS_LOCALHOST_ONLY", "1")
+
 from hyperfusion_ur3e import PKG_ROOT
 
 GROUP_NAME = "ur_manipulator"
 EE_LINK = "tool0"
 PLANNING_FRAME = "world"
+RVIZ_UPDATE_CUSTOM_GOAL_TOPIC = "/rviz/moveit/update_custom_goal_state"
 WORKSPACE_OBJECT_ID = "hyperfusion_workspace_boundary"  # legacy id (unused)
 BOUNDARY_SLAB_THICKNESS_M = 0.02
 BOUNDARY_OBJECT_IDS = (
@@ -199,6 +202,24 @@ class MoveItProcessManager:
         return proc.returncode == 0
 
     @staticmethod
+    def current_move_group_pids() -> tuple[int, ...]:
+        """Sorted PIDs of running move_group processes (empty when none)."""
+        proc = subprocess.run(
+            ["pgrep", "-f", "move_group"],
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            return ()
+        pids = []
+        for line in (proc.stdout or "").split():
+            try:
+                pids.append(int(line.strip()))
+            except ValueError:
+                continue
+        return tuple(sorted(pids))
+
+    @staticmethod
     def _use_mock_hardware() -> bool:
         return os.environ.get("HYPERFUSION_USE_MOCK_HARDWARE", "true").strip().lower() in (
             "1",
@@ -209,10 +230,19 @@ class MoveItProcessManager:
 
     def _ros_param_bool(self, node: str, param: str) -> Optional[bool]:
         cmd = (
+            f"export ROS_LOCALHOST_ONLY=1 && "
             f"source /opt/ros/{self.ros_distro}/setup.bash && "
-            f"ros2 param get {node} {param}"
+            f"timeout 5 ros2 param get {node} {param}"
         )
-        proc = subprocess.run(["bash", "-lc", cmd], capture_output=True, text=True)
+        try:
+            proc = subprocess.run(
+                ["bash", "-lc", cmd],
+                capture_output=True,
+                text=True,
+                timeout=8.0,
+            )
+        except subprocess.TimeoutExpired:
+            return None
         if proc.returncode != 0:
             return None
         text = proc.stdout.strip().lower()
@@ -225,6 +255,9 @@ class MoveItProcessManager:
     def _move_group_controller_config_ok(self) -> bool:
         if not self._move_group_running():
             return False
+        if self._use_mock_hardware():
+            # Mock scan uses joint_trajectory_controller; skip slow ros2 param CLI on WSL.
+            return True
         jtc_default = self._ros_param_bool(
             "/move_group",
             "moveit_simple_controller_manager.joint_trajectory_controller.default",
@@ -241,7 +274,7 @@ class MoveItProcessManager:
 
     @staticmethod
     def _stop_move_group() -> None:
-        subprocess.run(["pkill", "-f", "moveit_ros_move_group/move_group"], check=False)
+        subprocess.run(["pkill", "-f", "moveit_ros_move_group/[m]ove_group"], check=False)
         time.sleep(0.5)
 
     def ensure_running(self, timeout_s: float = 120.0) -> None:
@@ -269,7 +302,9 @@ class MoveItProcessManager:
 
             pkg_root = PKG_ROOT.as_posix()
             mock_flag = "true" if self._use_mock_hardware() else "false"
+            sys.stderr.write("UR3e MoveIt: starting headless move_group for scan planning…\n")
             cmd = (
+                f"export ROS_LOCALHOST_ONLY=1 && "
                 f"export HYPERFUSION_UR3E_REPO='{pkg_root}' && "
                 f"export HYPERFUSION_USE_MOCK_HARDWARE='{mock_flag}' && "
                 f"export HYPERFUSION_CEILING_MOUNT=true && "
@@ -284,6 +319,7 @@ class MoveItProcessManager:
             )
 
             deadline = time.time() + timeout_s
+            last_log_s = 0.0
             while time.time() < deadline:
                 if self._process.poll() is not None:
                     stderr_tail = ""
@@ -292,23 +328,65 @@ class MoveItProcessManager:
                     raise RuntimeError(
                         f"MoveIt headless launch exited (code={self._process.returncode}).\n{stderr_tail}"
                     )
-                if self._service_ready("/compute_ik", timeout_s=2.0, ros_distro=self.ros_distro) and (
+                if self._compute_ik_service_ready(timeout_s=2.0) and (
                     self._move_group_controller_config_ok()
                 ):
                     sys.stderr.write("UR3e MoveIt: move_group ready for scan planning.\n")
                     return
+                now = time.time()
+                if now - last_log_s >= 10.0:
+                    elapsed = int(now - (deadline - timeout_s))
+                    sys.stderr.write(
+                        f"UR3e MoveIt: waiting for move_group /compute_ik ({elapsed}s)…\n"
+                    )
+                    last_log_s = now
                 time.sleep(1.0)
 
             raise RuntimeError("Timed out waiting for MoveIt /compute_ik service.")
 
     @staticmethod
+    def _compute_ik_service_ready(timeout_s: float) -> bool:
+        """Probe /compute_ik via rclpy (ros2 service list can hang on WSL)."""
+        try:
+            import rclpy
+            from moveit_msgs.srv import GetPositionIK
+            from rclpy.node import Node
+        except Exception:
+            return False
+
+        owns_init = False
+        if not rclpy.ok():
+            rclpy.init()
+            owns_init = True
+        node = Node("hyperfusion_moveit_ready_probe")
+        client = node.create_client(GetPositionIK, "/compute_ik")
+        try:
+            return client.wait_for_service(timeout_sec=max(0.5, timeout_s))
+        finally:
+            node.destroy_node()
+            # Keep rclpy initialized for MoveItScanPlanner._ensure_ros().
+            if owns_init and not rclpy.ok():
+                rclpy.shutdown()
+
+    @staticmethod
     def _service_ready(service_name: str, timeout_s: float, ros_distro: str) -> bool:
+        if service_name == "/compute_ik":
+            return MoveItProcessManager._compute_ik_service_ready(timeout_s)
         cmd = (
+            f"export ROS_LOCALHOST_ONLY=1 && "
             f"source /opt/ros/{ros_distro}/setup.bash && "
-            f"timeout {max(1, int(timeout_s))} ros2 service list | grep -Fx '{service_name}'"
+            f"timeout {max(1, int(timeout_s))} ros2 service list"
         )
-        proc = subprocess.run(["bash", "-lc", cmd], capture_output=True, text=True)
-        return proc.returncode == 0
+        try:
+            proc = subprocess.run(
+                ["bash", "-lc", cmd],
+                capture_output=True,
+                text=True,
+                timeout=max(2.0, timeout_s + 2.0),
+            )
+        except subprocess.TimeoutExpired:
+            return False
+        return service_name in (proc.stdout or "")
 
 
 class MoveItScanPlanner:
@@ -328,6 +406,9 @@ class MoveItScanPlanner:
         self._spin_stop = threading.Event()
         self._workspace_applied: Optional[tuple[Any, ...]] = None
         self._last_workspace: Optional[WorkspaceBox] = None
+        self._default_workspace: Optional[WorkspaceBox] = None
+        self._boundary_keepalive_thread: Optional[threading.Thread] = None
+        self._boundary_keepalive_stop = threading.Event()
         self._last_plan_start_seed: List[float] = []
         self._home_joints_rad: List[float] = list(DEFAULT_HOME_JOINTS_RAD)
         self._planning_scene_client = None
@@ -335,6 +416,7 @@ class MoveItScanPlanner:
         self._active_move_goal_handle: Any = None
         self._latest_joint_positions: List[float] = []
         self._joint_state_sub = None
+        self._rviz_goal_pub = None
 
     def apply_home_joints_from_body(self, body: Optional[Dict[str, Any]]) -> None:
         self._home_joints_rad = home_joints_rad_from_body(body)
@@ -342,8 +424,10 @@ class MoveItScanPlanner:
     def home_joints_rad(self) -> List[float]:
         return list(self._home_joints_rad)
 
-    def _ensure_ros(self) -> None:
+    def _ensure_ros(self, *, require_ik: bool = True) -> None:
         if self._node is not None:
+            if require_ik:
+                self._ensure_ik_clients()
             return
 
         import rclpy
@@ -360,10 +444,29 @@ class MoveItScanPlanner:
         self._spin_thread = threading.Thread(target=self._spin_loop, daemon=True, name="ur3e-moveit-spin")
         self._spin_thread.start()
 
+        if require_ik:
+            self._ensure_ik_clients()
+
+    def _ensure_ik_clients(self) -> None:
+        if self._node is None:
+            raise RuntimeError("ROS node not initialized.")
+
+        if self._ik_client is not None and self._validity_client is not None:
+            return
+
+        from moveit_msgs.msg import RobotState
         from moveit_msgs.srv import GetPositionIK, GetStateValidity
 
-        self._ik_client = self._node.create_client(GetPositionIK, "/compute_ik")
-        self._validity_client = self._node.create_client(GetStateValidity, "/check_state_validity")
+        if self._ik_client is None:
+            self._ik_client = self._node.create_client(GetPositionIK, "/compute_ik")
+        if self._validity_client is None:
+            self._validity_client = self._node.create_client(
+                GetStateValidity, "/check_state_validity"
+            )
+        if self._rviz_goal_pub is None:
+            self._rviz_goal_pub = self._node.create_publisher(
+                RobotState, RVIZ_UPDATE_CUSTOM_GOAL_TOPIC, 10
+            )
 
         if not self._ik_client.wait_for_service(timeout_sec=60.0):
             raise RuntimeError("MoveIt /compute_ik service not available.")
@@ -392,6 +495,49 @@ class MoveItScanPlanner:
                 _on_joint_state,
                 10,
             )
+
+    def set_default_workspace(self, workspace: WorkspaceBox) -> None:
+        self._default_workspace = workspace
+        self._last_workspace = workspace
+
+    def start_boundary_keepalive(self) -> None:
+        with self._lock:
+            if (
+                self._boundary_keepalive_thread is not None
+                and self._boundary_keepalive_thread.is_alive()
+            ):
+                return
+            self._boundary_keepalive_stop.clear()
+            self._boundary_keepalive_thread = threading.Thread(
+                target=self._boundary_keepalive_loop,
+                daemon=True,
+                name="ur3e-boundary-keepalive",
+            )
+            self._boundary_keepalive_thread.start()
+
+    def _boundary_keepalive_loop(self) -> None:
+        while True:
+            workspace = self._default_workspace
+            if workspace is not None and self._process_manager.current_move_group_pids():
+                try:
+                    self.ensure_workspace_boundary_visible(workspace)
+                except Exception as exc:
+                    sys.stderr.write(f"UR3e MoveIt: boundary keepalive: {exc}\n")
+            if self._boundary_keepalive_stop.wait(3.0):
+                break
+
+    def ensure_workspace_boundary_visible(self, workspace: WorkspaceBox) -> bool:
+        """Publish workspace collision walls into the active MoveIt planning scene."""
+        if not workspace.enabled:
+            return False
+        if not self._process_manager.current_move_group_pids():
+            return False
+
+        with self._lock:
+            self._ensure_ros(require_ik=False)
+            self._last_workspace = workspace
+            self._apply_workspace_collision(workspace)
+        return True
 
     def _current_joint_positions(self) -> Optional[List[float]]:
         if len(self._latest_joint_positions) != 6:
@@ -518,7 +664,10 @@ class MoveItScanPlanner:
             self._active_move_goal_handle = None
 
     def _workspace_key(self, workspace: WorkspaceBox) -> tuple[Any, ...]:
+        # Include the live move_group PID set: a restarted or GUI-launched move_group
+        # starts with an empty planning scene, so the boundary must be re-published.
         return (
+            self._process_manager.current_move_group_pids(),
             workspace.enabled,
             round(workspace.length_m, 6),
             round(workspace.width_m, 6),
@@ -750,6 +899,36 @@ class MoveItScanPlanner:
         state.joint_state.position = [float(v) for v in joint_positions]
         return state
 
+    def _publish_rviz_goal_state(self, joint_positions: Sequence[float]) -> None:
+        """Update MoveIt RViz Query Goal State (orange ghost) during plan/execute."""
+        if self._rviz_goal_pub is None:
+            return
+        try:
+            self._rviz_goal_pub.publish(self._make_robot_state(joint_positions))
+        except Exception as exc:
+            sys.stderr.write(f"UR3e MoveIt: could not publish RViz goal state: {exc}\n")
+
+    def update_manual_target_preview(
+        self,
+        joint_positions: Sequence[float],
+        workspace: Optional[WorkspaceBox] = None,
+    ) -> Dict[str, Any]:
+        """Push the UI joint target into MoveIt/RViz and refresh the collision boundary."""
+        if len(joint_positions) != 6:
+            raise ValueError("Manual target must have 6 joint values.")
+
+        goal_joints = [float(v) for v in joint_positions]
+        with self._lock:
+            self._process_manager.ensure_running()
+            self._ensure_ros()
+            ws = workspace if workspace is not None else self._last_workspace
+            if ws is None:
+                ws = WorkspaceBox(enabled=True)
+            self._apply_workspace_collision(ws)
+            self._publish_rviz_goal_state(goal_joints)
+
+        return {"ok": True}
+
     @staticmethod
     def _joint_delta_rad(a: float, b: float) -> float:
         delta = float(b) - float(a)
@@ -941,8 +1120,14 @@ class MoveItScanPlanner:
             plan_start_seed = [float(v) for v in self.home_joints_rad()]
             self._last_plan_start_seed = list(plan_start_seed)
             multi_seed_recoveries = 0
+            total = len(targets)
+            sys.stderr.write(f"UR3e MoveIt: planning {total} scan pose(s)…\n")
 
-            for target in targets:
+            for pose_index, target in enumerate(targets):
+                if pose_index > 0 and pose_index % 10 == 0:
+                    sys.stderr.write(
+                        f"UR3e MoveIt: planned {pose_index}/{total} pose(s)…\n"
+                    )
                 pose = pose_target_to_ur_pose(target)
                 result = ScanPoseResult(index=target.index, reachable=False)
                 try:
@@ -976,6 +1161,10 @@ class MoveItScanPlanner:
                     "UR3e MoveIt: multi-seed IK recovered "
                     f"{multi_seed_recoveries} additional reachable pose(s).\n"
                 )
+            reachable = sum(1 for item in results if item.reachable)
+            sys.stderr.write(
+                f"UR3e MoveIt: plan complete — {reachable}/{total} reachable.\n"
+            )
 
             return results
 
@@ -1118,6 +1307,8 @@ class MoveItScanPlanner:
         """Run the planner attempts for one goal. Returns (ok, error_code, error_name)."""
         from moveit_msgs.msg import MoveItErrorCodes
 
+        self._publish_rviz_goal_state(goal_joints)
+
         last_code = MoveItErrorCodes.FAILURE
         last_name = "failure"
         for pipeline_id, planner_id in EXECUTE_PLANNER_ATTEMPTS:
@@ -1231,12 +1422,17 @@ class MoveItScanPlanner:
         tcp_target: Optional[Dict[str, Any]] = None,
         stop_event: Optional[threading.Event] = None,
         require_home_first: bool = False,
+        direct_only: bool = False,
     ) -> Dict[str, Any]:
         """Plan and execute one collision-aware joint-space motion via MoveIt.
 
         If there is no collision-free path directly from the current pose, retreat
         to the fixed home pose and approach the pin from there. If the pin is still
         unreachable, report it as skipped so the scan can continue.
+
+        When *direct_only* is True (manual joint Move), only attempt a path from the
+        current robot state; never retreat via home. Failures return MoveIt error names
+        (collision, IK, planning failed, etc.).
         """
         if stop_event is not None and stop_event.is_set():
             return {"ok": False, "stopped": True, "error": "stopped"}
@@ -1296,11 +1492,23 @@ class MoveItScanPlanner:
             # 1) Direct path from current pose (skipped when home-first is required).
             if not require_home_first:
                 motion_scale = self._motion_scale_for(current_joints, goal_joints)
-                ok, _code, _name = self._plan_and_execute_move(
+                ok, error_code, error_name = self._plan_and_execute_move(
                     goal_joints, move_client, motion_scale=motion_scale, stop_event=stop_event
                 )
                 if ok:
                     return {"ok": True, "executed": 1}
+                if direct_only:
+                    return {
+                        "ok": False,
+                        "error": error_name,
+                        "moveit_error_code": int(error_code),
+                    }
+
+            if direct_only:
+                return {
+                    "ok": False,
+                    "error": "home-first motion is not allowed for direct-only moves",
+                }
 
             # 2) Retreat to fixed home pose, then approach the pin.
             home_prefix = (

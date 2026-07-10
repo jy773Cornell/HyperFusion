@@ -877,7 +877,11 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
         }
         else if (section == QStringLiteral("ur3e"))
         {
-            if (key == QStringLiteral("wsl_distro"))
+            if (key == QStringLiteral("use_ur3e"))
+                config.ur3e.useUr3e =
+                    value.trimmed().toLower() == QStringLiteral("true") || value.trimmed() == QStringLiteral("1")
+                    || value.trimmed().toLower() == QStringLiteral("yes");
+            else if (key == QStringLiteral("wsl_distro"))
                 config.ur3e.wslDistro = value;
             else if (key == QStringLiteral("wsl_bash_command"))
                 config.ur3e.wslBashCommand = value;
@@ -955,15 +959,6 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                     warnings.push_back(QStringLiteral("Invalid ur3e max_linear_accel_m_per_s2: %1").arg(value));
                 else
                     config.ur3e.maxLinearAccelMPerS2 = numericValue;
-            }
-            else if (key == QStringLiteral("motion_type"))
-            {
-                const QString lower = value.trimmed().toLower();
-                if (lower == QStringLiteral("move_j") || lower == QStringLiteral("move_l"))
-                    config.ur3e.motionType = lower;
-                else
-                    warnings.push_back(
-                        QStringLiteral("Invalid ur3e motion_type (use move_j or move_l): %1").arg(value));
             }
             else if (key == QStringLiteral("workspace_boundary_enabled"))
             {
@@ -1162,6 +1157,8 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "fusion_timeout_ms = 3600000\n"
         << "\n"
         << "[ur3e]\n"
+        << "# Set use_ur3e = false to hide UR3e UI and skip WSL sidecar/driver.\n"
+        << "use_ur3e = true\n"
         << "# UR3e WSL sidecar (ROS 2). See resources/ur3e/README.md.\n"
         << "wsl_distro = Ubuntu\n"
         << "wsl_bash_command = \n"
@@ -1171,13 +1168,12 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "dashboard_port = 29999\n"
         << "rtde_port = 30004\n"
         << "prestart_driver = false\n"
-        << "connect_timeout_ms = 480000\n"
+        << "connect_timeout_ms = 120000\n"
         << "ros_distro = jazzy\n"
         << "ur_type = ur3e\n"
         << "use_mock_hardware = true\n"
         << "max_linear_speed_m_per_s = 0.05\n"
         << "max_linear_accel_m_per_s2 = 0.3\n"
-        << "motion_type = move_j\n"
         << "# Workspace boundary cube (mm). Tray centered at origin; Z=0 tray bottom, Z=height robot mount.\n"
         << "workspace_boundary_enabled = true\n"
         << "workspace_length_mm = 600\n"

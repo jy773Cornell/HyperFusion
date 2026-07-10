@@ -4,7 +4,10 @@ UR3e HTTP server for HyperFusion (WSL sidecar).
 
 Endpoints:
   GET  /health      -> sidecar + robot connection status
-  POST /connect     -> connect to UR controller
+  POST /connect     -> connect to UR controller (blocking)
+  POST /connect/start -> begin async connect (GUI)
+  GET  /connect/status -> poll async connect progress
+  POST /connect/cancel -> cancel async connect
   POST /disconnect  -> safe disconnect
   GET  /pose        -> current TCP pose [x,y,z,rx,ry,rz]
   GET  /joints      -> current joint names + positions (rad)
@@ -53,7 +56,14 @@ def get_bridge(args: argparse.Namespace) -> Ur3eRosBridge:
                 use_mock_hardware=args.use_mock_hardware,
                 initial_joint_deg=args.initial_joint_deg,
                 ceiling_mount_height_m=args.ceiling_mount_height_mm / 1000.0,
+                workspace_boundary_enabled=args.workspace_boundary_enabled,
+                workspace_length_m=args.workspace_length_mm / 1000.0,
+                workspace_width_m=args.workspace_width_mm / 1000.0,
             )
+            try:
+                _bridge.start_workspace_boundary_sync()
+            except Exception as exc:
+                sys.stderr.write(f"UR3e sidecar: workspace boundary keepalive start failed: {exc}\n")
         return _bridge
 
 
@@ -115,6 +125,24 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=float(cfg.get("ceiling_mount_height_m", 0.65)) * 1000.0,
         help="Ceiling mount height in mm (matches workspace_height_mm / Z=0 tray floor).",
     )
+    parser.add_argument(
+        "--workspace-boundary-enabled",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Publish workspace collision box into MoveIt/RViz.",
+    )
+    parser.add_argument(
+        "--workspace-length-mm",
+        type=float,
+        default=600.0,
+        help="Workspace tray length in mm (X axis).",
+    )
+    parser.add_argument(
+        "--workspace-width-mm",
+        type=float,
+        default=600.0,
+        help="Workspace tray width in mm (Y axis).",
+    )
     return parser
 
 
@@ -131,6 +159,8 @@ def _prestart_driver_async(args: argparse.Namespace) -> None:
             try:
                 bridge = get_bridge(args)
                 with bridge._lock:
+                    if bridge._connecting:
+                        return
                     if bridge._driver is not None:
                         bridge._driver.stop()
                         bridge._driver = None
@@ -141,8 +171,15 @@ def _prestart_driver_async(args: argparse.Namespace) -> None:
 
 
 def main() -> None:
+    import os
+
+    os.environ.setdefault("ROS_LOCALHOST_ONLY", "1")
+
     parser = build_arg_parser()
     args = parser.parse_args()
+    os.environ["HYPERFUSION_USE_MOCK_HARDWARE"] = (
+        "true" if args.use_mock_hardware else "false"
+    )
     args.initial_joint_deg = _parse_initial_joint_deg(args.initial_joint_deg)
 
     bridge_supplier = lambda: get_bridge(args)

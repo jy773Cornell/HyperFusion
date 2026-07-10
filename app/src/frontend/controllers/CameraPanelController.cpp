@@ -1094,7 +1094,7 @@ void CameraPanelController::setupStreamPipeline()
                 this,
                 [this](const int index) {
                     refreshWaterfallDisplayTargets();
-                    if (index == MainWindow::kStreamTabCapture && host_->capturePanel() != nullptr)
+                    if (index == host_->captureStreamTabIndex() && host_->capturePanel() != nullptr)
                         host_->capturePanel()->onCaptureStreamTabActivated();
                 });
     }

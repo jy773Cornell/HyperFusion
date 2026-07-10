@@ -147,13 +147,20 @@ private:
     static constexpr int kSettingsTabCamera = 0;
     static constexpr int kSettingsTabStage = 1;
     static constexpr int kSettingsTabLight = 2;
-    static constexpr int kSettingsTabUr3e = 3;
-    static constexpr int kSettingsTabCapture = 4;
+    static constexpr int kSettingsTabCaptureWhenUr3eEnabled = 4;
 
     static constexpr int kStreamTabCamera1 = 0;
     static constexpr int kStreamTabCamera2 = 1;
-    static constexpr int kStreamTabUr3e = 2;
-    static constexpr int kStreamTabCapture = 3;
+    static constexpr int kStreamTabCaptureWhenUr3eEnabled = 3;
+
+    bool useUr3e_ = true;
+    int ur3eSettingsTabIndex_ = -1;
+    int ur3eStreamTabIndex_ = -1;
+    int captureSettingsTabIndex_ = kSettingsTabCaptureWhenUr3eEnabled;
+    int captureStreamTabIndex_ = kStreamTabCaptureWhenUr3eEnabled;
+
+    [[nodiscard]] bool useUr3eEnabled() const { return useUr3e_; }
+    [[nodiscard]] int captureStreamTabIndex() const { return captureStreamTabIndex_; }
 
     // UR3e stream tab
     QWidget *ur3eStreamPage_ = nullptr;

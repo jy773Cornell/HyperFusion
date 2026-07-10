@@ -102,6 +102,8 @@ void Ur3eJointBarWidget::setValueRadians(const double valueRad)
 
     update();
 
+    emit targetChanged(targetRad_);
+
 }
 
 
@@ -119,6 +121,8 @@ void Ur3eJointBarWidget::syncTargetFromCurrent()
     targetRad_ = currentRad_;
 
     update();
+
+    emit targetChanged(targetRad_);
 
 }
 
@@ -164,9 +168,15 @@ void Ur3eJointBarWidget::setTargetFromPosition(const int x)
 
     const double span = maximumRad_ - minimumRad_;
 
-    targetRad_ = minimumRad_ + fraction * span;
+    const double newTargetRad = minimumRad_ + fraction * span;
+    if (std::abs(newTargetRad - targetRad_) < 0.0005)
+        return;
+
+    targetRad_ = newTargetRad;
 
     update();
+
+    emit targetChanged(targetRad_);
 
 }
 

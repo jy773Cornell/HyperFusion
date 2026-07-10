@@ -5,6 +5,8 @@
 #include <QProcess>
 #include <QString>
 
+#include <atomic>
+
 namespace hf::processing
 {
 class Gsam2ServerManager : public QObject
@@ -43,12 +45,18 @@ private:
     void setState(State state, const QString &detail = QString());
     QString buildLaunchCommand() const;
     void markUnavailable();
+    void checkHealthThenLaunch();
+    void launchServerProcess();
+    void scheduleNextHealthPoll(int delayMs);
+    void handleHealthPollResult(bool ok, const QString &error);
 
     QProcess process_;
     State state_ = State::Unavailable;
     QString lastDetail_;
     int healthPollAttempts_ = 0;
     bool silentMode_ = false;
+    std::atomic<int> startupGeneration_{0};
+    std::atomic<bool> healthPollInFlight_{false};
 };
 
 } // namespace hf::processing

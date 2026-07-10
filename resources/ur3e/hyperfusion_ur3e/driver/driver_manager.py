@@ -16,6 +16,7 @@ HW_JOINT_STATES_TOPIC = "/joint_states"
 STAMPER_BIN = PKG_ROOT / "venv" / "bin" / "joint_states_stamper"
 INITIAL_POSITIONS_PATH = PKG_ROOT / "config" / "initial_positions.yaml"
 HYPERFUSION_RSP_LAUNCH = PKG_ROOT / "launch" / "hyperfusion_ur_rsp.launch.py"
+HYPERFUSION_CONTROL_LAUNCH = PKG_ROOT / "launch" / "hyperfusion_ur_control.launch.py"
 HYPERFUSION_CONTROLLERS_PATH = PKG_ROOT / "config" / "ur_controllers_hyperfusion.yaml"
 
 CANONICAL_JOINT_NAMES = [
@@ -119,14 +120,24 @@ class Ur3eRosDriverManager:
         rsp_launch = HYPERFUSION_RSP_LAUNCH.as_posix()
         controllers_file = HYPERFUSION_CONTROLLERS_PATH.as_posix()
         pkg_root = PKG_ROOT.as_posix()
+        ros_env = (
+            "export ROS_LOCALHOST_ONLY=1 && "
+            "export RCUTILS_COLORIZED_OUTPUT=0 && "
+        )
+        if self.use_mock_hardware:
+            control_launch = HYPERFUSION_CONTROL_LAUNCH.as_posix()
+            launch_target = control_launch
+        else:
+            launch_target = "ur_robot_driver ur_control.launch.py"
         launch_cmd = (
             f"export HYPERFUSION_UR3E_REPO='{pkg_root}' && "
             f"export HYPERFUSION_USE_MOCK_HARDWARE='{mock_flag}' && "
             f"export HYPERFUSION_MOCK_SENSOR_COMMANDS='{mock_sensor_flag}' && "
             f"export HYPERFUSION_CEILING_MOUNT='{ceiling_flag}' && "
             f"export HYPERFUSION_CEILING_MOUNT_HEIGHT_M='{self.ceiling_mount_height_m:.6f}' && "
+            f"{ros_env}"
             f"source /opt/ros/{self.ros_distro}/setup.bash && "
-            "ros2 launch ur_robot_driver ur_control.launch.py "
+            f"ros2 launch {launch_target} "
             f"ur_type:={self.ur_type} "
             f"robot_ip:={self.robot_ip} "
             f"reverse_ip:={self.reverse_ip} "
@@ -181,6 +192,7 @@ class Ur3eRosDriverManager:
             )
 
         stamper_cmd = (
+            f"export ROS_LOCALHOST_ONLY=1 && "
             f"source /opt/ros/{self.ros_distro}/setup.bash && "
             f"exec {STAMPER_BIN.as_posix()}"
         )
@@ -305,17 +317,27 @@ class Ur3eRosDriverManager:
 
             if self._verify_controller_manager(raise_on_failure=False):
                 if attempt > 0:
-                    sys.stderr.write(
-                        f"UR3e driver: controller manager ready after {attempt} poll(s).\n"
-                    )
+                    if self.use_mock_hardware:
+                        sys.stderr.write(
+                            f"UR3e driver: mock driver ready (joint_states) after {attempt} poll(s).\n"
+                        )
+                    else:
+                        sys.stderr.write(
+                            f"UR3e driver: controller manager ready after {attempt} poll(s).\n"
+                        )
                 return
 
             attempt += 1
             if attempt == 1:
-                sys.stderr.write(
-                    "UR3e driver: waiting for controller manager (may take up to ~2 min)…\n"
-                )
-            elif attempt % 10 == 0:
+                if self.use_mock_hardware:
+                    sys.stderr.write(
+                        "UR3e driver: waiting for mock driver (joint_states publishing, ~30s)…\n"
+                    )
+                else:
+                    sys.stderr.write(
+                        "UR3e driver: waiting for controller manager (may take up to ~2 min)…\n"
+                    )
+            elif attempt % 5 == 0:
                 elapsed = int(timeout_s - max(0.0, deadline - time.time()))
                 sys.stderr.write(f"UR3e driver: still waiting for controller manager ({elapsed}s)…\n")
             time.sleep(2.0)
@@ -369,13 +391,47 @@ class Ur3eRosDriverManager:
         except Exception:
             return False
 
+    def _mock_joint_states_available(self, *, topic_timeout_s: float = 4.0) -> bool:
+        """Fallback readiness probe when ros2 control CLI is slow on WSL."""
+        wait_s = max(1, int(topic_timeout_s))
+        for topic in (
+            "/joint_state_broadcaster/joint_states",
+            "/joint_states",
+        ):
+            proc = subprocess.run(
+                [
+                    "bash",
+                    "-lc",
+                    f"export ROS_LOCALHOST_ONLY=1 && "
+                    f"source /opt/ros/{self.ros_distro}/setup.bash && "
+                    f"timeout {wait_s} ros2 topic hz {topic} --window 1 2>/dev/null | "
+                    "head -1 | grep -q average",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            if proc.returncode == 0:
+                return True
+        return False
+
     def _verify_controller_manager(self, *, raise_on_failure: bool = True) -> bool:
+        if self.use_mock_hardware:
+            if self._mock_joint_states_available():
+                return True
+            if not raise_on_failure:
+                return False
+            raise RuntimeError(
+                "UR mock driver: joint_states not publishing yet "
+                "(check hyperfusion_ur_control.launch.py spawner in WSL logs)."
+            )
+
         proc = subprocess.run(
             [
                 "bash",
                 "-lc",
+                f"export ROS_LOCALHOST_ONLY=1 && "
                 f"source /opt/ros/{self.ros_distro}/setup.bash && "
-                "timeout 4 ros2 control list_controllers",
+                "timeout 8 ros2 control list_controllers",
             ],
             capture_output=True,
             text=True,
@@ -391,8 +447,8 @@ class Ur3eRosDriverManager:
                 if joint_controller in line and "active" in line:
                     return True
             if (
-                not self.use_mock_hardware
-                and joint_controller in output and self._script_sender_port_listening()
+                joint_controller in output
+                and self._script_sender_port_listening()
             ):
                 sys.stderr.write(
                     "UR3e driver: controller manager up, port 50002 listening — "

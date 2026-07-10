@@ -24,6 +24,7 @@ struct Ur3eHealthStatus
     bool ok = false;
     bool useMockHardware = true;
     bool robotConnected = false;
+    bool driverReady = false;
     QString driverState;
     QString robotIp;
     QString fault;
@@ -35,6 +36,23 @@ struct Ur3eConnectResult
     QString errorMessage;
     bool useMockHardware = true;
     QString driverState;
+};
+
+struct Ur3eConnectAsyncStatus
+{
+    bool ok = false;
+    bool inProgress = false;
+    bool alreadyConnected = false;
+    bool useMockHardware = true;
+    bool reverseConnected = false;
+    bool scriptPortListening = false;
+    bool robotConnected = false;
+    QString phase;
+    QString message;
+    QString errorMessage;
+    QString driverState;
+    QString robotIp;
+    QString reverseIp;
 };
 
 struct Ur3ePoseResult
@@ -87,6 +105,19 @@ Ur3eConnectResult ur3eConnectRobot(const QString &serverUrl,
                                    const QString &robotIp,
                                    QString *errorMessage = nullptr);
 
+bool ur3eConnectStart(const QString &serverUrl,
+                      const QString &robotIp,
+                      Ur3eConnectAsyncStatus *status = nullptr,
+                      QString *errorMessage = nullptr);
+
+bool ur3eConnectStatus(const QString &serverUrl,
+                       Ur3eConnectAsyncStatus *status,
+                       QString *errorMessage = nullptr);
+
+bool ur3eConnectCancel(const QString &serverUrl, QString *errorMessage = nullptr);
+
+bool ur3eSidecarSupportsAsyncConnect(const QString &serverUrl, QString *errorMessage = nullptr);
+
 Ur3eConnectResult ur3eDisconnectRobot(const QString &serverUrl, QString *errorMessage = nullptr);
 
 Ur3ePoseResult ur3eGetTcpPose(const QString &serverUrl, QString *errorMessage = nullptr);
@@ -109,12 +140,19 @@ Ur3eScanWaypointMoveResult ur3eExecuteScanWaypoint(const QString &serverUrl,
                                                    const std::vector<double> &positionsRad,
                                                    const Ur3eScanTcpPose *tcpPose = nullptr,
                                                    QString *errorMessage = nullptr,
-                                                   bool requireHomeFirst = false);
+                                                   const bool requireHomeFirst = false,
+                                                   const bool directOnly = false);
 
 Ur3eScanWaypointMoveResult ur3eExecuteMoveHome(const QString &serverUrl,
                                                QString *errorMessage = nullptr);
 
 bool ur3eStopMotion(const QString &serverUrl, QString *errorMessage = nullptr);
+
+bool ur3ePreviewManualTarget(const QString &serverUrl,
+                             const std::vector<double> &positionsRad,
+                             QString *errorMessage = nullptr);
+
+bool ur3eSyncWorkspaceBoundary(const QString &serverUrl, QString *errorMessage = nullptr);
 
 QJsonObject ur3ePostJsonRequest(const QString &serverUrl,
                                 const QString &path,

@@ -56,6 +56,7 @@ qt_add_executable(app WIN32
     src/frontend/widgets/StageAxisWidget.cpp
     src/frontend/widgets/IntensityBarWidget.cpp
     src/frontend/widgets/OperationWaitDialog.cpp
+    src/frontend/widgets/Ur3eExternalControlWaitDialog.cpp
     src/frontend/widgets/WaterfallDisplayWidget.cpp
     src/frontend/widgets/StreamPaneHelpers.cpp
     src/frontend/widgets/CameraStreamTabBuilder.cpp
@@ -86,6 +87,7 @@ qt_add_executable(app WIN32
     src/frontend/processing/WavelengthLookup.cpp
     include/frontend/widgets/MainWindow.hpp
     include/frontend/widgets/OperationWaitDialog.hpp
+    include/frontend/widgets/Ur3eExternalControlWaitDialog.hpp
     include/frontend/widgets/DetectorCrosshairWidget.hpp
     include/frontend/widgets/ProfilePlotWidget.hpp
     include/frontend/widgets/StageAxisWidget.hpp
@@ -156,6 +158,7 @@ qt_add_executable(app WIN32
     src/backend/ur3e/Ur3eMoveItManager.cpp
     src/backend/ur3e/Ur3eRvizManager.cpp
     src/backend/ur3e/Ur3eServerManager.cpp
+    src/backend/ur3e/Ur3eWslSetup.cpp
     src/backend/ur3e/Ur3eWslLogUtil.cpp
     src/backend/ur3e/Ur3eWslPathUtil.cpp
     src/backend/camera/processing/IlluminantTables.cpp
@@ -193,6 +196,7 @@ qt_add_executable(app WIN32
     include/backend/ur3e/Ur3eHemisphereScanReachability.hpp
     include/backend/ur3e/Ur3eWorkspaceBoundary.hpp
     include/backend/ur3e/Ur3eServerManager.hpp
+    include/backend/ur3e/Ur3eWslSetup.hpp
     include/backend/ur3e/Ur3eMoveItManager.hpp
     include/backend/ur3e/Ur3eRvizManager.hpp
     include/backend/ur3e/Ur3eWslLogUtil.hpp
@@ -324,6 +328,10 @@ else()
 endif()
 
 target_link_libraries(app PRIVATE Qt6::Widgets Qt6::Core Qt6::Network)
+
+if(WIN32)
+    target_link_libraries(app PRIVATE shell32)
+endif()
 
 if(WIN32)
     target_sources(app PRIVATE resources/app.rc)

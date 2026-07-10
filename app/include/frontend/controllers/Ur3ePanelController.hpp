@@ -8,6 +8,7 @@
 
 #include "backend/ur3e/Ur3eHemisphereScanReachability.hpp"
 #include "backend/ur3e/Ur3eServerManager.hpp"
+#include "backend/ur3e/Ur3eClient.hpp"
 
 #include <atomic>
 #include <memory>
@@ -17,6 +18,7 @@
 
 class MainWindow;
 class QTimer;
+class Ur3eExternalControlWaitDialog;
 
 namespace hf::ur3e
 {
@@ -65,6 +67,7 @@ private:
         bool success = false;
         bool alreadyAtHome = false;
         bool cancelled = false;
+        bool atHomeVerified = false;
     };
 
     [[nodiscard]] HomeEnsureOutcome ensureRobotAtHomeSync(HomeEnsureContext context);
@@ -85,7 +88,13 @@ private:
                            const QStringList &names = QStringList());
     void setJointPollIntervalMs(int intervalMs);
     void applyConfiguredInitialJointTargets();
+    void applyScanHomeJointTargets();
+    void beginHomeMotionUi();
+    void endHomeMotionUi();
+    void scheduleManualTargetPreview();
+    void pushManualTargetPreview();
     void syncWorkspaceBoundaryPreview();
+    void pushWorkspaceBoundaryToMoveIt();
     void syncTargetsFromCurrent();
     void setBusy(bool busy);
 
@@ -123,6 +132,7 @@ private slots:
                            int executedCount,
                            bool stopped);
     void applyPolledJoints(const QVariantList &positionsRad, const QStringList &names);
+    void syncHomeJointTargetSliders();
 
 private:
     void finishConnect(bool ok, const QString &detail);
@@ -132,8 +142,21 @@ private:
     void finishScanPlan(const Ur3eHemisphereScanPlan &plan, const QString &errorMessage);
     void finishScanExecute(bool ok, const QString &detail);
 
+    void dismissConnectWaitDialog();
+    void applyConnectAsyncStatus(const Ur3eConnectAsyncStatus &status);
+    void updateConnectDialogFromSidecarLine(const QString &line);
+    void onConnectPollTick();
+    void onConnectCountdownTick();
+    void onConnectDialogCancelled();
+    void onConnectTimedOut();
+    void pollDriverPrestartReady();
+    void onBoundarySyncTick();
+
     static constexpr int kPosePollIntervalMs = 500;
     static constexpr int kMotionPollIntervalMs = 100;
+    static constexpr int kConnectPollIntervalMs = 1500;
+    static constexpr int kDriverReadyPollIntervalMs = 2000;
+    static constexpr int kBoundarySyncIntervalMs = 5000;
     static constexpr int kScanExecuteDwellMs = 2000;
 
     MainWindow *host_ = nullptr;
@@ -155,6 +178,24 @@ private:
     std::mutex jointPollThreadMutex_;
     std::thread jointPollThread_;
     Ur3eServerManager::State lastLoggedSidecarState_ = Ur3eServerManager::State::Stopped;
+
+    Ur3eExternalControlWaitDialog *connectWaitDialog_ = nullptr;
+    QTimer *connectPollTimer_ = nullptr;
+    QTimer *connectCountdownTimer_ = nullptr;
+    qint64 connectDeadlineMs_ = 0;
+    std::atomic<int> connectSessionId_{0};
+    bool connectInProgress_ = false;
+    std::atomic<bool> connectPollInFlight_{false};
+    QString lastConnectStatusPhase_;
+    QString lastConnectStatusMessage_;
+
+    bool driverPrestartReady_ = false;
+    QTimer *driverReadyPollTimer_ = nullptr;
+    std::atomic<bool> driverReadyPollInFlight_{false};
+    std::atomic<bool> manualTargetPreviewInFlight_{false};
+    std::atomic<bool> manualTargetPreviewPending_{false};
+    std::atomic<bool> boundarySyncInFlight_{false};
+    QTimer *boundarySyncTimer_ = nullptr;
 };
 
 } // namespace hf::ur3e

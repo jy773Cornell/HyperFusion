@@ -198,6 +198,12 @@ QString Ur3eServerManager::buildLaunchCommand() const
     }
     serverArgs += QStringLiteral(" --ceiling-mount-height-mm %1")
                       .arg(cfg.workspaceHeightMm, 0, 'f', 1);
+    if (cfg.workspaceBoundaryEnabled)
+        serverArgs += QStringLiteral(" --workspace-boundary-enabled");
+    else
+        serverArgs += QStringLiteral(" --no-workspace-boundary-enabled");
+    serverArgs += QStringLiteral(" --workspace-length-mm %1").arg(cfg.workspaceLengthMm, 0, 'f', 1);
+    serverArgs += QStringLiteral(" --workspace-width-mm %1").arg(cfg.workspaceWidthMm, 0, 'f', 1);
 
     const QString extraShell = cfg.wslBashCommand.trimmed();
     const QString rosDistro = cfg.rosDistro.trimmed().isEmpty() ? QStringLiteral("jazzy")
@@ -206,9 +212,11 @@ QString Ur3eServerManager::buildLaunchCommand() const
 
     QString inner;
     if (extraShell.isEmpty())
-        inner = QStringLiteral("cd '%1' && %2 && %3").arg(repoLinux, rosSource, serverArgs);
+        inner = QStringLiteral("cd '%1' && export PYTHONUNBUFFERED=1 && %2 && %3")
+                    .arg(repoLinux, rosSource, serverArgs);
     else
-        inner = QStringLiteral("cd '%1' && %2 && %3 && %4").arg(repoLinux, rosSource, extraShell, serverArgs);
+        inner = QStringLiteral("cd '%1' && export PYTHONUNBUFFERED=1 && %2 && %3 && %4")
+                    .arg(repoLinux, rosSource, extraShell, serverArgs);
     return inner;
 }
 
@@ -222,11 +230,11 @@ void Ur3eServerManager::beginAsyncCleanup()
 
     // Clear leftover CLI / prior-session UR ROS processes before binding server_port.
     const QString cleanup = QStringLiteral(
-        "pkill -f ur_control.launch.py 2>/dev/null || true; "
-        "pkill -f ros2_control_node 2>/dev/null || true; "
-        "pkill -f joint_states_stamper 2>/dev/null || true; "
-        "pkill -f ur3e_server 2>/dev/null || true; "
-        "pkill -f hyperfusion_ur3e.sidecar.server 2>/dev/null || true; "
+        "pkill -f '[u]r_control.launch.py' 2>/dev/null || true; "
+        "pkill -f '[r]os2_control_node' 2>/dev/null || true; "
+        "pkill -f '[j]oint_states_stamper' 2>/dev/null || true; "
+        "pkill -f '[u]r3e_server' 2>/dev/null || true; "
+        "pkill -f '[h]yperfusion_ur3e.sidecar.server' 2>/dev/null || true; "
         "sleep 2");
 
     cleanupProcess_.setProgram(QStringLiteral("wsl.exe"));
@@ -257,14 +265,14 @@ void Ur3eServerManager::checkHealthThenLaunch()
 
         QMetaObject::invokeMethod(
             this,
-            [this, generation, alreadyRunning, health]() {
+            [this, generation, alreadyRunning, health, url]() {
                 if (generation != startupGeneration_.load(std::memory_order_acquire)
                     || state_ != State::Starting)
                 {
                     return;
                 }
 
-                if (alreadyRunning)
+                if (alreadyRunning && ur3eSidecarSupportsAsyncConnect(url))
                 {
                     const QString detail =
                         health.useMockHardware ? QStringLiteral("Connected (simulation)")
@@ -313,6 +321,9 @@ void Ur3eServerManager::launchServerProcess()
 
 void Ur3eServerManager::tryAutoStart()
 {
+    if (!hf::hardwareConfig().ur3e.useUr3e)
+        return;
+
     if (state_ == State::Starting || state_ == State::Running)
         return;
 
@@ -327,6 +338,9 @@ void Ur3eServerManager::tryAutoStart()
 
 void Ur3eServerManager::startServer()
 {
+    if (!hf::hardwareConfig().ur3e.useUr3e)
+        return;
+
     if (state_ == State::Starting || state_ == State::Running)
         return;
 

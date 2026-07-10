@@ -5,7 +5,10 @@
 #include "backend/camera/processing/Gsam2SegmentationClient.hpp"
 #include "backend/camera/processing/GsamWslPathUtil.hpp"
 
+#include <QMetaObject>
 #include <QTimer>
+
+#include <thread>
 
 namespace hf::processing
 {
@@ -55,6 +58,25 @@ Gsam2ServerManager::Gsam2ServerManager(QObject *parent)
                 setState(State::Stopped);
             }
         });
+
+    connect(&process_, &QProcess::started, this, [this]() {
+        if (state_ != State::Starting)
+            return;
+
+        healthPollAttempts_ = 0;
+        scheduleNextHealthPoll(2000);
+    });
+
+    connect(&process_, &QProcess::errorOccurred, this, [this](const QProcess::ProcessError) {
+        if (state_ != State::Starting)
+            return;
+
+        if (silentMode_)
+            markUnavailable();
+        else
+            setState(State::Failed,
+                     QStringLiteral("Failed to start wsl.exe: %1").arg(process_.errorString()));
+    });
 }
 
 QString Gsam2ServerManager::statusText() const
@@ -157,14 +179,54 @@ void Gsam2ServerManager::startServer()
         return;
     }
 
-    bool modelLoaded = false;
-    if (gsam2ServerHealthCheck(serverUrl(), &modelLoaded))
-    {
-        setState(State::Running,
-                 modelLoaded ? QStringLiteral("Connected (models loaded)")
-                             : QStringLiteral("Connected"));
+    ++startupGeneration_;
+    healthPollInFlight_.store(false, std::memory_order_release);
+    healthPollAttempts_ = 0;
+
+    if (!silentMode_)
+        setState(State::Starting, QStringLiteral("Launching WSL GSAM2 server\u2026"));
+    else
+        setState(State::Starting);
+
+    checkHealthThenLaunch();
+}
+
+void Gsam2ServerManager::checkHealthThenLaunch()
+{
+    const int generation = startupGeneration_.load(std::memory_order_acquire);
+    const QString url = serverUrl();
+
+    std::thread([this, generation, url]() {
+        bool modelLoaded = false;
+        const bool alreadyRunning = gsam2ServerHealthCheck(url, &modelLoaded);
+
+        QMetaObject::invokeMethod(
+            this,
+            [this, generation, alreadyRunning, modelLoaded]() {
+                if (generation != startupGeneration_.load(std::memory_order_acquire)
+                    || state_ != State::Starting)
+                {
+                    return;
+                }
+
+                if (alreadyRunning)
+                {
+                    setState(State::Running,
+                             modelLoaded ? QStringLiteral("Connected (models loaded)")
+                                         : QStringLiteral("Connected"));
+                    return;
+                }
+
+                launchServerProcess();
+            },
+            Qt::QueuedConnection);
+    }).detach();
+}
+
+void Gsam2ServerManager::launchServerProcess()
+{
+    if (state_ != State::Starting)
         return;
-    }
 
     const hf::HardwareConfig::SegmentationConfig &cfg = hf::hardwareConfig().segmentation;
     const QString inner = buildLaunchCommand();
@@ -174,42 +236,28 @@ void Gsam2ServerManager::startServer()
         arguments << QStringLiteral("-d") << cfg.wslDistro.trimmed();
     arguments << QStringLiteral("--") << QStringLiteral("bash") << QStringLiteral("-lc") << inner;
 
-    if (!silentMode_)
-        setState(State::Starting, QStringLiteral("Launching WSL GSAM2 server\u2026"));
-    else
-        setState(State::Starting);
+    if (process_.state() != QProcess::NotRunning)
+    {
+        process_.kill();
+        process_.waitForFinished(500);
+    }
 
-    healthPollAttempts_ = 0;
     process_.setProgram(QStringLiteral("wsl.exe"));
     process_.setArguments(arguments);
     process_.start();
-
-    if (!process_.waitForStarted(10000))
-    {
-        if (silentMode_)
-            markUnavailable();
-        else
-            setState(State::Failed, QStringLiteral("Failed to start wsl.exe: %1").arg(process_.errorString()));
-        return;
-    }
-
-    QTimer::singleShot(2000, this, &Gsam2ServerManager::pollHealth);
 }
 
-void Gsam2ServerManager::pollHealth()
+void Gsam2ServerManager::scheduleNextHealthPoll(const int delayMs)
 {
+    QTimer::singleShot(delayMs, this, &Gsam2ServerManager::pollHealth);
+}
+
+void Gsam2ServerManager::handleHealthPollResult(const bool /*ok*/, const QString &error)
+{
+    healthPollInFlight_.store(false, std::memory_order_release);
+
     if (state_ != State::Starting)
         return;
-
-    bool modelLoaded = false;
-    QString error;
-    if (gsam2ServerHealthCheck(serverUrl(), &modelLoaded, &error))
-    {
-        setState(State::Running,
-                 modelLoaded ? QStringLiteral("Connected (models loaded)")
-                             : QStringLiteral("Connected (warming up on first request)"));
-        return;
-    }
 
     ++healthPollAttempts_;
     if (healthPollAttempts_ >= 600)
@@ -219,8 +267,7 @@ void Gsam2ServerManager::pollHealth()
         else
         {
             setState(State::Failed,
-                     error.isEmpty() ? QStringLiteral("GSAM2 server did not become ready.")
-                                     : error);
+                     error.isEmpty() ? QStringLiteral("GSAM2 server did not become ready.") : error);
         }
         return;
     }
@@ -238,12 +285,54 @@ void Gsam2ServerManager::pollHealth()
         return;
     }
 
-    QTimer::singleShot(1000, this, &Gsam2ServerManager::pollHealth);
+    scheduleNextHealthPoll(1000);
+}
+
+void Gsam2ServerManager::pollHealth()
+{
+    if (state_ != State::Starting)
+        return;
+
+    if (healthPollInFlight_.exchange(true, std::memory_order_acq_rel))
+        return;
+
+    const int generation = startupGeneration_.load(std::memory_order_acquire);
+    const QString url = serverUrl();
+
+    std::thread([this, generation, url]() {
+        bool modelLoaded = false;
+        QString error;
+        const bool ok = gsam2ServerHealthCheck(url, &modelLoaded, &error);
+
+        QMetaObject::invokeMethod(
+            this,
+            [this, generation, ok, error, modelLoaded]() {
+                if (generation != startupGeneration_.load(std::memory_order_acquire))
+                {
+                    healthPollInFlight_.store(false, std::memory_order_release);
+                    return;
+                }
+
+                if (ok)
+                {
+                    healthPollInFlight_.store(false, std::memory_order_release);
+                    setState(State::Running,
+                             modelLoaded ? QStringLiteral("Connected (models loaded)")
+                                         : QStringLiteral("Connected (warming up on first request)"));
+                    return;
+                }
+
+                handleHealthPollResult(false, error);
+            },
+            Qt::QueuedConnection);
+    }).detach();
 }
 
 void Gsam2ServerManager::stopServer()
 {
     silentMode_ = false;
+    ++startupGeneration_;
+    healthPollInFlight_.store(false, std::memory_order_release);
 
     if (state_ == State::Running || state_ == State::Starting)
     {

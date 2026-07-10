@@ -9,12 +9,15 @@
 #include "backend/ur3e/Ur3eMoveItManager.hpp"
 #include "backend/ur3e/Ur3eRvizManager.hpp"
 #include "backend/ur3e/Ur3eServerManager.hpp"
+#include "backend/ur3e/Ur3eWslSetup.hpp"
 #include "frontend/widgets/MainWindow.hpp"
+#include "frontend/widgets/Ur3eExternalControlWaitDialog.hpp"
 #include "frontend/widgets/Ur3eHemisphereScanSettingsWidget.hpp"
 #include "frontend/widgets/Ur3eJointBarWidget.hpp"
 #include "frontend/widgets/Ur3eScanRoutePlanWidget.hpp"
 
 #include <QLineEdit>
+#include <QDateTime>
 #include <QMessageBox>
 #include <QAbstractButton>
 #include <QMetaObject>
@@ -154,10 +157,29 @@ Ur3ePanelController::Ur3ePanelController(MainWindow *host, QObject *parent)
             &Ur3eRvizManager::stateChanged,
             this,
             &Ur3ePanelController::onRvizStateChanged);
+
+    connectPollTimer_ = new QTimer(this);
+    connectPollTimer_->setInterval(kConnectPollIntervalMs);
+    connect(connectPollTimer_, &QTimer::timeout, this, &Ur3ePanelController::onConnectPollTick);
+
+    connectCountdownTimer_ = new QTimer(this);
+    connectCountdownTimer_->setInterval(1000);
+    connect(connectCountdownTimer_, &QTimer::timeout, this, &Ur3ePanelController::onConnectCountdownTick);
+
+    driverReadyPollTimer_ = new QTimer(this);
+    driverReadyPollTimer_->setInterval(kDriverReadyPollIntervalMs);
+    connect(driverReadyPollTimer_, &QTimer::timeout, this, &Ur3ePanelController::pollDriverPrestartReady);
+
+    boundarySyncTimer_ = new QTimer(this);
+    boundarySyncTimer_->setInterval(kBoundarySyncIntervalMs);
+    connect(boundarySyncTimer_, &QTimer::timeout, this, &Ur3ePanelController::onBoundarySyncTick);
+
+    driverPrestartReady_ = !hf::hardwareConfig().ur3e.prestartDriver;
 }
 
 Ur3ePanelController::~Ur3ePanelController()
 {
+    dismissConnectWaitDialog();
     (void)shutdownSync();
 }
 
@@ -186,10 +208,28 @@ void Ur3ePanelController::startSidecarOnLaunch()
         return;
 
     const hf::HardwareConfig::Ur3eConfig &cfg = hf::hardwareConfig().ur3e;
-    host_->appendLog(QStringLiteral("UR3e: starting WSL sidecar (use_mock_hardware=%1, prestart_driver=%2)\u2026")
-                        .arg(cfg.useMockHardware ? QStringLiteral("true") : QStringLiteral("false"))
+    if (!cfg.useUr3e)
+        return;
+
+    host_->appendLog(QStringLiteral(
+        "UR3e: preparing WSL (%1, prestart_driver=%2)\u2026")
+                        .arg(cfg.useMockHardware ? QStringLiteral("simulation startup")
+                                                 : QStringLiteral("network setup + cleanup"))
                         .arg(cfg.prestartDriver ? QStringLiteral("true") : QStringLiteral("false")));
-    serverManager_->tryAutoStart();
+
+    std::thread([this]() {
+        QString setupDetail;
+        (void)runUr3eStartupSetupOnce(&setupDetail);
+        QMetaObject::invokeMethod(
+            this,
+            [this, setupDetail]() {
+                if (!setupDetail.isEmpty())
+                    host_->appendLog(QStringLiteral("UR3e: %1").arg(setupDetail));
+                host_->appendLog(QStringLiteral("UR3e: starting sidecar\u2026"));
+                serverManager_->tryAutoStart();
+            },
+            Qt::QueuedConnection);
+    }).detach();
 }
 
 void Ur3ePanelController::refreshUi()
@@ -199,9 +239,16 @@ void Ur3ePanelController::refreshUi()
 
 bool Ur3ePanelController::shutdownSync()
 {
+    if (!hf::hardwareConfig().ur3e.useUr3e)
+        return true;
+
     shutdownRequested_.store(true, std::memory_order_release);
     stopRequested_.store(true, std::memory_order_release);
     ++scanExecuteSessionId_;
+
+    if (connectInProgress_)
+        onConnectDialogCancelled();
+
     scanExecuting_ = false;
     motionInProgress_ = false;
 
@@ -221,16 +268,23 @@ bool Ur3ePanelController::shutdownSync()
 
     if (robotConnected_ && serverManager_ != nullptr && serverManager_->isServerConnected())
     {
+        beginHomeMotionUi();
         const HomeEnsureOutcome homeOutcome =
             ensureRobotAtHomeSync(HomeEnsureContext::BeforeShutdown);
+        endHomeMotionUi();
         if (homeOutcome.cancelled)
         {
             shutdownRequested_.store(false, std::memory_order_release);
             stopRequested_.store(false, std::memory_order_release);
             if (host_->ur3ePosePollTimer_ != nullptr)
                 host_->ur3ePosePollTimer_->start(kPosePollIntervalMs);
+            pollJointsSync();
+            syncTargetsFromCurrent();
             return false;
         }
+        pollJointsSync();
+        if (homeOutcome.atHomeVerified)
+            applyScanHomeJointTargets();
     }
 
     if (robotConnected_ && serverManager_ != nullptr && serverManager_->isServerConnected())
@@ -268,6 +322,16 @@ void Ur3ePanelController::wireSettingsTabConnections()
         connect(host_->ur3eMoveBtn_, &QPushButton::clicked, this, [this]() {
             onMoveRequested();
         });
+    }
+    for (int jointIndex = 0; jointIndex < MainWindow::kUr3eJointCount; ++jointIndex)
+    {
+        ui::Ur3eJointBarWidget *bar = host_->ur3eJointBars_[jointIndex];
+        if (bar == nullptr)
+            continue;
+        connect(bar,
+                &ui::Ur3eJointBarWidget::targetChanged,
+                this,
+                [this](const double) { scheduleManualTargetPreview(); });
     }
     if (host_->ur3eStopMotionBtn_ != nullptr)
     {
@@ -316,6 +380,7 @@ void Ur3ePanelController::wireSettingsTabConnections()
                         host_->ur3eScanRoutePlanWidget_->setScanParams(
                             host_->ur3eHemisphereScanSettings_->params());
                     }
+                    scheduleManualTargetPreview();
                     updateRobotUi();
                 });
     }
@@ -329,13 +394,19 @@ void Ur3ePanelController::wireSettingsTabConnections()
 void Ur3ePanelController::onSidecarStateChanged(const Ur3eServerManager::State state,
                                                   const QString &detail)
 {
+    bool sidecarStateChanged = false;
     if (serverManager_ != nullptr)
     {
         const bool stateChanged = state != lastLoggedSidecarState_;
+        sidecarStateChanged = stateChanged;
         if (stateChanged)
         {
             lastLoggedSidecarState_ = state;
-            if (state == Ur3eServerManager::State::Running
+            if (state == Ur3eServerManager::State::Starting)
+            {
+                host_->appendLog(QStringLiteral("UR3e sidecar: starting (driver may take up to 2 min)\u2026"));
+            }
+            else if (state == Ur3eServerManager::State::Running
                 || state == Ur3eServerManager::State::Failed
                 || state == Ur3eServerManager::State::Unavailable)
             {
@@ -351,7 +422,15 @@ void Ur3ePanelController::onSidecarStateChanged(const Ur3eServerManager::State s
                 const QString trimmed = line.trimmed();
                 if (trimmed.isEmpty() || trimmed.contains(QStringLiteral("GET /health"), Qt::CaseInsensitive))
                     continue;
+                if (connectInProgress_
+                    && (trimmed.contains(QStringLiteral("connect phase="), Qt::CaseInsensitive)
+                        || trimmed.contains(QStringLiteral("GET /connect/status"), Qt::CaseInsensitive)))
+                {
+                    updateConnectDialogFromSidecarLine(trimmed);
+                    continue;
+                }
                 host_->appendLog(trimmed);
+                updateConnectDialogFromSidecarLine(trimmed);
             }
         }
     }
@@ -359,12 +438,36 @@ void Ur3ePanelController::onSidecarStateChanged(const Ur3eServerManager::State s
     if (!isSidecarRunning())
     {
         robotConnected_ = false;
+        driverPrestartReady_ = false;
+        if (driverReadyPollTimer_ != nullptr)
+            driverReadyPollTimer_->stop();
+        if (boundarySyncTimer_ != nullptr)
+            boundarySyncTimer_->stop();
         if (host_->ur3ePosePollTimer_ != nullptr)
             host_->ur3ePosePollTimer_->stop();
         updateRobotUi();
     }
     else
     {
+        if (boundarySyncTimer_ != nullptr && !boundarySyncTimer_->isActive())
+            boundarySyncTimer_->start();
+        // Only (re)start the driver-ready poll on an actual transition into Running.
+        if (state == Ur3eServerManager::State::Running && sidecarStateChanged)
+        {
+            pushWorkspaceBoundaryToMoveIt();
+            const hf::HardwareConfig::Ur3eConfig &cfg = hf::hardwareConfig().ur3e;
+            if (cfg.prestartDriver)
+            {
+                driverPrestartReady_ = false;
+                if (driverReadyPollTimer_ != nullptr)
+                    driverReadyPollTimer_->start();
+                pollDriverPrestartReady();
+            }
+            else
+            {
+                driverPrestartReady_ = true;
+            }
+        }
         updateRobotUi();
     }
 }
@@ -375,6 +478,52 @@ void Ur3ePanelController::setBusy(const bool busy)
     updateRobotUi();
 }
 
+void Ur3ePanelController::pollDriverPrestartReady()
+{
+    if (!hf::hardwareConfig().ur3e.prestartDriver || serverManager_ == nullptr
+        || !serverManager_->isServerConnected())
+    {
+        if (driverReadyPollTimer_ != nullptr)
+            driverReadyPollTimer_->stop();
+        return;
+    }
+
+    if (driverPrestartReady_
+        || driverReadyPollInFlight_.exchange(true, std::memory_order_acq_rel))
+    {
+        return;
+    }
+
+    const QString serverUrl = serverManager_->serverUrl();
+    std::thread([this, serverUrl]() {
+        Ur3eHealthStatus health;
+        const bool ok = ur3eServerHealthCheck(serverUrl, &health);
+        QMetaObject::invokeMethod(
+            this,
+            [this, ok, health]() {
+                driverReadyPollInFlight_.store(false, std::memory_order_release);
+                if (!ok || !isSidecarRunning())
+                    return;
+
+                if (health.driverReady)
+                {
+                    if (!driverPrestartReady_)
+                    {
+                        host_->appendLog(
+                            hf::hardwareConfig().ur3e.useMockHardware
+                                ? QStringLiteral("UR3e: simulation driver ready.")
+                                : QStringLiteral("UR3e: robot driver ready."));
+                    }
+                    driverPrestartReady_ = true;
+                    if (driverReadyPollTimer_ != nullptr)
+                        driverReadyPollTimer_->stop();
+                    updateRobotUi();
+                }
+            },
+            Qt::QueuedConnection);
+    }).detach();
+}
+
 void Ur3ePanelController::updateRobotUi()
 {
     const bool sidecarRunning = isSidecarRunning();
@@ -383,10 +532,30 @@ void Ur3ePanelController::updateRobotUi()
     if (host_->ur3eRobotIpEdit_ != nullptr)
         host_->ur3eRobotIpEdit_->setEnabled(!robotConnected_ && !busy_ && !captureActive);
 
+    const bool driverReady =
+        !hf::hardwareConfig().ur3e.prestartDriver || driverPrestartReady_;
+
     if (host_->ur3eConnectBtn_ != nullptr)
     {
-        host_->ur3eConnectBtn_->setEnabled(sidecarRunning && !robotConnected_ && !busy_
-                                            && !captureActive);
+        host_->ur3eConnectBtn_->setEnabled(sidecarRunning && driverReady && !robotConnected_ && !busy_
+                                            && !connectInProgress_ && !captureActive);
+        if (!sidecarRunning)
+        {
+            host_->ur3eConnectBtn_->setToolTip(
+                QStringLiteral("Waiting for UR3e sidecar (WSL). Check the Log tab for status."));
+        }
+        else if (!driverReady)
+        {
+            host_->ur3eConnectBtn_->setToolTip(
+                hf::hardwareConfig().ur3e.useMockHardware
+                    ? QStringLiteral(
+                          "Waiting for simulation driver warmup in WSL (up to ~2 min after sidecar starts).")
+                    : QStringLiteral("Waiting for UR robot driver warmup in WSL."));
+        }
+        else
+        {
+            host_->ur3eConnectBtn_->setToolTip(QString());
+        }
     }
     if (host_->ur3eDisconnectBtn_ != nullptr)
     {
@@ -509,14 +678,41 @@ void Ur3ePanelController::syncWorkspaceBoundaryPreview()
 
     if (host_->ur3eScanRoutePlanWidget_ != nullptr)
         host_->ur3eScanRoutePlanWidget_->setWorkspaceBoundary(boundary);
+
+    pushWorkspaceBoundaryToMoveIt();
+    scheduleManualTargetPreview();
 }
 
-void Ur3ePanelController::applyConfiguredInitialJointTargets()
+void Ur3ePanelController::pushWorkspaceBoundaryToMoveIt()
 {
-    const hf::HardwareConfig::Ur3eConfig &cfg = hf::hardwareConfig().ur3e;
-    if (!cfg.useMockHardware)
+    if (serverManager_ == nullptr || !serverManager_->isServerConnected())
         return;
 
+    if (boundarySyncInFlight_.exchange(true))
+        return;
+
+    const QString serverUrl = serverManager_->serverUrl();
+    std::thread([this, serverUrl]() {
+        QString error;
+        (void)ur3eSyncWorkspaceBoundary(serverUrl, &error);
+        boundarySyncInFlight_.store(false);
+        Q_UNUSED(error);
+    }).detach();
+}
+
+void Ur3ePanelController::onBoundarySyncTick()
+{
+    if (!isSidecarRunning())
+        return;
+
+    const bool moveItRunning = moveItManager_ != nullptr && moveItManager_->isRunning();
+    if (robotConnected_ || moveItRunning)
+        pushWorkspaceBoundaryToMoveIt();
+}
+
+void Ur3ePanelController::applyScanHomeJointTargets()
+{
+    const hf::HardwareConfig::Ur3eConfig &cfg = hf::hardwareConfig().ur3e;
     for (int jointIndex = 0; jointIndex < MainWindow::kUr3eJointCount; ++jointIndex)
     {
         ui::Ur3eJointBarWidget *bar = host_->ur3eJointBars_[jointIndex];
@@ -525,6 +721,91 @@ void Ur3ePanelController::applyConfiguredInitialJointTargets()
         const double radians = cfg.homeJointsDeg[static_cast<std::size_t>(jointIndex)] * M_PI / 180.0;
         bar->setValueRadians(radians);
     }
+
+    scheduleManualTargetPreview();
+}
+
+void Ur3ePanelController::syncHomeJointTargetSliders()
+{
+    applyScanHomeJointTargets();
+}
+
+void Ur3ePanelController::applyConfiguredInitialJointTargets()
+{
+    if (!hf::hardwareConfig().ur3e.useMockHardware)
+        return;
+
+    applyScanHomeJointTargets();
+}
+
+void Ur3ePanelController::beginHomeMotionUi()
+{
+    motionInProgress_ = true;
+    setJointPollIntervalMs(kMotionPollIntervalMs);
+    applyScanHomeJointTargets();
+}
+
+void Ur3ePanelController::endHomeMotionUi()
+{
+    motionInProgress_ = false;
+    setJointPollIntervalMs(kPosePollIntervalMs);
+}
+
+void Ur3ePanelController::scheduleManualTargetPreview()
+{
+    if (!robotConnected_ || serverManager_ == nullptr || !serverManager_->isServerConnected()
+        || shutdownRequested_.load(std::memory_order_acquire))
+    {
+        return;
+    }
+
+    if (manualTargetPreviewInFlight_.load(std::memory_order_acquire))
+    {
+        manualTargetPreviewPending_.store(true, std::memory_order_release);
+        return;
+    }
+
+    pushManualTargetPreview();
+}
+
+void Ur3ePanelController::pushManualTargetPreview()
+{
+    if (!robotConnected_ || serverManager_ == nullptr || !serverManager_->isServerConnected()
+        || shutdownRequested_.load(std::memory_order_acquire))
+    {
+        manualTargetPreviewPending_.store(false, std::memory_order_release);
+        return;
+    }
+
+    if (manualTargetPreviewInFlight_.exchange(true, std::memory_order_acq_rel))
+    {
+        manualTargetPreviewPending_.store(true, std::memory_order_release);
+        return;
+    }
+
+    manualTargetPreviewPending_.store(false, std::memory_order_release);
+
+    std::vector<double> target;
+    target.reserve(MainWindow::kUr3eJointCount);
+    for (int jointIndex = 0; jointIndex < MainWindow::kUr3eJointCount; ++jointIndex)
+    {
+        ui::Ur3eJointBarWidget *bar = host_->ur3eJointBars_[jointIndex];
+        target.push_back(bar != nullptr ? bar->valueRadians() : 0.0);
+    }
+
+    const QString serverUrl = serverManager_->serverUrl();
+    std::thread([this, serverUrl, target]() {
+        QString error;
+        (void)ur3ePreviewManualTarget(serverUrl, target, &error);
+        QMetaObject::invokeMethod(
+            this,
+            [this]() {
+                manualTargetPreviewInFlight_.store(false, std::memory_order_release);
+                if (manualTargetPreviewPending_.exchange(false, std::memory_order_acq_rel))
+                    pushManualTargetPreview();
+            },
+            Qt::QueuedConnection);
+    }).detach();
 }
 
 void Ur3ePanelController::syncTargetsFromCurrent()
@@ -575,7 +856,7 @@ void Ur3ePanelController::pollJointsSync()
 void Ur3ePanelController::pollJoints()
 {
     if (!robotConnected_ || serverManager_ == nullptr || !serverManager_->isServerConnected()
-        || shutdownRequested_.load(std::memory_order_acquire))
+        || shutdownRequested_.load(std::memory_order_acquire) || connectInProgress_)
     {
         return;
     }
@@ -630,50 +911,7 @@ void Ur3ePanelController::onMoveRequested()
     if (serverManager_ == nullptr || busy_ || !robotConnected_)
         return;
 
-    const hf::HardwareConfig::Ur3eConfig &cfg = hf::hardwareConfig().ur3e;
-    const QString motionType = cfg.motionType.trimmed().toLower();
     const QString serverUrl = serverManager_->serverUrl();
-
-    if (motionType == QStringLiteral("move_l"))
-    {
-        stopRequested_.store(false, std::memory_order_release);
-        motionInProgress_ = true;
-        setBusy(true);
-        setJointPollIntervalMs(kMotionPollIntervalMs);
-        const double speed = cfg.maxLinearSpeedMPerS;
-        const double accel = cfg.maxLinearAccelMPerS2;
-        std::thread([this, serverUrl, speed, accel]() {
-            const Ur3ePoseResult poseResult = ur3eGetTcpPose(serverUrl);
-            if (!poseResult.ok)
-            {
-                QMetaObject::invokeMethod(
-                    this,
-                    [this, detail = poseResult.errorMessage]() { finishMove(false, detail); },
-                    Qt::QueuedConnection);
-                return;
-            }
-
-            const QString poseSummary = formatTcpPose(poseResult.pose);
-            QMetaObject::invokeMethod(
-                this,
-                [this, poseSummary]() {
-                    host_->appendLog(
-                        QStringLiteral("UR3e: Move (linear) requested — pose %1").arg(poseSummary));
-                },
-                Qt::QueuedConnection);
-
-            const Ur3eMoveResult result =
-                ur3eMoveLinear(serverUrl, poseResult.pose, speed, accel, true);
-            const bool ok = result.ok;
-            const QString detail = ok ? QStringLiteral("move complete — pose %1").arg(poseSummary)
-                                      : result.errorMessage;
-            QMetaObject::invokeMethod(
-                this,
-                [this, ok, detail]() { finishMove(ok, detail); },
-                Qt::QueuedConnection);
-        }).detach();
-        return;
-    }
 
     std::vector<double> target;
     target.reserve(MainWindow::kUr3eJointCount);
@@ -685,16 +923,22 @@ void Ur3ePanelController::onMoveRequested()
 
     const QString targetSummary = formatJointTargetsDeg(target);
     host_->appendLog(
-        QStringLiteral("UR3e: Move (joint) requested — %1").arg(targetSummary));
+        QStringLiteral("UR3e: Move (joint, MoveIt) requested — %1").arg(targetSummary));
     stopRequested_.store(false, std::memory_order_release);
     motionInProgress_ = true;
     setBusy(true);
     setJointPollIntervalMs(kMotionPollIntervalMs);
     std::thread([this, serverUrl, target, targetSummary]() {
-        const Ur3eJointsMoveResult result = ur3eMoveJoints(serverUrl, target, true);
+        const Ur3eScanWaypointMoveResult result =
+            ur3eExecuteScanWaypoint(serverUrl, target, nullptr, nullptr, false, true);
         const bool ok = result.ok;
-        const QString detail = ok ? QStringLiteral("move complete — %1").arg(targetSummary)
-                                  : result.errorMessage;
+        QString detail;
+        if (ok)
+            detail = QStringLiteral("MoveIt move complete — %1").arg(targetSummary);
+        else if (result.stopped)
+            detail = result.errorMessage.isEmpty() ? QStringLiteral("Motion stopped.") : result.errorMessage;
+        else
+            detail = result.errorMessage.isEmpty() ? QStringLiteral("MoveIt motion failed.") : result.errorMessage;
         QMetaObject::invokeMethod(
             this,
             [this, ok, detail]() { finishMove(ok, detail); },
@@ -728,6 +972,12 @@ void Ur3ePanelController::onStartMoveItRequested()
         return;
     }
 
+    if (rvizManager_->isRunning())
+    {
+        host_->appendLog(QStringLiteral("UR3e: stopping RViz (MoveIt launches its own window)\u2026"));
+        rvizManager_->stop();
+    }
+
     const Ur3eJointsState joints = ur3eGetJoints(serverManager_->serverUrl());
     if (!joints.ok || joints.positionsRad.size() < MainWindow::kUr3eJointCount)
     {
@@ -739,6 +989,7 @@ void Ur3ePanelController::onStartMoveItRequested()
 
     host_->appendLog(QStringLiteral("UR3e: starting MoveIt 2 + RViz in WSL\u2026"));
     moveItManager_->start();
+    pushWorkspaceBoundaryToMoveIt();
     updateRobotUi();
 }
 
@@ -881,8 +1132,9 @@ void Ur3ePanelController::onExecuteHemisphereScanRequested()
                 [this]() {
                     host_->appendLog(
                         QStringLiteral("UR3e scan execute: moving to home pose before scan…"));
+                    syncHomeJointTargetSliders();
                 },
-                Qt::QueuedConnection);
+                Qt::BlockingQueuedConnection);
 
             const Ur3eScanWaypointMoveResult preHomeResult = ur3eExecuteMoveHome(serverUrl);
             if (preHomeResult.stopped)
@@ -921,6 +1173,9 @@ void Ur3ePanelController::onExecuteHemisphereScanRequested()
                     Q_ARG(bool, false));
                 return;
             }
+
+            QMetaObject::invokeMethod(
+                this, &Ur3ePanelController::syncHomeJointTargetSliders, Qt::QueuedConnection);
 
             bool returnHomeAfterScan = true;
 
@@ -1077,10 +1332,18 @@ void Ur3ePanelController::onExecuteHemisphereScanRequested()
                     [this]() {
                         host_->appendLog(
                             QStringLiteral("UR3e scan execute: returning to home pose…"));
+                        syncHomeJointTargetSliders();
                     },
-                    Qt::QueuedConnection);
+                    Qt::BlockingQueuedConnection);
 
                 const Ur3eScanWaypointMoveResult postHomeResult = ur3eExecuteMoveHome(serverUrl);
+                if (postHomeResult.ok)
+                {
+                    QMetaObject::invokeMethod(
+                        this,
+                        &Ur3ePanelController::syncHomeJointTargetSliders,
+                        Qt::QueuedConnection);
+                }
                 if (!postHomeResult.ok && !postHomeResult.stopped)
                 {
                     const QString reason = postHomeResult.errorMessage.isEmpty()
@@ -1261,10 +1524,12 @@ void Ur3ePanelController::finishScanExecute(const bool ok, const QString &detail
 
 void Ur3ePanelController::onMoveItStateChanged(const bool running, const QString &detail)
 {
+    if (running)
+        pushWorkspaceBoundaryToMoveIt();
+
     if (detail.isEmpty())
     {
         updateRobotUi();
-        Q_UNUSED(running);
         return;
     }
 
@@ -1276,7 +1541,6 @@ void Ur3ePanelController::onMoveItStateChanged(const bool running, const QString
             host_->appendLog(QStringLiteral("UR3e MoveIt: %1").arg(trimmed));
     }
     updateRobotUi();
-    Q_UNUSED(running);
 }
 
 void Ur3ePanelController::onStartRvizRequested()
@@ -1332,7 +1596,7 @@ void Ur3ePanelController::onRvizStateChanged(const bool running, const QString &
 
 void Ur3ePanelController::onConnectRequested()
 {
-    if (serverManager_ == nullptr || busy_)
+    if (serverManager_ == nullptr || busy_ || connectInProgress_)
         return;
 
     if (!serverManager_->isServerConnected())
@@ -1342,31 +1606,372 @@ void Ur3ePanelController::onConnectRequested()
     }
 
     const hf::HardwareConfig::Ur3eConfig &cfg = hf::hardwareConfig().ur3e;
+    if (cfg.prestartDriver && !driverPrestartReady_)
+    {
+        host_->appendLog(
+            cfg.useMockHardware
+                ? QStringLiteral(
+                      "UR3e: simulation driver still warming up — wait for \"simulation driver ready\" in the log.")
+                : QStringLiteral(
+                      "UR3e: robot driver still warming up — wait for \"robot driver ready\" in the log."));
+        return;
+    }
+
     const QString robotIp = host_->ur3eRobotIpEdit_ != nullptr
                                 ? host_->ur3eRobotIpEdit_->text().trimmed()
                                 : cfg.robotIp;
+    const int connectTimeoutMs = qMax(30000, cfg.connectTimeoutMs);
+    const int connectTimeoutSec = connectTimeoutMs / 1000;
 
-    const int connectTimeoutSec = qMax(30, cfg.connectTimeoutMs / 1000);
-    host_->appendLog(QStringLiteral("UR3e: connecting (%1, dashboard=%2, rtde=%3) — may take up to %4 min\u2026")
-                         .arg(robotIp)
-                         .arg(cfg.dashboardPort)
-                         .arg(cfg.rtdePort)
-                         .arg((connectTimeoutSec + 59) / 60));
+    host_->appendLog(
+        cfg.useMockHardware
+            ? QStringLiteral("UR3e: connecting (simulation)\u2026")
+            : QStringLiteral(
+                  "UR3e: connecting to %1 — press Play on External Control (%2:50002) within %3 min\u2026")
+                  .arg(robotIp)
+                  .arg(cfg.reverseIp)
+                  .arg((connectTimeoutSec + 59) / 60));
 
     setBusy(true);
+    connectInProgress_ = true;
+    lastConnectStatusPhase_.clear();
+    lastConnectStatusMessage_.clear();
+    const int sessionId = ++connectSessionId_;
+    connectDeadlineMs_ = QDateTime::currentMSecsSinceEpoch() + connectTimeoutMs;
+
+    dismissConnectWaitDialog();
+    connectWaitDialog_ = new Ur3eExternalControlWaitDialog(host_);
+    connectWaitDialog_->configure(cfg.useMockHardware, cfg.reverseIp, connectTimeoutSec);
+    connect(connectWaitDialog_,
+            &Ur3eExternalControlWaitDialog::cancelRequested,
+            this,
+            &Ur3ePanelController::onConnectDialogCancelled);
+    connectWaitDialog_->show();
+    connectWaitDialog_->raise();
+    connectWaitDialog_->activateWindow();
+
     const QString serverUrl = serverManager_->serverUrl();
-    std::thread([this, serverUrl, robotIp]() {
-        const Ur3eConnectResult result = ur3eConnectRobot(serverUrl, robotIp);
-        const bool ok = result.ok;
-        const QString detail =
-            ok ? (result.useMockHardware ? QStringLiteral("connected (simulation)")
-                                         : QStringLiteral("connected (hardware)"))
-               : result.errorMessage;
+    std::thread([this, serverUrl, robotIp, sessionId]() {
+        QString error;
+        Ur3eConnectAsyncStatus status;
+        bool started = ur3eConnectStart(serverUrl, robotIp, &status, &error);
+        bool legacyConnect = false;
+        Ur3eConnectResult legacyResult;
+        if (!started && error.contains(QStringLiteral("not found"), Qt::CaseInsensitive))
+        {
+            legacyConnect = true;
+            legacyResult = ur3eConnectRobot(serverUrl, robotIp, &error);
+        }
+        const bool legacyOk = legacyConnect && legacyResult.ok;
+        const QString legacyDetail =
+            legacyOk ? (legacyResult.useMockHardware ? QStringLiteral("connected (simulation)")
+                                                     : QStringLiteral("connected (hardware)"))
+                     : error;
         QMetaObject::invokeMethod(
             this,
-            [this, ok, detail]() { finishConnect(ok, detail); },
+            [this, started, status, error, sessionId, legacyConnect, legacyOk, legacyDetail]() {
+                if (sessionId != connectSessionId_.load())
+                    return;
+                if (legacyConnect)
+                {
+                    dismissConnectWaitDialog();
+                    connectInProgress_ = false;
+                    if (connectPollTimer_ != nullptr)
+                        connectPollTimer_->stop();
+                    if (connectCountdownTimer_ != nullptr)
+                        connectCountdownTimer_->stop();
+                    finishConnect(legacyOk, legacyDetail);
+                    return;
+                }
+                if (!started)
+                {
+                    dismissConnectWaitDialog();
+                    connectInProgress_ = false;
+                    if (connectPollTimer_ != nullptr)
+                        connectPollTimer_->stop();
+                    if (connectCountdownTimer_ != nullptr)
+                        connectCountdownTimer_->stop();
+                    finishConnect(false, error);
+                    return;
+                }
+
+                applyConnectAsyncStatus(status);
+                if (status.ok && !status.inProgress)
+                {
+                    dismissConnectWaitDialog();
+                    connectInProgress_ = false;
+                    if (connectPollTimer_ != nullptr)
+                        connectPollTimer_->stop();
+                    if (connectCountdownTimer_ != nullptr)
+                        connectCountdownTimer_->stop();
+                    finishConnect(
+                        true,
+                        status.useMockHardware ? QStringLiteral("connected (simulation)")
+                                               : QStringLiteral("connected (hardware)"));
+                    return;
+                }
+
+                if (connectPollTimer_ != nullptr)
+                    connectPollTimer_->start();
+                if (connectCountdownTimer_ != nullptr)
+                    connectCountdownTimer_->start();
+                onConnectCountdownTick();
+            },
             Qt::QueuedConnection);
     }).detach();
+}
+
+void Ur3ePanelController::dismissConnectWaitDialog()
+{
+    if (connectWaitDialog_ == nullptr)
+        return;
+
+    connectWaitDialog_->dismiss();
+    connectWaitDialog_->deleteLater();
+    connectWaitDialog_ = nullptr;
+}
+
+void Ur3ePanelController::applyConnectAsyncStatus(const Ur3eConnectAsyncStatus &status)
+{
+    if (connectWaitDialog_ == nullptr)
+        return;
+
+    const QString phase = status.phase.trimmed().toLower();
+    if (!status.message.isEmpty() && status.message != lastConnectStatusMessage_)
+    {
+        lastConnectStatusMessage_ = status.message;
+        connectWaitDialog_->setDetailText(status.message);
+    }
+
+    if (phase == lastConnectStatusPhase_)
+        return;
+    lastConnectStatusPhase_ = phase;
+
+    const bool mock = status.useMockHardware;
+    if (phase == QStringLiteral("waiting_external_control")
+        || (status.scriptPortListening && !status.reverseConnected && !mock))
+    {
+        connectWaitDialog_->setPhase(Ur3eExternalControlWaitDialog::Phase::PressPlay);
+    }
+    else if (phase == QStringLiteral("bridge_setup") || phase == QStringLiteral("finishing")
+             || status.reverseConnected)
+    {
+        connectWaitDialog_->setPhase(Ur3eExternalControlWaitDialog::Phase::Finishing);
+    }
+    else if (phase == QStringLiteral("starting_driver"))
+    {
+        connectWaitDialog_->setPhase(mock ? Ur3eExternalControlWaitDialog::Phase::SimulationStarting
+                                          : Ur3eExternalControlWaitDialog::Phase::StartingDriver);
+    }
+}
+
+void Ur3ePanelController::updateConnectDialogFromSidecarLine(const QString &line)
+{
+    if (!connectInProgress_ || connectWaitDialog_ == nullptr)
+        return;
+
+    const QString lower = line.toLower();
+    if (lower.contains(QStringLiteral("port 50002 listening"))
+        || lower.contains(QStringLiteral("press play on external control")))
+    {
+        connectWaitDialog_->setPhase(Ur3eExternalControlWaitDialog::Phase::PressPlay);
+    }
+    else if (lower.contains(QStringLiteral("external control connected"))
+             || lower.contains(QStringLiteral("trajectory action server ready")))
+    {
+        connectWaitDialog_->setPhase(Ur3eExternalControlWaitDialog::Phase::Finishing);
+    }
+    else if (lower.contains(QStringLiteral("starting ur_robot_driver"))
+             || lower.contains(QStringLiteral("waiting for controller manager")))
+    {
+        connectWaitDialog_->setPhase(Ur3eExternalControlWaitDialog::Phase::StartingDriver);
+    }
+    else if (lower.contains(QStringLiteral("connect phase=waiting_external_control")))
+    {
+        connectWaitDialog_->setPhase(Ur3eExternalControlWaitDialog::Phase::PressPlay);
+    }
+    else if (lower.contains(QStringLiteral("connect phase=bridge_setup"))
+             || lower.contains(QStringLiteral("connect phase=finishing")))
+    {
+        connectWaitDialog_->setPhase(Ur3eExternalControlWaitDialog::Phase::Finishing);
+    }
+
+    if (line.contains(QStringLiteral("connect phase="), Qt::CaseInsensitive))
+        connectWaitDialog_->setDetailText(line);
+}
+
+void Ur3ePanelController::onConnectPollTick()
+{
+    if (!connectInProgress_ || serverManager_ == nullptr)
+        return;
+
+    // One wsl.exe/curl at a time — spawning every 500 ms without this guard stalls the UI.
+    if (connectPollInFlight_.exchange(true, std::memory_order_acq_rel))
+        return;
+
+    const int sessionId = connectSessionId_.load();
+    const QString serverUrl = serverManager_->serverUrl();
+    std::thread([this, serverUrl, sessionId]() {
+        Ur3eConnectAsyncStatus status;
+        QString error;
+        const bool polled = ur3eConnectStatus(serverUrl, &status, &error);
+        QMetaObject::invokeMethod(
+            this,
+            [this, polled, status, error, sessionId]() {
+                connectPollInFlight_.store(false, std::memory_order_release);
+                if (sessionId != connectSessionId_.load() || !connectInProgress_)
+                    return;
+                if (!polled)
+                {
+                    if (connectWaitDialog_ != nullptr)
+                        connectWaitDialog_->setDetailText(error);
+                    return;
+                }
+
+                applyConnectAsyncStatus(status);
+                const QString phase = status.phase.trimmed().toLower();
+                if (status.ok && phase == QStringLiteral("complete"))
+                {
+                    if (connectPollTimer_ != nullptr)
+                        connectPollTimer_->stop();
+                    if (connectCountdownTimer_ != nullptr)
+                        connectCountdownTimer_->stop();
+                    dismissConnectWaitDialog();
+                    connectInProgress_ = false;
+                    finishConnect(
+                        true,
+                        status.useMockHardware ? QStringLiteral("connected (simulation)")
+                                               : QStringLiteral("connected (hardware)"));
+                    return;
+                }
+
+                if (phase == QStringLiteral("failed"))
+                {
+                    if (connectPollTimer_ != nullptr)
+                        connectPollTimer_->stop();
+                    if (connectCountdownTimer_ != nullptr)
+                        connectCountdownTimer_->stop();
+                    dismissConnectWaitDialog();
+                    connectInProgress_ = false;
+                    finishConnect(false, status.errorMessage.isEmpty() ? status.message : status.errorMessage);
+                    return;
+                }
+
+                if (phase == QStringLiteral("cancelled"))
+                {
+                    if (connectPollTimer_ != nullptr)
+                        connectPollTimer_->stop();
+                    if (connectCountdownTimer_ != nullptr)
+                        connectCountdownTimer_->stop();
+                    dismissConnectWaitDialog();
+                    connectInProgress_ = false;
+                    setBusy(false);
+                    host_->appendLog(QStringLiteral("UR3e connect cancelled."));
+                    updateRobotUi();
+                }
+            },
+            Qt::QueuedConnection);
+    }).detach();
+}
+
+void Ur3ePanelController::onConnectCountdownTick()
+{
+    if (!connectInProgress_ || connectWaitDialog_ == nullptr)
+        return;
+
+    const qint64 remainingMs = connectDeadlineMs_ - QDateTime::currentMSecsSinceEpoch();
+    const int remainingSec = static_cast<int>((remainingMs + 999) / 1000);
+    connectWaitDialog_->setRemainingSeconds(remainingSec);
+    if (remainingSec <= 0)
+        onConnectTimedOut();
+}
+
+void Ur3ePanelController::onConnectDialogCancelled()
+{
+    if (!connectInProgress_)
+        return;
+
+    ++connectSessionId_;
+    connectPollInFlight_.store(false, std::memory_order_release);
+    if (connectPollTimer_ != nullptr)
+        connectPollTimer_->stop();
+    if (connectCountdownTimer_ != nullptr)
+        connectCountdownTimer_->stop();
+
+    host_->appendLog(QStringLiteral("UR3e: connect cancelled by user."));
+    dismissConnectWaitDialog();
+
+    if (serverManager_ != nullptr)
+    {
+        const QString serverUrl = serverManager_->serverUrl();
+        std::thread([this, serverUrl]() {
+            QString error;
+            (void)ur3eConnectCancel(serverUrl, &error);
+            QMetaObject::invokeMethod(
+                this,
+                [this]() {
+                    connectInProgress_ = false;
+                    setBusy(false);
+                    updateRobotUi();
+                },
+                Qt::QueuedConnection);
+        }).detach();
+    }
+    else
+    {
+        connectInProgress_ = false;
+        setBusy(false);
+        updateRobotUi();
+    }
+}
+
+void Ur3ePanelController::onConnectTimedOut()
+{
+    if (!connectInProgress_)
+        return;
+
+    ++connectSessionId_;
+    connectPollInFlight_.store(false, std::memory_order_release);
+    if (connectPollTimer_ != nullptr)
+        connectPollTimer_->stop();
+    if (connectCountdownTimer_ != nullptr)
+        connectCountdownTimer_->stop();
+
+    dismissConnectWaitDialog();
+    const bool useMockHardware = hf::hardwareConfig().ur3e.useMockHardware;
+    host_->appendLog(
+        useMockHardware
+            ? QStringLiteral("UR3e: connect timed out waiting for simulation driver.")
+            : QStringLiteral("UR3e: connect timed out waiting for External Control Play."));
+
+    if (serverManager_ != nullptr)
+    {
+        const QString serverUrl = serverManager_->serverUrl();
+        std::thread([this, serverUrl, useMockHardware]() {
+            QString error;
+            (void)ur3eConnectCancel(serverUrl, &error);
+            QMetaObject::invokeMethod(
+                this,
+                [this, useMockHardware]() {
+                    connectInProgress_ = false;
+                    finishConnect(
+                        false,
+                        useMockHardware
+                            ? QStringLiteral(
+                                  "Simulation connect timed out. The ROS mock driver may still be "
+                                  "starting in WSL — wait for \"simulation driver ready\", then try again.")
+                            : QStringLiteral(
+                                  "Timed out waiting for External Control. On the teach pendant open "
+                                  "External Control, confirm remote PC, and press Play while connecting."));
+                },
+                Qt::QueuedConnection);
+        }).detach();
+    }
+    else
+    {
+        connectInProgress_ = false;
+        finishConnect(false, QStringLiteral("Connect timed out."));
+    }
 }
 
 void Ur3ePanelController::onDisconnectRequested()
@@ -1376,6 +1981,7 @@ void Ur3ePanelController::onDisconnectRequested()
 
     host_->appendLog(QStringLiteral("UR3e: preparing to disconnect\u2026"));
     setBusy(true);
+    beginHomeMotionUi();
     const QString serverUrl = serverManager_->serverUrl();
     std::thread([this, serverUrl]() {
         const HomeEnsureOutcome homeOutcome =
@@ -1385,9 +1991,12 @@ void Ur3ePanelController::onDisconnectRequested()
             QMetaObject::invokeMethod(
                 this,
                 [this]() {
+                    endHomeMotionUi();
                     setBusy(false);
                     host_->appendLog(
                         QStringLiteral("UR3e: disconnect cancelled (home positioning)."));
+                    pollJointsSync();
+                    syncTargetsFromCurrent();
                     updateRobotUi();
                 },
                 Qt::QueuedConnection);
@@ -1443,6 +2052,7 @@ void Ur3ePanelController::finishConnect(const bool ok, const QString &detail)
 
     robotConnected_ = true;
     host_->appendLog(QStringLiteral("UR3e: %1").arg(detail));
+    pushWorkspaceBoundaryToMoveIt();
     if (host_->ur3ePosePollTimer_ != nullptr)
     {
         host_->ur3ePosePollTimer_->start(kPosePollIntervalMs);
@@ -1462,6 +2072,7 @@ void Ur3ePanelController::finishConnect(const bool ok, const QString &detail)
     updateRobotUi();
     host_->appendLog(QStringLiteral("UR3e: verifying scan home position\u2026"));
     setBusy(true);
+    beginHomeMotionUi();
 
     std::thread([this]() {
         const HomeEnsureOutcome outcome = ensureRobotAtHomeSync(HomeEnsureContext::AfterConnect);
@@ -1498,6 +2109,9 @@ Ur3ePanelController::HomeEnsureOutcome Ur3ePanelController::ensureRobotAtHomeSyn
             host_->appendLog(QStringLiteral("UR3e: verified at scan home position."));
             outcome.success = true;
             outcome.alreadyAtHome = true;
+            outcome.atHomeVerified = true;
+            QMetaObject::invokeMethod(
+                this, &Ur3ePanelController::syncHomeJointTargetSliders, Qt::BlockingQueuedConnection);
             return outcome;
         }
 
@@ -1513,11 +2127,13 @@ Ur3ePanelController::HomeEnsureOutcome Ur3ePanelController::ensureRobotAtHomeSyn
         {
             outcome.success = true;
             outcome.alreadyAtHome = moveResult.alreadyAtHome;
+            outcome.atHomeVerified = true;
             host_->appendLog(moveResult.alreadyAtHome
                                 ? QStringLiteral("UR3e: verified at scan home position.")
                                 : QStringLiteral("UR3e: moved to scan home position."));
             pollJointsSync();
-            syncTargetsFromCurrent();
+            QMetaObject::invokeMethod(
+                this, &Ur3ePanelController::syncHomeJointTargetSliders, Qt::BlockingQueuedConnection);
             return outcome;
         }
 
@@ -1653,18 +2269,21 @@ void Ur3ePanelController::finishHomeEnsureAfterConnect(const HomeEnsureOutcome &
         return;
     }
 
+    endHomeMotionUi();
     setBusy(false);
     if (outcome.alreadyAtHome)
         host_->appendLog(QStringLiteral("UR3e: verified at scan home position."));
     else if (outcome.success)
         host_->appendLog(QStringLiteral("UR3e: moved to scan home position."));
     pollJointsSync();
-    syncTargetsFromCurrent();
+    if (outcome.atHomeVerified)
+        applyScanHomeJointTargets();
     updateRobotUi();
 }
 
 void Ur3ePanelController::finishDisconnect(const bool ok, const QString &detail)
 {
+    endHomeMotionUi();
     setBusy(false);
     robotConnected_ = false;
     if (host_->ur3ePosePollTimer_ != nullptr)
@@ -1699,6 +2318,12 @@ void Ur3ePanelController::finishMove(const bool ok, const QString &detail)
     else
     {
         host_->appendLog(QStringLiteral("UR3e move failed: %1").arg(detail));
+        if (host_ != nullptr)
+        {
+            QMessageBox::warning(host_,
+                                 QStringLiteral("UR3e Move Failed"),
+                                 detail);
+        }
     }
     updateRobotUi();
 }

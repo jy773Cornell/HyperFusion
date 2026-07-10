@@ -45,7 +45,34 @@ class SidecarHttpHandler(BaseHTTPRequestHandler):
         bridge = self.get_bridge()
 
         if path == "/health":
-            status = bridge.status()
+            acquired = bridge._lock.acquire(timeout=0.2)
+            try:
+                if acquired:
+                    status = bridge.status()
+                    joint_states_ok = bridge.joint_states_ok()
+                else:
+                    status = None
+                    joint_states_ok = False
+            finally:
+                if acquired:
+                    bridge._lock.release()
+
+            if status is None:
+                self._send_json(
+                    200,
+                    {
+                        "status": "ok",
+                        "use_mock_hardware": bridge.use_mock_hardware,
+                        "robot_connected": False,
+                        "driver_state": "warming",
+                        "driver_ready": False,
+                        "robot_ip": bridge.robot_ip,
+                        "joint_states_ok": False,
+                        "fault": None,
+                    },
+                )
+                return
+
             self._send_json(
                 200,
                 {
@@ -53,8 +80,9 @@ class SidecarHttpHandler(BaseHTTPRequestHandler):
                     "use_mock_hardware": bridge.use_mock_hardware,
                     "robot_connected": status.connected,
                     "driver_state": status.driver_state,
+                    "driver_ready": bridge.driver_ready_for_connect(),
                     "robot_ip": status.robot_ip,
-                    "joint_states_ok": bridge.joint_states_ok(),
+                    "joint_states_ok": joint_states_ok,
                     "fault": status.fault or None,
                 },
             )
@@ -72,6 +100,10 @@ class SidecarHttpHandler(BaseHTTPRequestHandler):
                 self._send_json(200, bridge.get_joints())
             except Exception as exc:
                 self._send_json(409, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/connect/status":
+            self._send_json(200, bridge.connect_status())
             return
 
         self._send_json(404, {"ok": False, "error": "not found"})
@@ -98,6 +130,19 @@ class SidecarHttpHandler(BaseHTTPRequestHandler):
                 self._send_json(200, bridge.connect())
             except Exception as exc:
                 self._send_json(500, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/connect/start":
+            if "ip" in body:
+                bridge.robot_ip = str(body["ip"])
+            try:
+                self._send_json(200, bridge.connect_start(body.get("ip")))
+            except Exception as exc:
+                self._send_json(500, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/connect/cancel":
+            self._send_json(200, bridge.connect_cancel())
             return
 
         if path == "/disconnect":
@@ -157,6 +202,20 @@ class SidecarHttpHandler(BaseHTTPRequestHandler):
         if path == "/execute_scan_waypoint":
             try:
                 self._send_json(200, bridge.execute_scan_waypoint(body))
+            except Exception as exc:
+                self._send_json(500, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/preview_manual_target":
+            try:
+                self._send_json(200, bridge.preview_manual_target(body))
+            except Exception as exc:
+                self._send_json(500, {"ok": False, "error": str(exc)})
+            return
+
+        if path == "/sync_workspace_boundary":
+            try:
+                self._send_json(200, bridge.sync_workspace_boundary(body))
             except Exception as exc:
                 self._send_json(500, {"ok": False, "error": str(exc)})
             return

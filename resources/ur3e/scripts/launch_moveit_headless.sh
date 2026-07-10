@@ -25,6 +25,9 @@ else
 fi
 
 source "/opt/ros/${ROS_DISTRO}/setup.bash"
+export ROS_LOCALHOST_ONLY=1
+export HYPERFUSION_UR3E_SERVER_PORT="${HYPERFUSION_UR3E_SERVER_PORT:-8766}"
+
 "${SCRIPT_DIR}/wait_for_joint_states.sh" "${ROS_DISTRO}" 120
 
 MOVEIT_LAUNCH="${SCRIPT_DIR}/../launch/hyperfusion_moveit.launch.py"

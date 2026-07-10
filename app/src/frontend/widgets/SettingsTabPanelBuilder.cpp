@@ -15,7 +15,16 @@ QWidget *MainWindow::createSettingsPanel()
     settingsTabs_->addTab(createCameraSettingsTab(), QStringLiteral("Cameras"));
     settingsTabs_->addTab(createStageSettingsTab(), QStringLiteral("Stage"));
     settingsTabs_->addTab(createLightSettingsTab(), QStringLiteral("Light"));
-    settingsTabs_->addTab(createUr3eSettingsTab(), QStringLiteral("UR3e"));
+    if (useUr3e_)
+    {
+        ur3eSettingsTabIndex_ = settingsTabs_->count();
+        settingsTabs_->addTab(createUr3eSettingsTab(), QStringLiteral("UR3e"));
+    }
+    else
+    {
+        ur3eSettingsTabIndex_ = -1;
+    }
+    captureSettingsTabIndex_ = settingsTabs_->count();
     settingsTabs_->addTab(createCaptureSettingsTab(), QStringLiteral("Capture"));
 
     connect(settingsTabs_,

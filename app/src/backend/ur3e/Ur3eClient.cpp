@@ -291,6 +291,7 @@ void fillHealthStatus(const QJsonObject &response, Ur3eHealthStatus *status)
     status->ok = response.value(QStringLiteral("status")).toString() == QStringLiteral("ok");
     status->useMockHardware = response.value(QStringLiteral("use_mock_hardware")).toBool(true);
     status->robotConnected = response.value(QStringLiteral("robot_connected")).toBool(false);
+    status->driverReady = response.value(QStringLiteral("driver_ready")).toBool(false);
     status->driverState = response.value(QStringLiteral("driver_state")).toString();
     status->robotIp = response.value(QStringLiteral("robot_ip")).toString();
     status->fault = response.value(QStringLiteral("fault")).toString();
@@ -321,6 +322,119 @@ bool ur3eServerShutdown(const QString &serverUrl, QString *errorMessage)
     const QJsonObject response =
         postJson(serverUrl, QStringLiteral("/shutdown"), QJsonObject(), 5000, errorMessage);
     return !response.isEmpty() && response.value(QStringLiteral("ok")).toBool(false);
+}
+
+void fillUr3eConnectAsyncStatus(const QJsonObject &response, Ur3eConnectAsyncStatus *status)
+{
+    if (status == nullptr)
+        return;
+
+    const hf::HardwareConfig::Ur3eConfig &cfg = hf::hardwareConfig().ur3e;
+    status->ok = response.value(QStringLiteral("ok")).toBool(false);
+    status->inProgress = response.value(QStringLiteral("in_progress")).toBool(false);
+    status->alreadyConnected = response.value(QStringLiteral("already_connected")).toBool(false);
+    status->phase = response.value(QStringLiteral("phase")).toString();
+    status->message = response.value(QStringLiteral("message")).toString();
+    status->errorMessage = response.value(QStringLiteral("error")).toString();
+    status->driverState = response.value(QStringLiteral("driver_state")).toString();
+    status->robotIp = response.value(QStringLiteral("robot_ip")).toString();
+    status->reverseIp = response.value(QStringLiteral("reverse_ip")).toString(cfg.reverseIp);
+    status->reverseConnected = response.value(QStringLiteral("reverse_connected")).toBool(false);
+    status->scriptPortListening =
+        response.value(QStringLiteral("script_port_listening")).toBool(false);
+    status->robotConnected = response.value(QStringLiteral("connected")).toBool(false);
+    if (response.contains(QStringLiteral("use_mock_hardware")))
+        status->useMockHardware = response.value(QStringLiteral("use_mock_hardware")).toBool(cfg.useMockHardware);
+    else
+        status->useMockHardware = cfg.useMockHardware;
+}
+
+bool ur3eConnectStart(const QString &serverUrl,
+                      const QString &robotIp,
+                      Ur3eConnectAsyncStatus *status,
+                      QString *errorMessage)
+{
+    QJsonObject body;
+    if (!robotIp.trimmed().isEmpty())
+        body.insert(QStringLiteral("ip"), robotIp.trimmed());
+
+    QString localError;
+    const QJsonObject response =
+        postJson(serverUrl, QStringLiteral("/connect/start"), body, 15000, &localError);
+    if (response.isEmpty())
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = localError;
+        return false;
+    }
+
+    if (!response.value(QStringLiteral("ok")).toBool(false)
+        && !response.value(QStringLiteral("already_connected")).toBool(false)
+        && !response.value(QStringLiteral("in_progress")).toBool(false))
+    {
+        const QString err = response.value(QStringLiteral("error")).toString(localError);
+        if (errorMessage != nullptr)
+            *errorMessage = err;
+        return false;
+    }
+
+    fillUr3eConnectAsyncStatus(response, status);
+    return true;
+}
+
+bool ur3eConnectStatus(const QString &serverUrl,
+                       Ur3eConnectAsyncStatus *status,
+                       QString *errorMessage)
+{
+    if (status == nullptr)
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("status output is required.");
+        return false;
+    }
+
+    QString localError;
+    const QJsonObject response =
+        getJson(serverUrl, QStringLiteral("/connect/status"), 5000, &localError);
+    if (response.isEmpty())
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = localError;
+        return false;
+    }
+
+    fillUr3eConnectAsyncStatus(response, status);
+    return true;
+}
+
+bool ur3eConnectCancel(const QString &serverUrl, QString *errorMessage)
+{
+    QString localError;
+    const QJsonObject response =
+        postJson(serverUrl, QStringLiteral("/connect/cancel"), QJsonObject(), 8000, &localError);
+    if (response.isEmpty())
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = localError;
+        return false;
+    }
+
+    return response.value(QStringLiteral("ok")).toBool(false);
+}
+
+bool ur3eSidecarSupportsAsyncConnect(const QString &serverUrl, QString *errorMessage)
+{
+    QString localError;
+    const QJsonObject response =
+        getJson(serverUrl, QStringLiteral("/connect/status"), 3000, &localError);
+    if (response.isEmpty())
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = localError;
+        return false;
+    }
+
+    return response.contains(QStringLiteral("phase"));
 }
 
 Ur3eConnectResult ur3eConnectRobot(const QString &serverUrl,
@@ -523,12 +637,15 @@ Ur3eScanWaypointMoveResult ur3eExecuteScanWaypoint(const QString &serverUrl,
                                                    const std::vector<double> &positionsRad,
                                                    const Ur3eScanTcpPose *tcpPose,
                                                    QString *errorMessage,
-                                                   const bool requireHomeFirst)
+                                                   const bool requireHomeFirst,
+                                                   const bool directOnly)
 {
     QJsonObject body = buildScanMotionRequestBody();
     body.insert(QStringLiteral("joints"), positionsToJsonArray(positionsRad));
     if (requireHomeFirst)
         body.insert(QStringLiteral("require_home_first"), true);
+    if (directOnly)
+        body.insert(QStringLiteral("direct_only"), true);
     if (tcpPose != nullptr)
     {
         QJsonObject tcp;
@@ -575,6 +692,43 @@ bool ur3eStopMotion(const QString &serverUrl, QString *errorMessage)
     const QJsonObject response =
         postJson(serverUrl, QStringLiteral("/stop"), QJsonObject(), 10000, errorMessage);
     return !response.isEmpty() && response.value(QStringLiteral("ok")).toBool(false);
+}
+
+bool ur3ePreviewManualTarget(const QString &serverUrl,
+                             const std::vector<double> &positionsRad,
+                             QString *errorMessage)
+{
+    QJsonObject body = buildScanMotionRequestBody();
+    body.insert(QStringLiteral("joints"), positionsToJsonArray(positionsRad));
+
+    QString localError;
+    const QJsonObject response =
+        postJson(serverUrl, QStringLiteral("/preview_manual_target"), body, 120000, &localError);
+    if (response.isEmpty() || !response.value(QStringLiteral("ok")).toBool(false))
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = response.value(QStringLiteral("error")).toString(localError);
+        return false;
+    }
+    return true;
+}
+
+bool ur3eSyncWorkspaceBoundary(const QString &serverUrl, QString *errorMessage)
+{
+    QString localError;
+    const QJsonObject response = postJson(
+        serverUrl,
+        QStringLiteral("/sync_workspace_boundary"),
+        buildScanMotionRequestBody(),
+        30000,
+        &localError);
+    if (response.isEmpty() || !response.value(QStringLiteral("ok")).toBool(false))
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = response.value(QStringLiteral("error")).toString(localError);
+        return false;
+    }
+    return true;
 }
 
 QJsonObject ur3ePostJsonRequest(const QString &serverUrl,

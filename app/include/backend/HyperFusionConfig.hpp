@@ -103,6 +103,8 @@ struct HardwareConfig
 
     struct Ur3eConfig
     {
+        /// When false, UR3e tabs and WSL sidecar/driver are disabled.
+        bool useUr3e = true;
         QString wslDistro = QStringLiteral("Ubuntu");
         QString wslBashCommand;
         QString ur3eRepoLinux;
@@ -113,14 +115,12 @@ struct HardwareConfig
         int rtdePort = 30004;
         bool prestartDriver = false;
         /// HTTP /connect client timeout (ms). Driver startup can take ~2 min per attempt.
-        int connectTimeoutMs = 480000;
+        int connectTimeoutMs = 120000;
         QString rosDistro = QStringLiteral("jazzy");
         QString urType = QStringLiteral("ur3e");
         bool useMockHardware = true;
         double maxLinearSpeedMPerS = 0.05;
         double maxLinearAccelMPerS2 = 0.3;
-        /// "move_j" (joint sliders) or "move_l" (linear TCP; uses current /pose target).
-        QString motionType = QStringLiteral("move_j");
         /// Ceiling-mount workspace cube (mm). Tray centered at origin; Z=0 bottom, Z=height mount plane.
         bool workspaceBoundaryEnabled = true;
         double workspaceLengthMm = 600.0;

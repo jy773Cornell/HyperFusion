@@ -45,6 +45,9 @@ class Ur3eRosBridge:
       use_mock_hardware: bool = True,
       initial_joint_deg: Optional[List[float]] = None,
       ceiling_mount_height_m: Optional[float] = None,
+      workspace_boundary_enabled: bool = True,
+      workspace_length_m: float = 0.6,
+      workspace_width_m: float = 0.6,
   ) -> None:
     self.robot_ip = robot_ip
     self.reverse_ip = reverse_ip.strip() or "0.0.0.0"
@@ -57,8 +60,12 @@ class Ur3eRosBridge:
     self.use_mock_hardware = use_mock_hardware
     self.initial_joint_deg = initial_joint_deg or [0.0, -150.0, 120.0, 0.0, 90.0, 0.0]
     self.ceiling_mount_height_m = ceiling_mount_height_m
+    self.workspace_boundary_enabled = workspace_boundary_enabled
+    self.workspace_length_m = workspace_length_m
+    self.workspace_width_m = workspace_width_m
 
     self._lock = threading.RLock()
+    self._driver_startup_lock = threading.RLock()
     self._status = RobotStatus(robot_ip=robot_ip)
     self._pose = TcpPose()
     self._moving = False
@@ -78,6 +85,45 @@ class Ur3eRosBridge:
     self._node_seq: int = 0
     self._active_goal_handle: Any = None
     self._stop_requested = threading.Event()
+
+    self._connect_thread: Optional[threading.Thread] = None
+    self._connect_cancel = threading.Event()
+    self._connect_phase = "idle"
+    self._connect_message = ""
+    self._connect_error: Optional[str] = None
+    self._connect_result: Optional[Dict[str, Any]] = None
+
+  def configured_workspace(self) -> Any:
+    from hyperfusion_ur3e.moveit.scan_planner import WorkspaceBox
+
+    height_m = self.ceiling_mount_height_m if self.ceiling_mount_height_m else 0.65
+    return WorkspaceBox(
+        enabled=self.workspace_boundary_enabled,
+        length_m=self.workspace_length_m,
+        width_m=self.workspace_width_m,
+        height_m=height_m,
+    )
+
+  def start_workspace_boundary_sync(self) -> None:
+    from hyperfusion_ur3e.moveit.scan_planner import get_scan_planner
+
+    planner = get_scan_planner(ros_distro=self.ros_distro, ur_type=self.ur_type)
+    planner.set_default_workspace(self.configured_workspace())
+    planner.start_boundary_keepalive()
+
+  def sync_workspace_boundary(self, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    from hyperfusion_ur3e.moveit.scan_planner import get_scan_planner, workspace_from_dict
+
+    workspace = self.configured_workspace()
+    if isinstance(body, dict):
+      workspace_cfg = body.get("workspace")
+      if isinstance(workspace_cfg, dict):
+        workspace = workspace_from_dict(workspace_cfg)
+
+    self.start_workspace_boundary_sync()
+    planner = get_scan_planner(ros_distro=self.ros_distro, ur_type=self.ur_type)
+    applied = planner.ensure_workspace_boundary_visible(workspace)
+    return {"ok": True, "applied": applied}
 
   def _joint_trajectory_action_topic(self) -> str:
     if self.use_mock_hardware:
@@ -117,6 +163,13 @@ class Ur3eRosBridge:
 
   def _verify_ros_hardware_mode_unlocked(self) -> None:
     """Fail fast when ROS controllers are not ready for the requested mode."""
+    if self.use_mock_hardware:
+      if self._joint_states_publishing(timeout_s=4.0):
+        return
+      raise RuntimeError(
+          "UR driver is not ready for simulation (mock): joint_states not publishing yet."
+      )
+
     import subprocess
 
     proc = subprocess.run(
@@ -148,20 +201,106 @@ class Ur3eRosBridge:
           f"UR driver is not ready for {mode}: {expected} is not active.\n{detail}"
       )
 
+  def _external_control_reverse_connected(self) -> bool:
+    """True when the robot has reverse TCP sessions for External Control.
+
+    Port 50002 (script sender) is often ephemeral — it closes after the URCap
+    fetches the driver script. While the program runs, 50001/50003/50004 stay up.
+    """
+    import subprocess
+
+    ports = "50001|50002|50003|50004"
+    robot = self.robot_ip.strip()
+    grep_robot = f" | grep '{robot}'" if robot else ""
+    try:
+      proc = subprocess.run(
+          [
+              "bash",
+              "-lc",
+              f"ss -tn state established | grep -E ':({ports}) '{grep_robot} | grep -q .",
+          ],
+          capture_output=True,
+          timeout=3.0,
+      )
+      return proc.returncode == 0
+    except Exception:
+      return False
+
+  def _scaled_controller_active_unlocked(self) -> bool:
+    import subprocess
+
+    proc = subprocess.run(
+        [
+            "bash",
+            "-lc",
+            f"source /opt/ros/{self.ros_distro}/setup.bash && "
+            "timeout 4 ros2 control list_controllers",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    output = proc.stdout or ""
+    return any(
+        "scaled_joint_trajectory_controller" in line and "active" in line
+        for line in output.splitlines()
+    )
+
+  def _verify_real_external_control_unlocked(self, timeout_s: float = 45.0) -> None:
+    """Real robot: require External Control Play (reverse ports + trajectory ready)."""
+    if self.use_mock_hardware:
+      return
+
+    deadline = time.time() + max(5.0, timeout_s)
+    while time.time() < deadline:
+      reverse_connected = self._external_control_reverse_connected()
+      scaled_active = self._scaled_controller_active_unlocked()
+      traj_ready = (
+          self._trajectory_client is not None
+          and self._trajectory_client.server_is_ready()
+      )
+      if reverse_connected and (scaled_active or traj_ready):
+        sys.stderr.write(
+            "UR3e bridge: External Control connected (reverse ports), "
+            "scaled_joint_trajectory_controller ready.\n"
+        )
+        return
+      time.sleep(0.5)
+
+    raise RuntimeError(
+        "Real robot is not fully connected via External Control. "
+        f"On the teach pendant: External Control → remote PC {self.reverse_ip}:50002 → "
+        "press Play while /connect is waiting. "
+        "Verify in WSL: ss -tn state established | grep -E '50001|50003|50004' && "
+        "ros2 action info /scaled_joint_trajectory_controller/follow_joint_trajectory"
+    )
+
   def _verify_joint_trajectory_controller_active(self) -> None:
+    if self._trajectory_client is not None and self._trajectory_client.server_is_ready():
+      sys.stderr.write(
+          f"UR3e bridge: {self._joint_trajectory_controller_name()} action server ready\n"
+      )
+      return
+
     import subprocess
 
     controller = self._joint_trajectory_controller_name()
     cmd = (
       f"source /opt/ros/{self.ros_distro}/setup.bash && "
-      "ros2 control list_controllers"
+      "timeout 4 ros2 control list_controllers"
     )
-    proc = subprocess.run(
-      ["bash", "-lc", cmd],
-      capture_output=True,
-      text=True,
-      timeout=20.0,
-    )
+    try:
+      proc = subprocess.run(
+        ["bash", "-lc", cmd],
+        capture_output=True,
+        text=True,
+        timeout=6.0,
+      )
+    except subprocess.TimeoutExpired:
+      sys.stderr.write(
+          f"UR3e bridge: WARNING — could not confirm {controller} via ros2 CLI "
+          "(action server is ready).\n"
+      )
+      return
     output = proc.stdout or ""
     for line in output.splitlines():
       if controller in line and "active" in line:
@@ -186,6 +325,17 @@ class Ur3eRosBridge:
         ceiling_mount_height_m=self.ceiling_mount_height_m,
     )
 
+  def driver_ready_for_connect(self) -> bool:
+    """True when prestart/warmup finished and the UR driver subprocess is idle."""
+    with self._lock:
+      if self._connecting:
+        return False
+      if self._driver is None or not self._driver.running:
+        return False
+      if self._status.fault:
+        return False
+      return self._status.driver_state == "idle"
+
   def status(self) -> RobotStatus:
     with self._lock:
       return RobotStatus(
@@ -205,24 +355,318 @@ class Ur3eRosBridge:
 
   def warm_driver(self) -> Dict[str, Any]:
     """Start ur_robot_driver only (no ROS bridge node). Used by sidecar prestart."""
-    with self._lock:
-      sys.stderr.write("UR3e bridge: warming ur_robot_driver subprocess…\n")
+    sys.stderr.write("UR3e bridge: warming ur_robot_driver subprocess…\n")
+    with self._driver_startup_lock:
+      self._warm_driver_without_blocking_health()
+    return {"ok": True, "driver": "warming"}
+
+  def _ensure_driver_running(self) -> None:
+    """Serialize driver startup with prestart/warmup (avoids SIGTERM races)."""
+    with self._driver_startup_lock:
       self._ensure_driver_running_unlocked()
-      return {"ok": True, "driver": "warming"}
+
+  def _warm_driver_without_blocking_health(self) -> None:
+    """Start or reuse the driver without holding bridge._lock across slow subprocess launch."""
+    conflict = False
+    reuse = False
+    restart = False
+    start_new = False
+    external_running = False
+
+    with self._lock:
+      if self._driver_mode_conflict_unlocked():
+        conflict = True
+        if self._driver is not None:
+          self._driver.stop()
+          self._driver = None
+      elif self._driver is not None and self._driver.running:
+        if self._driver.controller_manager_ready():
+          reuse = True
+        elif (
+            not self.use_mock_hardware
+            and self._external_control_reverse_connected()
+        ):
+          reuse = True
+        elif self.use_mock_hardware:
+          reuse = True
+        else:
+          restart = True
+          self._driver.stop()
+          self._driver = None
+      else:
+        start_new = True
+        external_running = self._external_driver_running()
+
+    if reuse:
+      sys.stderr.write(
+          "UR3e bridge: reusing mock driver subprocess "
+          "(ros2 control CLI can be slow during warmup).\n"
+          if self.use_mock_hardware
+          else "UR3e bridge: reusing active driver subprocess\n"
+      )
+      Ur3eRosDriverManager.ensure_joint_states_stamper_for_distro(self.ros_distro)
+      with self._lock:
+        self._status.driver_state = "idle"
+        self._status.fault = ""
+      return
+
+    if conflict:
+      sys.stderr.write(
+          "UR3e bridge: stale UR driver mode conflict — stopping leftover processes…\n"
+      )
+      Ur3eRosDriverManager.stop_stale_launches()
+
+    if not (start_new or restart):
+      return
+
+    if external_running:
+      sys.stderr.write(
+          "UR3e bridge: restarting ur_control for HyperFusion ceiling-mount description…\n"
+      )
+    else:
+      sys.stderr.write("UR3e bridge: starting ur_robot_driver (may take ~2 min)…\n")
+
+    Ur3eRosDriverManager.stop_stale_launches()
+    driver = self._new_driver_manager()
+    with self._lock:
+      if self._driver is not None:
+        self._driver.stop()
+      self._driver = driver
+    try:
+      driver.start()
+    except Exception:
+      with self._lock:
+        if self._driver is driver:
+          self._driver = None
+      driver.stop()
+      raise
+
+    with self._lock:
+      self._status.driver_state = "idle"
+      self._status.fault = ""
+
+    if not self.use_mock_hardware:
+      try:
+        with self._lock:
+          self._verify_ros_hardware_mode_unlocked()
+      except Exception as exc:
+        sys.stderr.write(f"UR3e bridge: driver ready but controller check pending: {exc}\n")
+    Ur3eRosDriverManager.ensure_joint_states_stamper_for_distro(self.ros_distro)
+    sys.stderr.write(
+        "UR3e bridge: simulation driver prestart complete.\n"
+        if self.use_mock_hardware
+        else "UR3e bridge: driver prestart complete.\n"
+    )
+
+  def _set_connect_phase(self, phase: str, message: str) -> None:
+    with self._lock:
+      if self._connect_phase == phase and self._connect_message == message:
+        return
+      self._connect_phase = phase
+      self._connect_message = message
+    sys.stderr.write(f"UR3e bridge: connect phase={phase} — {message}\n")
+
+  def _raise_if_connect_cancelled(self) -> None:
+    if self._connect_cancel.is_set():
+      raise RuntimeError("Connect cancelled.")
+
+  @staticmethod
+  def _script_port_listening() -> bool:
+    from hyperfusion_ur3e.driver.driver_manager import Ur3eRosDriverManager
+
+    return Ur3eRosDriverManager._script_sender_port_listening()
+
+  def connect_start(self, robot_ip: Optional[str] = None) -> Dict[str, Any]:
+    """Begin connect on a background thread (GUI polls connect_status)."""
+    with self._lock:
+      if self._connecting or (
+          self._connect_thread is not None and self._connect_thread.is_alive()
+      ):
+        raise RuntimeError("Connect already in progress.")
+      if self._status.connected:
+        if not self.use_mock_hardware:
+          try:
+            self._verify_real_external_control_unlocked(timeout_s=5.0)
+          except RuntimeError:
+            sys.stderr.write(
+                "UR3e bridge: stale connect — External Control no longer active, reconnecting…\n"
+            )
+            self._shutdown_ros_unlocked()
+            self._status.connected = False
+          else:
+            mode = "simulation" if self.use_mock_hardware else "hardware"
+            result = {
+                "ok": True,
+                "already_connected": True,
+                "phase": "complete",
+                "message": "Already connected",
+                "mode": mode,
+                "use_mock_hardware": self.use_mock_hardware,
+                **self.status().to_dict(),
+            }
+            self._connect_phase = "complete"
+            self._connect_message = "Already connected"
+            self._connect_result = result
+            return self.connect_status()
+        else:
+          mode = "simulation" if self.use_mock_hardware else "hardware"
+          result = {
+              "ok": True,
+              "already_connected": True,
+              "phase": "complete",
+              "message": "Already connected",
+              "mode": mode,
+              "use_mock_hardware": self.use_mock_hardware,
+              **self.status().to_dict(),
+          }
+          self._connect_phase = "complete"
+          self._connect_message = "Already connected"
+          self._connect_result = result
+          return self.connect_status()
+
+      if robot_ip is not None and str(robot_ip).strip():
+        self.robot_ip = str(robot_ip).strip()
+        self._status.robot_ip = self.robot_ip
+
+      if self._node is not None or self._spin_thread is not None:
+        self._shutdown_ros_unlocked()
+
+      self._connect_cancel.clear()
+      self._connect_error = None
+      self._connect_result = None
+      self._connecting = True
+      self._status.driver_state = "connecting"
+      if self.use_mock_hardware:
+        self._connect_phase = "starting_driver"
+        self._connect_message = "Starting simulation driver…"
+      else:
+        self._connect_phase = "starting_driver"
+        self._connect_message = "Starting ROS driver…"
+
+    self._connect_thread = threading.Thread(
+        target=self._connect_worker,
+        daemon=True,
+        name="ur3e-connect",
+    )
+    self._connect_thread.start()
+    return self.connect_status()
+
+  def _connect_worker(self) -> None:
+    try:
+      self._connect_ros_unlocked()
+      with self._lock:
+        self._status.connected = True
+        self._status.driver_state = "idle"
+        self._status.fault = ""
+        mode = "simulation" if self.use_mock_hardware else "hardware"
+        self._connect_result = {
+            "ok": True,
+            "phase": "complete",
+            "message": "Connected",
+            "mode": mode,
+            "use_mock_hardware": self.use_mock_hardware,
+            **self.status().to_dict(),
+        }
+        self._connect_phase = "complete"
+        self._connect_message = (
+            "Connected (simulation)" if self.use_mock_hardware else "Connected (hardware)"
+        )
+      try:
+        self.sync_workspace_boundary()
+      except Exception as exc:
+        sys.stderr.write(f"UR3e bridge: workspace boundary sync after connect: {exc}\n")
+    except Exception as exc:
+      cancelled = self._connect_cancel.is_set() or "cancel" in str(exc).lower()
+      with self._lock:
+        if cancelled:
+          self._connect_phase = "cancelled"
+          self._connect_message = "Connect cancelled"
+          self._connect_error = None
+          self._status.driver_state = "disconnected"
+        else:
+          self._connect_phase = "failed"
+          self._connect_message = str(exc)
+          self._connect_error = str(exc)
+          self._status.fault = str(exc)
+          self._status.driver_state = "fault"
+        self._shutdown_ros_unlocked()
+    finally:
+      with self._lock:
+        self._connecting = False
+
+  def connect_status(self) -> Dict[str, Any]:
+    with self._lock:
+      phase = self._connect_phase
+      in_progress = phase in {
+          "starting_driver",
+          "waiting_external_control",
+          "bridge_setup",
+          "finishing",
+          "cancelling",
+      }
+      payload: Dict[str, Any] = {
+          "ok": phase == "complete",
+          "phase": phase,
+          "message": self._connect_message,
+          "in_progress": in_progress,
+          "use_mock_hardware": self.use_mock_hardware,
+          "reverse_connected": self._external_control_reverse_connected(),
+          "script_port_listening": self._script_port_listening(),
+          "connected": self._status.connected,
+          "driver_state": self._status.driver_state,
+          "robot_ip": self._status.robot_ip,
+          "reverse_ip": self.reverse_ip,
+          "fault": self._status.fault or None,
+      }
+      if self._connect_error:
+        payload["error"] = self._connect_error
+      if self._connect_result and phase == "complete":
+        payload.update(self._connect_result)
+      return payload
+
+  def connect_cancel(self) -> Dict[str, Any]:
+    with self._lock:
+      if not self._connecting and not (
+          self._connect_thread is not None and self._connect_thread.is_alive()
+      ):
+        return {"ok": True, "cancelled": False, "phase": self._connect_phase}
+      self._connect_cancel.set()
+      self._connect_phase = "cancelling"
+      self._connect_message = "Cancelling connect…"
+    return {"ok": True, "cancelled": True, **self.connect_status()}
 
   def connect(self) -> Dict[str, Any]:
     with self._lock:
       if self._connecting:
         raise RuntimeError("Connect already in progress.")
       if self._status.connected:
-        mode = "simulation" if self.use_mock_hardware else "hardware"
-        return {
-            "ok": True,
-            "already_connected": True,
-            "mode": mode,
-            "use_mock_hardware": self.use_mock_hardware,
-            **self.status().to_dict(),
-        }
+        if not self.use_mock_hardware:
+          try:
+            self._verify_real_external_control_unlocked(timeout_s=5.0)
+          except RuntimeError:
+            sys.stderr.write(
+                "UR3e bridge: stale connect — External Control no longer active, reconnecting…\n"
+            )
+            self._shutdown_ros_unlocked()
+            self._status.connected = False
+          else:
+            mode = "simulation" if self.use_mock_hardware else "hardware"
+            return {
+                "ok": True,
+                "already_connected": True,
+                "mode": mode,
+                "use_mock_hardware": self.use_mock_hardware,
+                **self.status().to_dict(),
+            }
+        else:
+          mode = "simulation" if self.use_mock_hardware else "hardware"
+          return {
+              "ok": True,
+              "already_connected": True,
+              "mode": mode,
+              "use_mock_hardware": self.use_mock_hardware,
+              **self.status().to_dict(),
+          }
 
       if self._node is not None or self._spin_thread is not None:
         self._shutdown_ros_unlocked()
@@ -291,6 +735,9 @@ class Ur3eRosBridge:
   def _external_driver_running(self) -> bool:
     import subprocess
 
+    if self._driver is not None and self._driver.running:
+      return False
+
     proc = subprocess.run(
       ["pgrep", "-f", f"ur_control.launch.py.*robot_ip:={self.robot_ip}"],
       capture_output=True,
@@ -299,23 +746,35 @@ class Ur3eRosBridge:
     return proc.returncode == 0
 
   def _joint_states_publishing(self, timeout_s: float = 5.0) -> bool:
+    """Best-effort check that joint_states has data (ros2 control list_controllers can hang on WSL)."""
+    if not self.use_mock_hardware and self._external_control_reverse_connected():
+      return True
+
     import subprocess
 
-    cmd = (
-      f"source /opt/ros/{self.ros_distro}/setup.bash && "
-      "ros2 topic echo /joint_states sensor_msgs/msg/JointState "
-      f"--once --timeout {max(1, int(timeout_s))}"
-    )
-    try:
-      proc = subprocess.run(
-        ["bash", "-lc", cmd],
-        capture_output=True,
-        text=True,
-        timeout=timeout_s + 15.0,
+    wait_s = max(1, int(timeout_s))
+    for topic in (
+        "/joint_state_broadcaster/joint_states",
+        "/joint_states",
+    ):
+      cmd = (
+          f"export ROS_LOCALHOST_ONLY=1 && "
+          f"source /opt/ros/{self.ros_distro}/setup.bash && "
+          f"timeout {wait_s} ros2 topic hz {topic} --window 1 2>/dev/null | "
+          "head -1 | grep -q average"
       )
-    except subprocess.TimeoutExpired:
-      return False
-    return proc.returncode == 0
+      try:
+        proc = subprocess.run(
+            ["bash", "-lc", cmd],
+            capture_output=True,
+            text=True,
+            timeout=float(wait_s) + 3.0,
+        )
+      except subprocess.TimeoutExpired:
+        continue
+      if proc.returncode == 0:
+        return True
+    return False
 
   def _start_driver_unlocked(self) -> None:
     Ur3eRosDriverManager.stop_stale_launches()
@@ -341,6 +800,19 @@ class Ur3eRosBridge:
     if self._driver is not None and self._driver.running:
       if self._driver.controller_manager_ready():
         sys.stderr.write("UR3e bridge: reusing active driver subprocess\n")
+      elif (
+          not self.use_mock_hardware
+          and self._external_control_reverse_connected()
+      ):
+        sys.stderr.write(
+            "UR3e bridge: reusing driver — External Control reverse ports are active "
+            "(ros2 control CLI is slow).\n"
+        )
+      elif self.use_mock_hardware:
+        sys.stderr.write(
+            "UR3e bridge: reusing mock driver subprocess "
+            "(ros2 control CLI can be slow during warmup).\n"
+        )
       else:
         sys.stderr.write(
             "UR3e bridge: driver process present but controller manager not ready — restarting…\n"
@@ -370,9 +842,13 @@ class Ur3eRosBridge:
         last_exc = exc
         message = str(exc).lower()
         retryable = (
-            "joint_states" in message
-            or "controller manager" in message
-            or "ur driver exited" in message
+            "external control" not in message
+            and (
+                "joint_states" in message
+                or "controller manager" in message
+                or "ur driver exited" in message
+            )
+            and not self._external_control_reverse_connected()
         )
         if attempt == 0 and retryable:
           sys.stderr.write("UR3e bridge: retrying connect with a fresh driver…\n")
@@ -386,20 +862,48 @@ class Ur3eRosBridge:
       raise last_exc
 
   def _connect_ros_unlocked_once(self, *, force_fresh_driver: bool = False) -> None:
+    self._raise_if_connect_cancelled()
+    self._set_connect_phase(
+        "starting_driver",
+        "Starting simulation driver…" if self.use_mock_hardware else "Starting ROS driver…",
+    )
     if force_fresh_driver:
-      Ur3eRosDriverManager.stop_stale_launches()
-      if self._driver is not None:
-        self._driver.stop()
-        self._driver = None
-      self._start_driver_unlocked()
+      with self._driver_startup_lock:
+        Ur3eRosDriverManager.stop_stale_launches()
+        if self._driver is not None:
+          self._driver.stop()
+          self._driver = None
+        self._start_driver_unlocked()
     else:
-      self._ensure_driver_running_unlocked()
+      self._ensure_driver_running()
 
     self._verify_ros_hardware_mode_unlocked()
+    Ur3eRosDriverManager.ensure_joint_states_stamper_for_distro(self.ros_distro)
 
-    if not self._joint_states_publishing(
-        timeout_s=15.0 if self.use_mock_hardware else 120.0
-    ):
+    if not self.use_mock_hardware and self._script_port_listening():
+      self._set_connect_phase(
+          "waiting_external_control",
+          f"Press Play on External Control (remote PC {self.reverse_ip}:50002)",
+      )
+
+    joint_deadline = time.time() + (45.0 if self.use_mock_hardware else 120.0)
+    last_play_prompt_s = 0.0
+    while time.time() < joint_deadline:
+      self._raise_if_connect_cancelled()
+      if not self.use_mock_hardware and self._external_control_reverse_connected():
+        break
+      if self._joint_states_publishing(timeout_s=3.0):
+        break
+      if not self.use_mock_hardware and not self._external_control_reverse_connected():
+        now = time.time()
+        if now - last_play_prompt_s >= 15.0:
+          self._set_connect_phase(
+              "waiting_external_control",
+              f"Press Play on External Control (remote PC {self.reverse_ip}:50002)",
+          )
+          last_play_prompt_s = now
+      time.sleep(1.0)
+    else:
       if self.use_mock_hardware:
         hint = (
             "Check in WSL: ros2 control list_controllers && "
@@ -408,7 +912,8 @@ class Ur3eRosBridge:
       else:
         hint = (
             f"On the teach pendant: External Control → remote PC {self.reverse_ip}:50002 → Play. "
-            "Then in WSL: ss -tln | grep 50002 && ros2 topic echo /joint_states --once"
+            "Then in WSL: ss -tn state established | grep -E '50001|50003|50004' && "
+            "ros2 topic echo /joint_states --once"
         )
       raise RuntimeError(
           "UR driver is running but /joint_states is not publishing yet. " + hint
@@ -417,14 +922,24 @@ class Ur3eRosBridge:
     if self._node is not None:
       return
 
+    self._set_connect_phase("bridge_setup", "Setting up ROS bridge…")
+
     import os
     import rclpy
     from rclpy.node import Node
     from rclpy.duration import Duration
     from tf2_ros import Buffer, TransformListener
+    from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPolicy
     from sensor_msgs.msg import JointState
     from control_msgs.action import FollowJointTrajectory
     from rclpy.action import ActionClient
+
+    joint_qos = QoSProfile(
+        history=HistoryPolicy.KEEP_LAST,
+        depth=10,
+        reliability=ReliabilityPolicy.RELIABLE,
+        durability=DurabilityPolicy.VOLATILE,
+    )
 
     if not rclpy.ok():
       rclpy.init()
@@ -448,6 +963,7 @@ class Ur3eRosBridge:
 
     deadline = time.time() + 90.0
     while time.time() < deadline:
+      self._raise_if_connect_cancelled()
       if self._trajectory_client.server_is_ready():
         sys.stderr.write(
             f"UR3e bridge: trajectory action server ready "
@@ -474,16 +990,33 @@ class Ur3eRosBridge:
           if index < len(msg.position):
             self._latest_joint_positions[name] = float(msg.position[index])
 
-    self._node.create_subscription(JointState, "/joint_states", _on_joint_state, 10)
-    deadline = time.time() + 90.0
+    self._node.create_subscription(
+        JointState, "/joint_states", _on_joint_state, joint_qos
+    )
+    ec_active = (
+        not self.use_mock_hardware and self._external_control_reverse_connected()
+    )
+    joint_wait_s = 8.0 if ec_active else 90.0
+    deadline = time.time() + joint_wait_s
     while time.time() < deadline and not joint_event.is_set():
+      self._raise_if_connect_cancelled()
       time.sleep(0.1)
 
     if not self._joint_names:
-      raise RuntimeError(
-          "UR driver started but /joint_states is not publishing. "
-          "In WSL run: ros2 control list_controllers && ros2 topic echo /joint_states --once"
-      )
+      if ec_active:
+        self._joint_names = list(CANONICAL_JOINT_NAMES)
+        sys.stderr.write(
+            "UR3e bridge: /joint_states not yet on bridge node; "
+            "using canonical joint names (External Control is active).\n"
+        )
+      else:
+        raise RuntimeError(
+            "UR driver started but /joint_states is not publishing. "
+            "In WSL run: ros2 control list_controllers && ros2 topic echo /joint_states --once"
+        )
+
+    self._set_connect_phase("finishing", "Verifying External Control…")
+    self._verify_real_external_control_unlocked(timeout_s=15.0 if ec_active else 45.0)
 
     try:
       self._update_pose_from_tf_unlocked()
@@ -946,12 +1479,34 @@ class Ur3eRosBridge:
     planner.apply_home_joints_from_body(body)
     tcp_target = body.get("tcp")
     require_home_first = bool(body.get("require_home_first", False))
+    direct_only = bool(body.get("direct_only", False))
     return planner.execute_single_waypoint(
       [float(v) for v in joints],
       workspace=workspace,
       tcp_target=tcp_target if isinstance(tcp_target, dict) else None,
       stop_event=self._stop_requested,
       require_home_first=require_home_first,
+      direct_only=direct_only,
+    )
+
+  def preview_manual_target(self, body: Dict[str, Any]) -> Dict[str, Any]:
+    """Push UI joint target + workspace boundary into MoveIt/RViz."""
+    from hyperfusion_ur3e.moveit.scan_planner import get_scan_planner, workspace_from_dict
+
+    if not self._status.connected:
+      raise RuntimeError("Robot not connected.")
+
+    joints = body.get("joints")
+    if not isinstance(joints, list) or len(joints) != 6:
+      raise ValueError("joints must be a list of 6 floats (radians).")
+
+    workspace_cfg = body.get("workspace")
+    workspace = workspace_from_dict(workspace_cfg) if isinstance(workspace_cfg, dict) else None
+
+    planner = get_scan_planner(ros_distro=self.ros_distro, ur_type=self.ur_type)
+    return planner.update_manual_target_preview(
+      [float(v) for v in joints],
+      workspace=workspace,
     )
 
   def execute_move_home(self, body: Dict[str, Any]) -> Dict[str, Any]:

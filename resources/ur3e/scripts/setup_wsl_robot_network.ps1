@@ -25,62 +25,52 @@ function Ensure-WslMirroredNetworking {
         "localhostForwarding=true"
     )
     $sectionHeader = "[wsl2]"
-    $changed = $false
+    $headerComment = "# HyperFusion UR3e - allow robot (External Control) to reach the WSL ROS driver."
 
-    if (-not (Test-Path -LiteralPath $wslConfigPath)) {
-        @(
-            "# HyperFusion UR3e - allow robot (External Control) to reach the WSL ROS driver."
-            $sectionHeader
-            $desiredLines
-            ""
-        ) | Set-Content -LiteralPath $wslConfigPath -Encoding utf8
-        Write-Host "==> Created $wslConfigPath with mirrored networking + localhostForwarding"
-        return $true
+    $needsRewrite = $true
+    if (Test-Path -LiteralPath $wslConfigPath) {
+        $lines = Get-Content -LiteralPath $wslConfigPath
+        $hasMirrored = $false
+        $hasLocalhostForwarding = $false
+        foreach ($line in $lines) {
+            if ($line -match '^\s*networkingMode\s*=\s*mirrored\s*$') { $hasMirrored = $true }
+            if ($line -match '^\s*localhostForwarding\s*=\s*true\s*$') { $hasLocalhostForwarding = $true }
+        }
+        $needsRewrite = -not ($hasMirrored -and $hasLocalhostForwarding)
     }
 
-    $lines = Get-Content -LiteralPath $wslConfigPath
-    $updated = New-Object System.Collections.Generic.List[string]
-    $inWsl2 = $false
-    $present = @{}
-
-    foreach ($line in $lines) {
-        if ($line -match '^\s*\[wsl2\]\s*$') {
-            $inWsl2 = $true
-            $updated.Add($line)
-            continue
-        }
-        if ($inWsl2 -and $line -match '^\s*\[') {
-            $inWsl2 = $false
-        }
-        if ($inWsl2 -and $line -match '^\s*(networkingMode|localhostForwarding)\s*=') {
-            $key = ($line -split '=')[0].Trim()
-            $present[$key] = $true
-            continue
-        }
-        $updated.Add($line)
-    }
-
-    foreach ($desired in $desiredLines) {
-        $key = ($desired -split '=')[0].Trim()
-        if (-not $present.ContainsKey($key)) {
-            if ($updated.Count -gt 0 -and $updated[$updated.Count - 1].Trim() -ne "") {
-                $updated.Add("")
-            }
-            if ($updated -notmatch '^\s*\[wsl2\]\s*$') {
-                $updated.Add($sectionHeader)
-            }
-            $updated.Add($desired)
-            $changed = $true
-            Write-Host "==> Added to ${wslConfigPath}: $desired"
-        }
-    }
-
-    if ($changed) {
-        $updated | Set-Content -LiteralPath $wslConfigPath -Encoding utf8
-    } else {
+    if (-not $needsRewrite) {
         Write-Host "==> $wslConfigPath already has mirrored networking settings"
+        return $false
     }
-    return $changed
+
+    $otherLines = @()
+    if (Test-Path -LiteralPath $wslConfigPath) {
+        $skipWsl2Body = $false
+        foreach ($line in (Get-Content -LiteralPath $wslConfigPath)) {
+            if ($line -match '^\s*\[wsl2\]\s*$') {
+                $skipWsl2Body = $true
+                continue
+            }
+            if ($skipWsl2Body) {
+                if ($line -match '^\s*\[') { $skipWsl2Body = $false }
+                elseif ($line -match '^\s*(networkingMode|localhostForwarding)\s*=') { continue }
+                else { continue }
+            }
+            if ($line -match '^\s*# HyperFusion UR3e') { continue }
+            if ($line.Trim().Length -gt 0) { $otherLines += $line }
+        }
+    }
+
+  @(
+        $headerComment
+        $sectionHeader
+        $desiredLines
+        ""
+        $otherLines
+    ) | Set-Content -LiteralPath $wslConfigPath -Encoding utf8
+    Write-Host "==> Updated $wslConfigPath (networkingMode=mirrored, localhostForwarding=true)"
+    return $true
 }
 
 function Ensure-UrPortProxyRules {
@@ -155,10 +145,12 @@ $wslConfigChanged = Ensure-WslMirroredNetworking
 Ensure-UrReverseFirewallRules -Ports $ReversePorts
 Ensure-UrPortProxyRules -Ports $ReversePorts
 
-if ($ShutdownWsl) {
+if ($ShutdownWsl -and $wslConfigChanged) {
     Write-Host "==> Shutting down WSL (applies .wslconfig changes)..."
     & wsl.exe --shutdown
     Write-Host "==> WSL shutdown complete. Re-open Ubuntu before connecting to the robot."
+} elseif ($ShutdownWsl -and -not $wslConfigChanged) {
+    Write-Host "==> Skipping WSL shutdown (.wslconfig unchanged)."
 } elseif ($wslConfigChanged) {
     Write-Host ""
     Write-Host "IMPORTANT: Restart WSL so mirrored networking takes effect:"

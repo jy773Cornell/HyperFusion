@@ -206,7 +206,8 @@ void StagePanelController::initializeWorker()
 void StagePanelController::updateConnectionControls(const StageState state, const bool refreshCaptureControls)
 {
     const bool connected = state == StageState::Connected;
-    const bool busy = state == StageState::Connecting || state == StageState::Homing;
+    const bool homing = state == StageState::Homing;
+    const bool busy = state == StageState::Connecting || homing;
     const bool motionActive = connected || busy;
     const bool captureScanActive = host_->isCaptureSessionActive();
 
@@ -225,9 +226,12 @@ void StagePanelController::updateConnectionControls(const StageState state, cons
 
     if (host_->stagePositionTimer_ != nullptr)
     {
-        if (connected)
+        if (connected || homing)
         {
-            syncPositionPollInterval();
+            if (homing)
+                host_->stagePositionTimer_->setInterval(kManualPositionPollIntervalMs);
+            else
+                syncPositionPollInterval();
             host_->stagePositionTimer_->start();
             pollPosition();
         }
@@ -237,7 +241,7 @@ void StagePanelController::updateConnectionControls(const StageState state, cons
         }
     }
 
-    if (!connected)
+    if (state == StageState::Disconnected || state == StageState::Fault)
     {
         manualMotionDepth_ = 0;
         manualMotionCoastActive_ = false;
@@ -373,7 +377,8 @@ void StagePanelController::pollPosition()
     if (stageWorker_ == nullptr)
         return;
 
-    if (stageWorker_->currentState() != StageState::Connected)
+    const StageState state = stageWorker_->currentState();
+    if (state != StageState::Connected && state != StageState::Homing)
         return;
 
     stageWorker_->requestPrimaryPosition([this](const double positionMm, const bool ok) {
