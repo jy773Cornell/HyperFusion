@@ -99,10 +99,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=bool(cfg.get("prestart_driver", False)),
         help="Warm up ur_robot_driver in background after HTTP server starts.",
     )
+    home_default = cfg.get("home_joints_deg", [0, -150, 120, 0, 90, 0])
+    if isinstance(home_default, (list, tuple)) and len(home_default) == 6:
+        home_default_str = ",".join(str(float(v)) for v in home_default)
+    else:
+        home_default_str = "0,-150,120,0,90,0"
     parser.add_argument(
         "--initial-joint-deg",
-        default="0,-150,120,0,90,0",
-        help="Mock-only home pose (degrees): pan,lift,elbow,wrist1,wrist2,wrist3.",
+        default=home_default_str,
+        help="Mock-only startup pose (degrees); HyperFusion passes home_joints_deg from hyperfusion.cfg.",
     )
     parser.add_argument(
         "--ceiling-mount-height-mm",

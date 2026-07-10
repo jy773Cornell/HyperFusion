@@ -16,8 +16,10 @@
 
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QAbstractButton>
 #include <QMetaObject>
 #include <QPushButton>
+#include <QThread>
 #include <QTimer>
 #include <QHash>
 
@@ -36,7 +38,6 @@ namespace hf::ur3e
 namespace
 {
 constexpr int kUr3eJointCount = 6;
-constexpr double kMockInitialJointDeg[kUr3eJointCount] = {0.0, -150.0, 120.0, 0.0, 90.0, 0.0};
 constexpr const char *kUr3eJointNames[kUr3eJointCount] = {
     "shoulder_pan_joint",
     "shoulder_lift_joint",
@@ -119,6 +120,19 @@ QString formatTcpPose(const Ur3eTcpPose &pose)
         .arg(pose.ry, 0, 'f', 3)
         .arg(pose.rz, 0, 'f', 3);
 }
+
+QString formatConfiguredHomeJointsDeg()
+{
+    const std::array<double, 6> &homeDeg = hf::hardwareConfig().ur3e.homeJointsDeg;
+    QStringList parts;
+    for (int jointIndex = 0; jointIndex < kUr3eJointCount; ++jointIndex)
+    {
+        parts << QStringLiteral("%1=%2°")
+                     .arg(QString::fromUtf8(kUr3eJointNames[jointIndex]))
+                     .arg(static_cast<int>(std::lround(homeDeg[static_cast<std::size_t>(jointIndex)])));
+    }
+    return parts.join(QStringLiteral(", "));
+}
 } // namespace
 
 Ur3ePanelController::Ur3ePanelController(MainWindow *host, QObject *parent)
@@ -144,7 +158,7 @@ Ur3ePanelController::Ur3ePanelController(MainWindow *host, QObject *parent)
 
 Ur3ePanelController::~Ur3ePanelController()
 {
-    shutdownSync();
+    (void)shutdownSync();
 }
 
 bool Ur3ePanelController::isSidecarRunning() const
@@ -183,7 +197,7 @@ void Ur3ePanelController::refreshUi()
     updateRobotUi();
 }
 
-void Ur3ePanelController::shutdownSync()
+bool Ur3ePanelController::shutdownSync()
 {
     shutdownRequested_.store(true, std::memory_order_release);
     stopRequested_.store(true, std::memory_order_release);
@@ -206,6 +220,20 @@ void Ur3ePanelController::shutdownSync()
         host_->ur3ePosePollTimer_->stop();
 
     if (robotConnected_ && serverManager_ != nullptr && serverManager_->isServerConnected())
+    {
+        const HomeEnsureOutcome homeOutcome =
+            ensureRobotAtHomeSync(HomeEnsureContext::BeforeShutdown);
+        if (homeOutcome.cancelled)
+        {
+            shutdownRequested_.store(false, std::memory_order_release);
+            stopRequested_.store(false, std::memory_order_release);
+            if (host_->ur3ePosePollTimer_ != nullptr)
+                host_->ur3ePosePollTimer_->start(kPosePollIntervalMs);
+            return false;
+        }
+    }
+
+    if (robotConnected_ && serverManager_ != nullptr && serverManager_->isServerConnected())
         ur3eDisconnectRobot(serverManager_->serverUrl());
 
     if (serverManager_ != nullptr)
@@ -218,6 +246,7 @@ void Ur3ePanelController::shutdownSync()
         rvizManager_->stop();
 
     robotConnected_ = false;
+    return true;
 }
 
 void Ur3ePanelController::wireSettingsTabConnections()
@@ -493,7 +522,7 @@ void Ur3ePanelController::applyConfiguredInitialJointTargets()
         ui::Ur3eJointBarWidget *bar = host_->ur3eJointBars_[jointIndex];
         if (bar == nullptr)
             continue;
-        const double radians = kMockInitialJointDeg[jointIndex] * M_PI / 180.0;
+        const double radians = cfg.homeJointsDeg[static_cast<std::size_t>(jointIndex)] * M_PI / 180.0;
         bar->setValueRadians(radians);
     }
 }
@@ -975,6 +1004,11 @@ void Ur3ePanelController::onExecuteHemisphereScanRequested()
                                     .arg(reason));
                         },
                         Qt::QueuedConnection);
+                    QMetaObject::invokeMethod(
+                        this,
+                        "scanExecuteMarkFailed",
+                        Qt::QueuedConnection,
+                        Q_ARG(int, pointIndex));
                     ++skipped;
                     continue;
                 }
@@ -1105,6 +1139,15 @@ void Ur3ePanelController::scanExecuteMarkCompleted(const int pointIndex)
 
     if (host_->ur3eScanRoutePlanWidget_ != nullptr)
         host_->ur3eScanRoutePlanWidget_->markScanPointCompleted(pointIndex);
+}
+
+void Ur3ePanelController::scanExecuteMarkFailed(const int pointIndex)
+{
+    if (!scanExecuting_)
+        return;
+
+    if (host_->ur3eScanRoutePlanWidget_ != nullptr)
+        host_->ur3eScanRoutePlanWidget_->markScanPointFailed(pointIndex);
 }
 
 void Ur3ePanelController::scanExecuteLogMoving(const int step,
@@ -1331,10 +1374,32 @@ void Ur3ePanelController::onDisconnectRequested()
     if (serverManager_ == nullptr || busy_ || !robotConnected_)
         return;
 
-    host_->appendLog(QStringLiteral("UR3e: disconnecting\u2026"));
+    host_->appendLog(QStringLiteral("UR3e: preparing to disconnect\u2026"));
     setBusy(true);
     const QString serverUrl = serverManager_->serverUrl();
     std::thread([this, serverUrl]() {
+        const HomeEnsureOutcome homeOutcome =
+            ensureRobotAtHomeSync(HomeEnsureContext::BeforeDisconnect);
+        if (homeOutcome.cancelled)
+        {
+            QMetaObject::invokeMethod(
+                this,
+                [this]() {
+                    setBusy(false);
+                    host_->appendLog(
+                        QStringLiteral("UR3e: disconnect cancelled (home positioning)."));
+                    updateRobotUi();
+                },
+                Qt::QueuedConnection);
+            return;
+        }
+
+        if (!homeOutcome.success && !homeOutcome.alreadyAtHome)
+        {
+            host_->appendLog(
+                QStringLiteral("UR3e: disconnecting without reaching scan home."));
+        }
+
         const Ur3eConnectResult result = ur3eDisconnectRobot(serverUrl);
         const bool ok = result.ok;
         const QString detail = ok ? QStringLiteral("disconnected") : result.errorMessage;
@@ -1368,31 +1433,233 @@ void Ur3ePanelController::onStopMotionRequested()
 
 void Ur3ePanelController::finishConnect(const bool ok, const QString &detail)
 {
-    setBusy(false);
-    if (ok)
+    if (!ok)
     {
-        robotConnected_ = true;
-        host_->appendLog(QStringLiteral("UR3e: %1").arg(detail));
-        if (host_->ur3ePosePollTimer_ != nullptr)
-        {
-            host_->ur3ePosePollTimer_->start(kPosePollIntervalMs);
-            const Ur3eJointsState joints = ur3eGetJoints(serverManager_->serverUrl());
-            if (joints.ok && joints.positionsRad.size() >= MainWindow::kUr3eJointCount)
-                applyJointPositions(joints.positionsRad, joints.names, false);
-            else
-                pollJointsSync();
+        setBusy(false);
+        host_->appendLog(QStringLiteral("UR3e connect failed: %1").arg(detail));
+        updateRobotUi();
+        return;
+    }
 
-            const hf::HardwareConfig::Ur3eConfig &cfg = hf::hardwareConfig().ur3e;
-            if (cfg.useMockHardware)
-                applyConfiguredInitialJointTargets();
-            else
-                syncTargetsFromCurrent();
+    robotConnected_ = true;
+    host_->appendLog(QStringLiteral("UR3e: %1").arg(detail));
+    if (host_->ur3ePosePollTimer_ != nullptr)
+    {
+        host_->ur3ePosePollTimer_->start(kPosePollIntervalMs);
+        const Ur3eJointsState joints = ur3eGetJoints(serverManager_->serverUrl());
+        if (joints.ok && joints.positionsRad.size() >= MainWindow::kUr3eJointCount)
+            applyJointPositions(joints.positionsRad, joints.names, false);
+        else
+            pollJointsSync();
+
+        const hf::HardwareConfig::Ur3eConfig &cfg = hf::hardwareConfig().ur3e;
+        if (cfg.useMockHardware)
+            applyConfiguredInitialJointTargets();
+        else
+            syncTargetsFromCurrent();
+    }
+
+    updateRobotUi();
+    host_->appendLog(QStringLiteral("UR3e: verifying scan home position\u2026"));
+    setBusy(true);
+
+    std::thread([this]() {
+        const HomeEnsureOutcome outcome = ensureRobotAtHomeSync(HomeEnsureContext::AfterConnect);
+        QMetaObject::invokeMethod(
+            this,
+            [this, outcome]() { finishHomeEnsureAfterConnect(outcome); },
+            Qt::QueuedConnection);
+    }).detach();
+}
+
+Ur3ePanelController::HomeEnsureOutcome Ur3ePanelController::ensureRobotAtHomeSync(
+    const HomeEnsureContext context)
+{
+    HomeEnsureOutcome outcome;
+    if (serverManager_ == nullptr || !serverManager_->isServerConnected() || !robotConnected_)
+    {
+        outcome.success = true;
+        return outcome;
+    }
+
+    const QString serverUrl = serverManager_->serverUrl();
+    for (;;)
+    {
+        if (context != HomeEnsureContext::BeforeShutdown
+            && shutdownRequested_.load(std::memory_order_acquire))
+        {
+            outcome.cancelled = true;
+            return outcome;
         }
+
+        const Ur3eJointsState joints = ur3eGetJoints(serverUrl);
+        if (joints.ok && ur3eIsNearScanHomeJoints(joints.positionsRad))
+        {
+            host_->appendLog(QStringLiteral("UR3e: verified at scan home position."));
+            outcome.success = true;
+            outcome.alreadyAtHome = true;
+            return outcome;
+        }
+
+        host_->appendLog(QStringLiteral("UR3e: MoveIt moving to scan home\u2026"));
+        const Ur3eScanWaypointMoveResult moveResult = ur3eExecuteMoveHome(serverUrl);
+        if (moveResult.stopped)
+        {
+            outcome.cancelled = true;
+            return outcome;
+        }
+
+        if (moveResult.ok)
+        {
+            outcome.success = true;
+            outcome.alreadyAtHome = moveResult.alreadyAtHome;
+            host_->appendLog(moveResult.alreadyAtHome
+                                ? QStringLiteral("UR3e: verified at scan home position.")
+                                : QStringLiteral("UR3e: moved to scan home position."));
+            pollJointsSync();
+            syncTargetsFromCurrent();
+            return outcome;
+        }
+
+        const QString reason = moveResult.errorMessage.trimmed().isEmpty()
+                                   ? QStringLiteral("MoveIt could not reach scan home.")
+                                   : moveResult.errorMessage.trimmed();
+        const HomeEnsurePromptChoice choice = promptManualHomePositioning(reason, context);
+        if (choice == HomeEnsurePromptChoice::Retry)
+            continue;
+
+        if (choice == HomeEnsurePromptChoice::ContinueWithoutHoming
+            && context == HomeEnsureContext::AfterConnect)
+        {
+            outcome.success = true;
+            host_->appendLog(QStringLiteral("UR3e: continuing without scan home verification."));
+            return outcome;
+        }
+
+        if (choice == HomeEnsurePromptChoice::ProceedAnyway
+            && (context == HomeEnsureContext::BeforeDisconnect
+                || context == HomeEnsureContext::BeforeShutdown))
+        {
+            outcome.success = true;
+            host_->appendLog(QStringLiteral("UR3e: proceeding without reaching scan home."));
+            return outcome;
+        }
+
+        outcome.cancelled = true;
+        return outcome;
+    }
+}
+
+Ur3ePanelController::HomeEnsurePromptChoice Ur3ePanelController::promptManualHomePositioning(
+    const QString &reason,
+    const HomeEnsureContext context)
+{
+    if (QThread::currentThread() == thread())
+        return showManualHomePositioningDialog(reason, context);
+
+    HomeEnsurePromptChoice choice = HomeEnsurePromptChoice::Cancel;
+    QMetaObject::invokeMethod(
+        this,
+        [this, reason, context, &choice]() {
+            choice = showManualHomePositioningDialog(reason, context);
+        },
+        Qt::BlockingQueuedConnection);
+    return choice;
+}
+
+Ur3ePanelController::HomeEnsurePromptChoice Ur3ePanelController::showManualHomePositioningDialog(
+    const QString &reason,
+    const HomeEnsureContext context)
+{
+    if (host_ == nullptr)
+        return HomeEnsurePromptChoice::Cancel;
+
+    QMessageBox box(host_);
+    box.setIcon(QMessageBox::Warning);
+    if (context == HomeEnsureContext::AfterConnect)
+        box.setWindowTitle(QStringLiteral("UR3e Scan Home Required"));
+    else if (context == HomeEnsureContext::BeforeDisconnect)
+        box.setWindowTitle(QStringLiteral("UR3e Return Home Before Disconnect"));
+    else
+        box.setWindowTitle(QStringLiteral("UR3e Return Home Before Closing"));
+
+    const QString body =
+        QStringLiteral(
+            "MoveIt could not verify or reach the configured scan home pose.\n\n"
+            "Reason: %1\n\n"
+            "Configured home: %2\n\n"
+            "Manually jog the robot closer to home using the joint controls or teach "
+            "pendant, then click Retry.")
+            .arg(reason, formatConfiguredHomeJointsDeg());
+    box.setText(body);
+
+    QPushButton *retryButton = box.addButton(QStringLiteral("Retry"), QMessageBox::AcceptRole);
+    box.setDefaultButton(retryButton);
+
+    QPushButton *secondaryButton = nullptr;
+    QPushButton *cancelButton = nullptr;
+    if (context == HomeEnsureContext::AfterConnect)
+    {
+        secondaryButton =
+            box.addButton(QStringLiteral("Continue without homing"), QMessageBox::DestructiveRole);
+        cancelButton = box.addButton(QStringLiteral("Disconnect"), QMessageBox::RejectRole);
+    }
+    else if (context == HomeEnsureContext::BeforeDisconnect)
+    {
+        secondaryButton =
+            box.addButton(QStringLiteral("Disconnect anyway"), QMessageBox::DestructiveRole);
+        cancelButton = box.addButton(QStringLiteral("Cancel"), QMessageBox::RejectRole);
     }
     else
     {
-        host_->appendLog(QStringLiteral("UR3e connect failed: %1").arg(detail));
+        secondaryButton = box.addButton(QStringLiteral("Close anyway"), QMessageBox::DestructiveRole);
+        cancelButton = box.addButton(QStringLiteral("Cancel"), QMessageBox::RejectRole);
     }
+
+    const bool wasBusy = busy_;
+    setBusy(false);
+    updateRobotUi();
+    box.exec();
+    setBusy(wasBusy);
+    updateRobotUi();
+
+    QAbstractButton *clicked = box.clickedButton();
+    if (clicked == retryButton)
+        return HomeEnsurePromptChoice::Retry;
+    if (clicked == secondaryButton)
+    {
+        return context == HomeEnsureContext::AfterConnect ? HomeEnsurePromptChoice::ContinueWithoutHoming
+                                                        : HomeEnsurePromptChoice::ProceedAnyway;
+    }
+    return HomeEnsurePromptChoice::Cancel;
+}
+
+void Ur3ePanelController::finishHomeEnsureAfterConnect(const HomeEnsureOutcome &outcome)
+{
+    if (outcome.cancelled)
+    {
+        host_->appendLog(QStringLiteral("UR3e: home verification cancelled — disconnecting."));
+        setBusy(true);
+        const QString serverUrl = serverManager_->serverUrl();
+        std::thread([this, serverUrl]() {
+            const Ur3eConnectResult result = ur3eDisconnectRobot(serverUrl);
+            const bool ok = result.ok;
+            const QString detail = ok ? QStringLiteral("disconnected") : result.errorMessage;
+            QMetaObject::invokeMethod(
+                this,
+                [this, ok, detail]() { finishDisconnect(ok, detail); },
+                Qt::QueuedConnection);
+        }).detach();
+        return;
+    }
+
+    setBusy(false);
+    if (outcome.alreadyAtHome)
+        host_->appendLog(QStringLiteral("UR3e: verified at scan home position."));
+    else if (outcome.success)
+        host_->appendLog(QStringLiteral("UR3e: moved to scan home position."));
+    pollJointsSync();
+    syncTargetsFromCurrent();
     updateRobotUi();
 }
 

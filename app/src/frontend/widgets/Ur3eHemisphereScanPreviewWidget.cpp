@@ -191,6 +191,7 @@ void Ur3eHemisphereScanPreviewWidget::setScanPlan(const hf::ur3e::Ur3eHemisphere
         preview.reachabilityKnown = true;
         preview.reachable = planned.reachable;
         preview.executionCompleted = false;
+        preview.executionFailed = false;
         scanPoints_.push_back(preview);
     }
     update();
@@ -203,7 +204,10 @@ void Ur3eHemisphereScanPreviewWidget::beginScanExecution()
     executionActivePointIndex_ = -1;
     flashPulse_ = 0;
     for (PreviewScanPoint &entry : scanPoints_)
+    {
         entry.executionCompleted = false;
+        entry.executionFailed = false;
+    }
     update();
 }
 
@@ -231,7 +235,25 @@ void Ur3eHemisphereScanPreviewWidget::markScanPointCompleted(const int pointInde
 {
     if (pointIndex < 0 || pointIndex >= static_cast<int>(scanPoints_.size()))
         return;
-    scanPoints_[static_cast<std::size_t>(pointIndex)].executionCompleted = true;
+    PreviewScanPoint &entry = scanPoints_[static_cast<std::size_t>(pointIndex)];
+    entry.executionCompleted = true;
+    entry.executionFailed = false;
+    if (executionActivePointIndex_ == pointIndex)
+    {
+        executionActivePointIndex_ = -1;
+        if (flashTimer_ != nullptr)
+            flashTimer_->stop();
+    }
+    update();
+}
+
+void Ur3eHemisphereScanPreviewWidget::markScanPointFailed(const int pointIndex)
+{
+    if (pointIndex < 0 || pointIndex >= static_cast<int>(scanPoints_.size()))
+        return;
+    PreviewScanPoint &entry = scanPoints_[static_cast<std::size_t>(pointIndex)];
+    entry.executionFailed = true;
+    entry.executionCompleted = false;
     if (executionActivePointIndex_ == pointIndex)
     {
         executionActivePointIndex_ = -1;
@@ -364,12 +386,14 @@ void Ur3eHemisphereScanPreviewWidget::drawLegend(QPainter &painter) const
                 entries.push_back({QColor(170, 90, 230), QStringLiteral("Current")});
             entries.push_back({QColor(220, 190, 40), QStringLiteral("Pending")});
             entries.push_back({QColor(60, 180, 75), QStringLiteral("Completed")});
+            entries.push_back({QColor(210, 45, 45), QStringLiteral("Execute failed")});
+            entries.push_back({QColor(70, 130, 220), QStringLiteral("Unreachable (plan)")});
         }
         else
         {
             entries.push_back({QColor(60, 180, 75), QStringLiteral("Reachable")});
+            entries.push_back({QColor(70, 130, 220), QStringLiteral("Unreachable")});
         }
-        entries.push_back({QColor(210, 45, 45), QStringLiteral("Unreachable")});
     }
 
     QFont legendFont = painter.font();
@@ -745,11 +769,16 @@ void Ur3eHemisphereScanPreviewWidget::drawScanPin(QPainter &painter,
     {
         if (!entry.reachable)
         {
-            pinColor = QColor(210, 45, 45);
+            pinColor = QColor(70, 130, 220);
         }
         else if (executionActive_ || executionResultsVisible_)
         {
-            pinColor = entry.executionCompleted ? QColor(60, 180, 75) : QColor(220, 190, 40);
+            if (entry.executionFailed)
+                pinColor = QColor(210, 45, 45);
+            else if (entry.executionCompleted)
+                pinColor = QColor(60, 180, 75);
+            else
+                pinColor = QColor(220, 190, 40);
         }
         else
         {

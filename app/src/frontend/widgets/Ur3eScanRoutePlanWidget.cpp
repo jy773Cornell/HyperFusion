@@ -63,6 +63,12 @@ void Ur3eScanRoutePlanWidget::markScanPointCompleted(const int pointIndex)
         previewWidget_->markScanPointCompleted(pointIndex);
 }
 
+void Ur3eScanRoutePlanWidget::markScanPointFailed(const int pointIndex)
+{
+    if (previewWidget_ != nullptr)
+        previewWidget_->markScanPointFailed(pointIndex);
+}
+
 void Ur3eScanRoutePlanWidget::endScanExecution()
 {
     if (previewWidget_ != nullptr)

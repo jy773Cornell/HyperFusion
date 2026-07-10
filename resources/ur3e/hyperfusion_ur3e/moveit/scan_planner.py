@@ -48,15 +48,18 @@ DEFAULT_HOME_JOINTS_RAD = [
 
 HOME_JOINT_TOLERANCE_RAD = 0.05
 
-# Phase 3: extra IK seeds = plan-start (home) + shoulder/wrist perturbations.
+# Extra IK seeds = plan-start (home) + small joint nudges (±45°).
+# Large ±π perturbations often land in self-collision inside the workspace box.
+_QUARTER_PI = math.pi * 0.25
 IK_SEED_PERTURBATIONS_RAD = (
-    (1, math.pi),
-    (1, -math.pi),
-    (2, math.pi * 0.5),
-    (2, -math.pi * 0.5),
-    (3, math.pi),
-    (3, -math.pi),
-    (4, math.pi),
+    (1, _QUARTER_PI),    # shoulder_lift +45°
+    (1, -_QUARTER_PI),
+    (2, _QUARTER_PI),    # elbow +45°
+    (2, -_QUARTER_PI),
+    (3, _QUARTER_PI),    # wrist_1 +45°
+    (3, -_QUARTER_PI),
+    (4, _QUARTER_PI),    # wrist_2 +45°
+    (4, -_QUARTER_PI),
 )
 
 # UR3e joint limits from ur_description/config/ur3e/joint_limits.yaml (radians).
@@ -853,7 +856,18 @@ class MoveItScanPlanner:
         primary_seed_valid = False
 
         for index, seed_joints in enumerate(ik_seeds):
-            joints, ik_error = self._solve_ik(pose, seed_joints)
+            seed_for_ik = self._normalize_joint_solution_to_reference(
+                reference_joints, seed_joints
+            )
+            if not self._ik_joint_angles_are_sane(seed_for_ik):
+                continue
+            seed_valid, seed_reason = self._state_is_valid(seed_for_ik)
+            if not seed_valid:
+                if seed_reason:
+                    last_error = seed_reason
+                continue
+
+            joints, ik_error = self._solve_ik(pose, seed_for_ik)
             if joints is None:
                 if ik_error:
                     last_error = ik_error

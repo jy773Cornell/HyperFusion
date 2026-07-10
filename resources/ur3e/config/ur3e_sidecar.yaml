@@ -23,6 +23,9 @@ use_mock_hardware: true
 # Warm ur_robot_driver in background when sidecar starts (faster UI Connect).
 prestart_driver: false
 
+# Mock simulation startup pose (degrees). HyperFusion passes home_joints_deg from hyperfusion.cfg.
+home_joints_deg: [0, -150, 120, 0, 90, 0]
+
 # Ceiling mount for HyperFusion enclosure (robot on top face, tray at Z=0).
 ceiling_mount: true
 ceiling_mount_height_m: 0.65

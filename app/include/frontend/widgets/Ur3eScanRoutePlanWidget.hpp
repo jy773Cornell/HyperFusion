@@ -25,6 +25,7 @@ public:
     void beginScanExecution();
     void setActiveScanPoint(int pointIndex);
     void markScanPointCompleted(int pointIndex);
+    void markScanPointFailed(int pointIndex);
     void endScanExecution();
 
 private:

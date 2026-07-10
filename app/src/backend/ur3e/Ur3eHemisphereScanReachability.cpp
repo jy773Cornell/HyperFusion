@@ -19,6 +19,7 @@
 #include <array>
 
 #include <cmath>
+#include <limits>
 
 
 
@@ -411,6 +412,42 @@ std::vector<double> ur3eScanHomeJointsRadFromConfig()
     for (const double deg : homeDeg)
         joints.push_back(deg * kPi / 180.0);
     return joints;
+}
+
+namespace
+{
+double jointDeltaRad(const double referenceRad, const double candidateRad)
+{
+    double delta = candidateRad - referenceRad;
+    while (delta > M_PI)
+        delta -= 2.0 * M_PI;
+    while (delta <= -M_PI)
+        delta += 2.0 * M_PI;
+    return delta;
+}
+} // namespace
+
+double ur3eJointDistanceRad(const std::vector<double> &referenceRad,
+                            const std::vector<double> &candidateRad)
+{
+    if (referenceRad.size() != 6 || candidateRad.size() != 6)
+        return std::numeric_limits<double>::infinity();
+
+    double totalSq = 0.0;
+    for (int jointIndex = 0; jointIndex < 6; ++jointIndex)
+    {
+        const double delta =
+            jointDeltaRad(referenceRad[static_cast<std::size_t>(jointIndex)],
+                          candidateRad[static_cast<std::size_t>(jointIndex)]);
+        totalSq += delta * delta;
+    }
+    return std::sqrt(totalSq);
+}
+
+bool ur3eIsNearScanHomeJoints(const std::vector<double> &currentRad, const double toleranceRad)
+{
+    const std::vector<double> homeRad = ur3eScanHomeJointsRadFromConfig();
+    return ur3eJointDistanceRad(homeRad, currentRad) <= toleranceRad;
 }
 
 void appendUr3eScanHomeJointsToJson(QJsonObject &body)

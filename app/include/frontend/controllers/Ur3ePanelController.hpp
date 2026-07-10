@@ -34,7 +34,8 @@ public:
     void wireSettingsTabConnections();
     void applyHardwareConfigToUi();
     void startSidecarOnLaunch();
-    void shutdownSync();
+    /// Returns false when the user cancels shutdown (e.g. home positioning dialog).
+    [[nodiscard]] bool shutdownSync();
     void refreshUi();
 
     [[nodiscard]] bool isRobotConnected() const { return robotConnected_; }
@@ -44,6 +45,35 @@ public slots:
     void onSidecarStateChanged(Ur3eServerManager::State state, const QString &detail);
 
 private:
+    enum class HomeEnsureContext
+    {
+        AfterConnect,
+        BeforeDisconnect,
+        BeforeShutdown,
+    };
+
+    enum class HomeEnsurePromptChoice
+    {
+        Retry,
+        ContinueWithoutHoming,
+        ProceedAnyway,
+        Cancel,
+    };
+
+    struct HomeEnsureOutcome
+    {
+        bool success = false;
+        bool alreadyAtHome = false;
+        bool cancelled = false;
+    };
+
+    [[nodiscard]] HomeEnsureOutcome ensureRobotAtHomeSync(HomeEnsureContext context);
+    [[nodiscard]] HomeEnsurePromptChoice promptManualHomePositioning(const QString &reason,
+                                                                     HomeEnsureContext context);
+    [[nodiscard]] HomeEnsurePromptChoice showManualHomePositioningDialog(const QString &reason,
+                                                                         HomeEnsureContext context);
+    void finishHomeEnsureAfterConnect(const HomeEnsureOutcome &outcome);
+
     void updateRobotUi();
     void pollJoints();
     void pollJointsSync();
@@ -74,6 +104,7 @@ private:
 private slots:
     void scanExecuteSetActivePoint(int pointIndex);
     void scanExecuteMarkCompleted(int pointIndex);
+    void scanExecuteMarkFailed(int pointIndex);
     void scanExecuteLogMoving(int step,
                               int total,
                               int pointIndex,

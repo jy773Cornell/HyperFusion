@@ -74,6 +74,7 @@ struct Ur3eScanWaypointMoveResult
     QString errorMessage;
     bool stopped = false;
     bool skipped = false;
+    bool alreadyAtHome = false;
 };
 
 bool ur3eServerHealthCheck(const QString &serverUrl,

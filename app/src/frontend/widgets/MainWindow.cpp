@@ -236,7 +236,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 MainWindow::~MainWindow()
 {
     if (!gracefulShutdownDone_)
-        performGracefulShutdown();
+        (void)performGracefulShutdown();
 }
 
 hf::capture::CapturePanelController *MainWindow::capturePanel() const
@@ -378,10 +378,10 @@ void MainWindow::waitWithBusyDialog(OperationWaitDialog &dialog, const std::func
         worker.join();
 }
 
-void MainWindow::performGracefulShutdown()
+bool MainWindow::performGracefulShutdown()
 {
     if (gracefulShutdownDone_)
-        return;
+        return true;
 
     cameraPanel_->dismissAllCameraOperationWaits();
     if (capturePanel_ != nullptr)
@@ -437,12 +437,21 @@ void MainWindow::performGracefulShutdown()
 
     if (ur3ePanel_ != nullptr)
     {
-        waitDialog.setStatusText(tr("Stopping UR3e sidecar\u2026"));
-        QApplication::processEvents();
-        waitWithBusyDialog(waitDialog, [this]() {
+        if (ur3ePanel_->isRobotConnected())
+        {
+            waitDialog.setStatusText(tr("Moving UR3e to scan home\u2026"));
+            QApplication::processEvents();
+        }
+        bool shutdownCompleted = true;
+        waitWithBusyDialog(waitDialog, [this, &shutdownCompleted]() {
             if (ur3ePanel_ != nullptr)
-                ur3ePanel_->shutdownSync();
+                shutdownCompleted = ur3ePanel_->shutdownSync();
         });
+        if (!shutdownCompleted)
+        {
+            performingGracefulShutdown_ = false;
+            return false;
+        }
     }
 
     if (cameraPanel_ != nullptr)
@@ -453,6 +462,7 @@ void MainWindow::performGracefulShutdown()
     settingsPanel_->savePersistedUiSettings();
     sessionLog_.close();
     gracefulShutdownDone_ = true;
+    return true;
 }
 
 void MainWindow::closeEvent(QCloseEvent *event)
@@ -467,7 +477,8 @@ void MainWindow::closeEvent(QCloseEvent *event)
     }
 
     event->ignore();
-    performGracefulShutdown();
+    if (!performGracefulShutdown())
+        return;
     event->accept();
     QMainWindow::closeEvent(event);
 }

@@ -117,7 +117,8 @@ public:
 
 protected:
     void closeEvent(QCloseEvent *event) override;
-    void performGracefulShutdown();
+    /// Returns false when shutdown is aborted (e.g. user cancels UR3e home move).
+    [[nodiscard]] bool performGracefulShutdown();
     static void waitWithBusyDialog(OperationWaitDialog &dialog, const std::function<void()> &work);
     static bool isCameraSessionActive(CameraState state);
     bool anyCameraSessionActive() const;

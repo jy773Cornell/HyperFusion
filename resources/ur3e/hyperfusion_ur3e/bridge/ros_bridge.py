@@ -89,6 +89,65 @@ class Ur3eRosBridge:
       return "joint_trajectory_controller"
     return "scaled_joint_trajectory_controller"
 
+  def _opposite_trajectory_controller_name(self) -> str:
+    if self.use_mock_hardware:
+      return "scaled_joint_trajectory_controller"
+    return "joint_trajectory_controller"
+
+  def _driver_mode_conflict_unlocked(self) -> bool:
+    """True when a leftover ur_control launch uses the opposite mock/hardware mode."""
+    import subprocess
+
+    proc = subprocess.run(
+        ["pgrep", "-af", "ur_control.launch.py"],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+      return False
+    want = "true" if self.use_mock_hardware else "false"
+    other = "false" if self.use_mock_hardware else "true"
+    saw_expected = False
+    for line in (proc.stdout or "").splitlines():
+      if f"use_mock_hardware:={want}" in line:
+        saw_expected = True
+      elif f"use_mock_hardware:={other}" in line:
+        return True
+    return not saw_expected and "ur_control.launch.py" in (proc.stdout or "")
+
+  def _verify_ros_hardware_mode_unlocked(self) -> None:
+    """Fail fast when ROS controllers are not ready for the requested mode."""
+    import subprocess
+
+    proc = subprocess.run(
+        [
+            "bash",
+            "-lc",
+            f"source /opt/ros/{self.ros_distro}/setup.bash && "
+            "timeout 8 ros2 control list_controllers",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    output = proc.stdout or ""
+    expected = self._joint_trajectory_controller_name()
+    expected_active = any(
+        expected in line and "active" in line for line in output.splitlines()
+    )
+    mode = "simulation (mock)" if self.use_mock_hardware else "hardware (real robot)"
+
+    if self._driver_mode_conflict_unlocked():
+        raise RuntimeError(
+            "The active UR driver was launched with the opposite use_mock_hardware mode. "
+            "HyperFusion should stop stale WSL processes before launch; if this persists, "
+            "close other UR3e CLI sessions and restart HyperFusion."
+        )
+    if not expected_active:
+      detail = output.strip()[-1500:] or (proc.stderr or "").strip()[-1500:]
+      raise RuntimeError(
+          f"UR driver is not ready for {mode}: {expected} is not active.\n{detail}"
+      )
+
   def _verify_joint_trajectory_controller_active(self) -> None:
     import subprocess
 
@@ -270,6 +329,15 @@ class Ur3eRosBridge:
       raise
 
   def _ensure_driver_running_unlocked(self) -> None:
+    if self._driver_mode_conflict_unlocked():
+      sys.stderr.write(
+          "UR3e bridge: stale UR driver mode conflict — stopping leftover processes…\n"
+      )
+      Ur3eRosDriverManager.stop_stale_launches()
+      if self._driver is not None:
+        self._driver.stop()
+        self._driver = None
+
     if self._driver is not None and self._driver.running:
       if self._driver.controller_manager_ready():
         sys.stderr.write("UR3e bridge: reusing active driver subprocess\n")
@@ -289,6 +357,7 @@ class Ur3eRosBridge:
         sys.stderr.write("UR3e bridge: starting ur_robot_driver (may take ~2 min)…\n")
       self._start_driver_unlocked()
 
+    self._verify_ros_hardware_mode_unlocked()
     Ur3eRosDriverManager.ensure_joint_states_stamper_for_distro(self.ros_distro)
 
   def _connect_ros_unlocked(self) -> None:
@@ -325,6 +394,8 @@ class Ur3eRosBridge:
       self._start_driver_unlocked()
     else:
       self._ensure_driver_running_unlocked()
+
+    self._verify_ros_hardware_mode_unlocked()
 
     if not self._joint_states_publishing(
         timeout_s=15.0 if self.use_mock_hardware else 120.0

@@ -128,7 +128,12 @@ struct Ur3eHemisphereScanPlan
 
 [[nodiscard]] std::vector<double> ur3eScanHomeJointsRadFromConfig();
 
+/// Wrapped joint-space distance (matches MoveIt scan_planner `_joint_distance_rad`).
+[[nodiscard]] double ur3eJointDistanceRad(const std::vector<double> &referenceRad,
+                                            const std::vector<double> &candidateRad);
 
+[[nodiscard]] bool ur3eIsNearScanHomeJoints(const std::vector<double> &currentRad,
+                                              double toleranceRad = 0.05);
 
 void appendUr3eScanHomeJointsToJson(QJsonObject &body);
 

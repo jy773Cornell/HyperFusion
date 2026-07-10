@@ -31,6 +31,7 @@ public:
     void beginScanExecution();
     void setActiveScanPoint(int pointIndex);
     void markScanPointCompleted(int pointIndex);
+    void markScanPointFailed(int pointIndex);
     void endScanExecution();
 
 protected:
@@ -67,6 +68,7 @@ private:
         bool reachabilityKnown = false;
         bool reachable = false;
         bool executionCompleted = false;
+        bool executionFailed = false;
     };
 
     [[nodiscard]] Vec3 sceneCenter() const;

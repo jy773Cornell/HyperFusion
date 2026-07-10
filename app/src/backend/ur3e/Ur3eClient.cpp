@@ -263,6 +263,7 @@ Ur3eScanWaypointMoveResult parseScanMotionResponse(const QJsonObject &response, 
     }
 
     result.ok = true;
+    result.alreadyAtHome = response.value(QStringLiteral("already_at_home")).toBool(false);
     return result;
 }
 

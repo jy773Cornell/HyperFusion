@@ -15,8 +15,6 @@ namespace hf::ur3e
 {
 namespace
 {
-constexpr double kMockInitialJointDeg[6] = {0.0, -150.0, 120.0, 0.0, 90.0, 0.0};
-
 QStringList wslBashArguments(const QString &script)
 {
     const hf::HardwareConfig::Ur3eConfig &cfg = hf::hardwareConfig().ur3e;
@@ -195,7 +193,7 @@ QString Ur3eServerManager::buildLaunchCommand() const
     {
         QStringList jointDegParts;
         for (int jointIndex = 0; jointIndex < 6; ++jointIndex)
-            jointDegParts << QString::number(kMockInitialJointDeg[jointIndex], 'g', 6);
+            jointDegParts << QString::number(cfg.homeJointsDeg[static_cast<std::size_t>(jointIndex)], 'g', 6);
         serverArgs += QStringLiteral(" --initial-joint-deg %1").arg(jointDegParts.join(QLatin1Char(',')));
     }
     serverArgs += QStringLiteral(" --ceiling-mount-height-mm %1")
@@ -222,10 +220,14 @@ void Ur3eServerManager::beginAsyncCleanup()
         cleanupProcess_.waitForFinished(500);
     }
 
+    // Clear leftover CLI / prior-session UR ROS processes before binding server_port.
     const QString cleanup = QStringLiteral(
         "pkill -f ur_control.launch.py 2>/dev/null || true; "
+        "pkill -f ros2_control_node 2>/dev/null || true; "
+        "pkill -f joint_states_stamper 2>/dev/null || true; "
         "pkill -f ur3e_server 2>/dev/null || true; "
-        "pkill -f hyperfusion_ur3e.sidecar.server 2>/dev/null || true");
+        "pkill -f hyperfusion_ur3e.sidecar.server 2>/dev/null || true; "
+        "sleep 2");
 
     cleanupProcess_.setProgram(QStringLiteral("wsl.exe"));
     cleanupProcess_.setArguments(wslBashArguments(cleanup));
@@ -329,12 +331,12 @@ void Ur3eServerManager::startServer()
         return;
 
     silentMode_ = false;
-    cleanupBeforeLaunch_ = false;
+    cleanupBeforeLaunch_ = true;
     ++startupGeneration_;
     healthPollInFlight_.store(false, std::memory_order_release);
 
-    setState(State::Starting, QStringLiteral("Launching WSL UR3e server\u2026"));
-    checkHealthThenLaunch();
+    setState(State::Starting, QStringLiteral("Cleaning stale WSL processes\u2026"));
+    beginAsyncCleanup();
 }
 
 void Ur3eServerManager::scheduleNextHealthPoll(const int delayMs)
