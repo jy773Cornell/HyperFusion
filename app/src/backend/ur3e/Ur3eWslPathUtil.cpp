@@ -43,4 +43,29 @@ QString resolveUr3eRepoLinuxPath()
     return hf::processing::windowsPathToWsl(windowsPath);
 }
 
+QString buildMountEnvExports(const hf::HardwareConfig::Ur3eConfig &cfg)
+{
+    return QStringLiteral("export HYPERFUSION_CEILING_MOUNT='true' && "
+                          "export HYPERFUSION_CEILING_MOUNT_HEIGHT_M='%1' && "
+                          "export HYPERFUSION_MOUNT_ROLL_DEG='%2' && "
+                          "export HYPERFUSION_MOUNT_PITCH_DEG='%3' && "
+                          "export HYPERFUSION_MOUNT_YAW_DEG='%4' && "
+                          "export HYPERFUSION_MOUNT_OFFSET_X_M='%5' && "
+                          "export HYPERFUSION_MOUNT_OFFSET_Y_M='%6' && ")
+        .arg(QString::number(cfg.workspaceHeightMm / 1000.0, 'f', 6),
+             QString::number(cfg.mountRollDeg, 'g', 6),
+             QString::number(cfg.mountPitchDeg, 'g', 6),
+             QString::number(cfg.mountYawDeg, 'g', 6),
+             QString::number(cfg.mountOffsetXMm / 1000.0, 'f', 6),
+             QString::number(cfg.mountOffsetYMm / 1000.0, 'f', 6));
+}
+
+QString buildToolPayloadEnvExports(const hf::HardwareConfig::Ur3eConfig &cfg)
+{
+    return QStringLiteral("export HYPERFUSION_TOOL_PAYLOAD_ENABLED='true' && "
+                          "export HYPERFUSION_TOOL_PAYLOAD_SHAPE='hemisphere' && "
+                          "export HYPERFUSION_TOOL_PAYLOAD_RADIUS_M='%1' && ")
+        .arg(QString::number(cfg.toolPayloadRadiusMm / 1000.0, 'f', 6));
+}
+
 } // namespace hf::ur3e

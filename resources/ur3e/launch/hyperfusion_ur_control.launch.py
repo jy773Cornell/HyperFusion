@@ -33,6 +33,8 @@
 # Author: Denis Stogl
 
 from launch import LaunchDescription
+import os
+from pathlib import Path
 from launch.actions import (
     DeclareLaunchArgument,
     IncludeLaunchDescription,
@@ -260,6 +262,9 @@ def launch_setup(context):
 
 
 def generate_launch_description():
+    _pkg_root = Path(os.environ.get("HYPERFUSION_UR3E_REPO", Path(__file__).resolve().parent.parent))
+    _default_rsp_launch = str(_pkg_root / "launch" / "hyperfusion_ur_rsp.launch.py")
+
     declared_arguments = []
     # UR specific arguments
     declared_arguments.append(
@@ -323,9 +328,7 @@ def generate_launch_description():
     declared_arguments.append(
         DeclareLaunchArgument(
             "description_launchfile",
-            default_value=PathJoinSubstitution(
-                [FindPackageShare("ur_robot_driver"), "launch", "ur_rsp.launch.py"]
-            ),
+            default_value=_default_rsp_launch,
             description="Launchfile (absolute path) providing the description. "
             "The launchfile has to start a robot_state_publisher node that "
             "publishes the description topic.",

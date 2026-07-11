@@ -152,13 +152,16 @@ bool runElevatedWslNetworkSetup(QString *detail)
 
 bool runStaleUr3eProcessCleanup(QString *detail)
 {
-    const QString cleanup = QStringLiteral(
-        "pkill -f '[u]r_control.launch.py' 2>/dev/null || true; "
-        "pkill -f '[r]os2_control_node' 2>/dev/null || true; "
-        "pkill -f '[j]oint_states_stamper' 2>/dev/null || true; "
-        "pkill -f '[u]r3e_server' 2>/dev/null || true; "
-        "pkill -f '[h]yperfusion_ur3e.sidecar.server' 2>/dev/null || true; "
-        "sleep 2");
+    const QString repoLinux = resolveUr3eRepoLinuxPath();
+    if (repoLinux.isEmpty())
+    {
+        if (detail != nullptr)
+            *detail = QStringLiteral("Could not locate resources/ur3e for stale-process cleanup.");
+        return false;
+    }
+
+    const QString cleanup =
+        QStringLiteral("bash '%1/scripts/kill_stale_ur_ros.sh'").arg(repoLinux);
 
     if (!runWslBashScript(cleanup, 20000, detail))
         return false;

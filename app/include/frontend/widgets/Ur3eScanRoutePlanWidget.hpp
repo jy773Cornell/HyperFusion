@@ -3,6 +3,7 @@
 
 #include "backend/ur3e/Ur3eHemisphereScan.hpp"
 #include "backend/ur3e/Ur3eHemisphereScanReachability.hpp"
+#include "backend/ur3e/Ur3eMountTransform.hpp"
 #include "backend/ur3e/Ur3eWorkspaceBoundary.hpp"
 
 #include <QWidget>
@@ -20,6 +21,7 @@ public:
 
     void setScanParams(const hf::ur3e::Ur3eHemisphereScanParams &params);
     void setWorkspaceBoundary(const hf::ur3e::Ur3eWorkspaceBoundary &boundary);
+    void setSceneMount(const hf::ur3e::Ur3eMountTransform &mount);
     void setScanPlan(const hf::ur3e::Ur3eHemisphereScanPlan &plan);
     void clearScanPlan();
     void beginScanExecution();

@@ -31,6 +31,7 @@
 #
 # Author: Felix Exner
 
+import math
 import os
 from pathlib import Path
 
@@ -81,12 +82,33 @@ def generate_launch_description():
     initial_positions_file = LaunchConfiguration("initial_positions_file")
     ceiling_mount = LaunchConfiguration("ceiling_mount")
     ceiling_mount_height_m = LaunchConfiguration("ceiling_mount_height_m")
+    mount_roll_rad = LaunchConfiguration("mount_roll_rad")
+    mount_pitch_rad = LaunchConfiguration("mount_pitch_rad")
+    mount_yaw_rad = LaunchConfiguration("mount_yaw_rad")
+    mount_x_m = LaunchConfiguration("mount_x_m")
+    mount_y_m = LaunchConfiguration("mount_y_m")
 
     _pkg_root = Path(os.environ.get("HYPERFUSION_UR3E_REPO", Path(__file__).resolve().parent.parent))
     _default_initial_positions = str(_pkg_root / "config" / "initial_positions.yaml")
     _default_description = str(_pkg_root / "urdf" / "hyperfusion_ur3e.urdf.xacro")
     # ur_control.launch.py only forwards ur_type + robot_ip to this file — read mock mode from env.
     _ceiling_height_m = os.environ.get("HYPERFUSION_CEILING_MOUNT_HEIGHT_M", "0.65")
+    _mount_roll_rad = str(math.radians(float(os.environ.get("HYPERFUSION_MOUNT_ROLL_DEG", "180"))))
+    _mount_pitch_rad = str(math.radians(float(os.environ.get("HYPERFUSION_MOUNT_PITCH_DEG", "0"))))
+    _mount_yaw_rad = str(math.radians(float(os.environ.get("HYPERFUSION_MOUNT_YAW_DEG", "0"))))
+    _mount_x_m = os.environ.get("HYPERFUSION_MOUNT_OFFSET_X_M", "0")
+    _mount_y_m = os.environ.get("HYPERFUSION_MOUNT_OFFSET_Y_M", "0")
+    _tool_payload_enabled = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_ENABLED", "true").lower()
+    _tool_payload_shape = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_SHAPE", "hemisphere").lower()
+    _tool_payload_radius_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_RADIUS_M", "0.10")
+    _tool_payload_box_x_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_BOX_X_M", "0.08")
+    _tool_payload_box_y_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_BOX_Y_M", "0.06")
+    _tool_payload_box_z_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_BOX_Z_M", "0.06")
+    _tool_payload_x_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_X_M", "0")
+    _tool_payload_y_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_Y_M", "0")
+    _tool_payload_z_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_Z_M", "0")
+    _tool_payload_collision_gap_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_COLLISION_GAP_M", "0.002")
+    _tool_payload_mesh_dir = str(_pkg_root / "urdf" / "meshes").replace("\\", "/") + "/"
     _use_mock_hardware = os.environ.get("HYPERFUSION_USE_MOCK_HARDWARE", "false").lower()
     _mock_sensor_commands = os.environ.get(
         "HYPERFUSION_MOCK_SENSOR_COMMANDS",
@@ -107,119 +129,173 @@ def generate_launch_description():
         [FindPackageShare("ur_robot_driver"), "resources", "rtde_output_recipe.txt"]
     )
 
-    robot_description_content = Command(
-        [
-            PathJoinSubstitution([FindExecutable(name="xacro")]),
-            " ",
-            description_file,
-            " ",
-            "robot_ip:=",
-            robot_ip,
-            " ",
-            "joint_limit_params:=",
-            joint_limit_params_file,
-            " ",
-            "kinematics_params:=",
-            kinematics_params_file,
-            " ",
-            "physical_params:=",
-            physical_params_file,
-            " ",
-            "visual_params:=",
-            visual_params_file,
-            " ",
-            "safety_limits:=",
-            safety_limits,
-            " ",
-            "safety_pos_margin:=",
-            safety_pos_margin,
-            " ",
-            "safety_k_position:=",
-            safety_k_position,
-            " ",
-            "name:=",
-            ur_type,
-            " ",
-            "ur_type:=",
-            ur_type,
-            " ",
-            "initial_positions_file:=",
-            initial_positions_file,
-            " ",
-            "script_filename:=",
-            script_filename,
-            " ",
-            "input_recipe_filename:=",
-            input_recipe_filename,
-            " ",
-            "output_recipe_filename:=",
-            output_recipe_filename,
-            " ",
-            "tf_prefix:=",
-            tf_prefix,
-            " ",
-            "use_mock_hardware:=",
-            use_mock_hardware,
-            " ",
-            "mock_sensor_commands:=",
-            mock_sensor_commands,
-            " ",
-            "headless_mode:=",
-            headless_mode,
-            " ",
-            "use_tool_communication:=",
-            use_tool_communication,
-            " ",
-            "tool_parity:=",
-            tool_parity,
-            " ",
-            "tool_baud_rate:=",
-            tool_baud_rate,
-            " ",
-            "tool_stop_bits:=",
-            tool_stop_bits,
-            " ",
-            "tool_rx_idle_chars:=",
-            tool_rx_idle_chars,
-            " ",
-            "tool_tx_idle_chars:=",
-            tool_tx_idle_chars,
-            " ",
-            "tool_device_name:=",
-            tool_device_name,
-            " ",
-            "tool_tcp_port:=",
-            tool_tcp_port,
-            " ",
-            "tool_voltage:=",
-            tool_voltage,
-            " ",
-            "reverse_ip:=",
-            reverse_ip,
-            " ",
-            "script_command_port:=",
-            script_command_port,
-            " ",
-            "reverse_port:=",
-            reverse_port,
-            " ",
-            "script_sender_port:=",
-            script_sender_port,
-            " ",
-            "trajectory_port:=",
-            trajectory_port,
-            " ",
-            "ceiling_mount:=",
-            ceiling_mount,
-            " ",
-            "ceiling_mount_height_m:=",
-            ceiling_mount_height_m,
-            " ",
-        ]
-    )
-    robot_description = {
-        "robot_description": ParameterValue(robot_description_content, value_type=str)
-    }
+    _generated_urdf = os.environ.get("HYPERFUSION_GENERATED_URDF", "").strip()
+    if _generated_urdf and Path(_generated_urdf).is_file():
+        robot_description = {
+            "robot_description": Path(_generated_urdf).read_text(encoding="utf-8")
+        }
+    else:
+        robot_description_content = Command(
+            [
+                PathJoinSubstitution([FindExecutable(name="xacro")]),
+                " ",
+                description_file,
+                " ",
+                "robot_ip:=",
+                robot_ip,
+                " ",
+                "joint_limit_params:=",
+                joint_limit_params_file,
+                " ",
+                "kinematics_params:=",
+                kinematics_params_file,
+                " ",
+                "physical_params:=",
+                physical_params_file,
+                " ",
+                "visual_params:=",
+                visual_params_file,
+                " ",
+                "safety_limits:=",
+                safety_limits,
+                " ",
+                "safety_pos_margin:=",
+                safety_pos_margin,
+                " ",
+                "safety_k_position:=",
+                safety_k_position,
+                " ",
+                "name:=",
+                ur_type,
+                " ",
+                "ur_type:=",
+                ur_type,
+                " ",
+                "initial_positions_file:=",
+                initial_positions_file,
+                " ",
+                "script_filename:=",
+                script_filename,
+                " ",
+                "input_recipe_filename:=",
+                input_recipe_filename,
+                " ",
+                "output_recipe_filename:=",
+                output_recipe_filename,
+                " ",
+                "tf_prefix:=",
+                tf_prefix,
+                " ",
+                "use_mock_hardware:=",
+                use_mock_hardware,
+                " ",
+                "mock_sensor_commands:=",
+                mock_sensor_commands,
+                " ",
+                "headless_mode:=",
+                headless_mode,
+                " ",
+                "use_tool_communication:=",
+                use_tool_communication,
+                " ",
+                "tool_parity:=",
+                tool_parity,
+                " ",
+                "tool_baud_rate:=",
+                tool_baud_rate,
+                " ",
+                "tool_stop_bits:=",
+                tool_stop_bits,
+                " ",
+                "tool_rx_idle_chars:=",
+                tool_rx_idle_chars,
+                " ",
+                "tool_tx_idle_chars:=",
+                tool_tx_idle_chars,
+                " ",
+                "tool_device_name:=",
+                tool_device_name,
+                " ",
+                "tool_tcp_port:=",
+                tool_tcp_port,
+                " ",
+                "tool_voltage:=",
+                tool_voltage,
+                " ",
+                "reverse_ip:=",
+                reverse_ip,
+                " ",
+                "script_command_port:=",
+                script_command_port,
+                " ",
+                "reverse_port:=",
+                reverse_port,
+                " ",
+                "script_sender_port:=",
+                script_sender_port,
+                " ",
+                "trajectory_port:=",
+                trajectory_port,
+                " ",
+                "ceiling_mount:=",
+                ceiling_mount,
+                " ",
+                "ceiling_mount_height_m:=",
+                ceiling_mount_height_m,
+                " ",
+                "mount_roll_rad:=",
+                mount_roll_rad,
+                " ",
+                "mount_pitch_rad:=",
+                mount_pitch_rad,
+                " ",
+                "mount_yaw_rad:=",
+                mount_yaw_rad,
+                " ",
+                "mount_x_m:=",
+                mount_x_m,
+                " ",
+                "mount_y_m:=",
+                mount_y_m,
+                " ",
+                "tool_payload_enabled:=",
+                "true" if _tool_payload_enabled in ("1", "true", "yes", "on") else "false",
+                " ",
+                "tool_payload_shape:=",
+                _tool_payload_shape,
+                " ",
+                "tool_payload_radius_m:=",
+                _tool_payload_radius_m,
+                " ",
+                "tool_payload_box_x_m:=",
+                _tool_payload_box_x_m,
+                " ",
+                "tool_payload_box_y_m:=",
+                _tool_payload_box_y_m,
+                " ",
+                "tool_payload_box_z_m:=",
+                _tool_payload_box_z_m,
+                " ",
+                "tool_payload_x_m:=",
+                _tool_payload_x_m,
+                " ",
+                "tool_payload_y_m:=",
+                _tool_payload_y_m,
+                " ",
+                "tool_payload_z_m:=",
+                _tool_payload_z_m,
+                " ",
+                "tool_payload_collision_gap_m:=",
+                _tool_payload_collision_gap_m,
+                " ",
+                "tool_payload_mesh_dir:=",
+                _tool_payload_mesh_dir,
+                " ",
+            ]
+        )
+        robot_description = {
+            "robot_description": ParameterValue(robot_description_content, value_type=str)
+        }
 
     declared_arguments = []
     declared_arguments.append(
@@ -234,6 +310,41 @@ def generate_launch_description():
             "ceiling_mount_height_m",
             default_value=os.environ.get("HYPERFUSION_CEILING_MOUNT_HEIGHT_M", "0.65"),
             description="Ceiling mount plane height in meters (Z=0 tray floor).",
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "mount_roll_rad",
+            default_value=_mount_roll_rad,
+            description="Mount roll (rad) for world->base_link.",
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "mount_pitch_rad",
+            default_value=_mount_pitch_rad,
+            description="Mount pitch (rad) for world->base_link.",
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "mount_yaw_rad",
+            default_value=_mount_yaw_rad,
+            description="Mount yaw (rad) for world->base_link (left/right rotation).",
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "mount_x_m",
+            default_value=_mount_x_m,
+            description="Mount X offset (m) from workspace origin.",
+        )
+    )
+    declared_arguments.append(
+        DeclareLaunchArgument(
+            "mount_y_m",
+            default_value=_mount_y_m,
+            description="Mount Y offset (m) from workspace origin.",
         )
     )
     declared_arguments.append(

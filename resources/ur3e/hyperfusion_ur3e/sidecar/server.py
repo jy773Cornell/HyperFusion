@@ -56,6 +56,11 @@ def get_bridge(args: argparse.Namespace) -> Ur3eRosBridge:
                 use_mock_hardware=args.use_mock_hardware,
                 initial_joint_deg=args.initial_joint_deg,
                 ceiling_mount_height_m=args.ceiling_mount_height_mm / 1000.0,
+                mount_roll_deg=args.mount_roll_deg,
+                mount_pitch_deg=args.mount_pitch_deg,
+                mount_yaw_deg=args.mount_yaw_deg,
+                mount_offset_x_mm=args.mount_offset_x_mm,
+                mount_offset_y_mm=args.mount_offset_y_mm,
                 workspace_boundary_enabled=args.workspace_boundary_enabled,
                 workspace_length_m=args.workspace_length_mm / 1000.0,
                 workspace_width_m=args.workspace_width_mm / 1000.0,
@@ -95,6 +100,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=float,
         default=float(motion_cfg.get("max_linear_accel_m_per_s2", 0.3)),
     )
+    parser.add_argument(
+        "--max-joint-velocity-deg",
+        type=float,
+        default=float(motion_cfg.get("max_joint_velocity_deg_s", 60.0)),
+        help="Peak joint speed cap for MoveIt trajectories (deg/s, max 190).",
+    )
+    parser.add_argument(
+        "--tool-payload-radius-mm",
+        type=float,
+        default=float(cfg.get("tool_payload_radius_mm", 100.0)),
+        help="Tool payload collision dome radius on tool0 (mm).",
+    )
     parser.add_argument("--ros-distro", default=str(cfg.get("ros_distro", "jazzy")))
     parser.add_argument("--ur-type", default=str(cfg.get("ur_type", "ur3e")))
     parser.add_argument(
@@ -124,6 +141,36 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=float,
         default=float(cfg.get("ceiling_mount_height_m", 0.65)) * 1000.0,
         help="Ceiling mount height in mm (matches workspace_height_mm / Z=0 tray floor).",
+    )
+    parser.add_argument(
+        "--mount-roll-deg",
+        type=float,
+        default=float(cfg.get("mount_roll_deg", 180.0)),
+        help="Mount roll in degrees (180 = ceiling upside-down).",
+    )
+    parser.add_argument(
+        "--mount-pitch-deg",
+        type=float,
+        default=float(cfg.get("mount_pitch_deg", 0.0)),
+        help="Mount pitch in degrees.",
+    )
+    parser.add_argument(
+        "--mount-yaw-deg",
+        type=float,
+        default=float(cfg.get("mount_yaw_deg", 0.0)),
+        help="Mount yaw in degrees (left/right rotation around vertical axis).",
+    )
+    parser.add_argument(
+        "--mount-offset-x-mm",
+        type=float,
+        default=float(cfg.get("mount_offset_x_mm", 0.0)),
+        help="Mount X offset in mm from workspace origin.",
+    )
+    parser.add_argument(
+        "--mount-offset-y-mm",
+        type=float,
+        default=float(cfg.get("mount_offset_y_mm", 0.0)),
+        help="Mount Y offset in mm from workspace origin.",
     )
     parser.add_argument(
         "--workspace-boundary-enabled",
@@ -180,7 +227,22 @@ def main() -> None:
     os.environ["HYPERFUSION_USE_MOCK_HARDWARE"] = (
         "true" if args.use_mock_hardware else "false"
     )
+    os.environ["HYPERFUSION_MAX_JOINT_VELOCITY_DEG_S"] = str(args.max_joint_velocity_deg)
+    from hyperfusion_ur3e.urdf.tool_payload_config import ToolPayloadConfig
+
+    ToolPayloadConfig.from_radius_mm(args.tool_payload_radius_mm).apply_to_environ()
     args.initial_joint_deg = _parse_initial_joint_deg(args.initial_joint_deg)
+
+    from hyperfusion_ur3e.urdf.mount_config import MountConfig
+
+    MountConfig.from_cli(
+        ceiling_mount_height_m=args.ceiling_mount_height_mm / 1000.0,
+        roll_deg=args.mount_roll_deg,
+        pitch_deg=args.mount_pitch_deg,
+        yaw_deg=args.mount_yaw_deg,
+        offset_x_mm=args.mount_offset_x_mm,
+        offset_y_mm=args.mount_offset_y_mm,
+    ).apply_to_environ()
 
     bridge_supplier = lambda: get_bridge(args)
     SidecarHttpHandler.get_bridge = staticmethod(bridge_supplier)

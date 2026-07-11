@@ -23,6 +23,7 @@ public:
     void applyBoundaryLimits(const hf::ur3e::Ur3eWorkspaceBoundary &boundary);
     void setPlanEnabled(bool enabled);
     void setExecuteEnabled(bool enabled);
+    void setParamsEnabled(bool enabled);
 
 signals:
     void planScanRequested();

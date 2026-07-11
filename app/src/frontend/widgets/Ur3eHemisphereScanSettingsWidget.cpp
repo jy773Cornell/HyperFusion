@@ -200,6 +200,19 @@ void Ur3eHemisphereScanSettingsWidget::setExecuteEnabled(const bool enabled) {
     executeBtn_->setEnabled(enabled);
 }
 
+void Ur3eHemisphereScanSettingsWidget::setParamsEnabled(const bool enabled) {
+  if (sphereRadiusSpin_ != nullptr)
+    sphereRadiusSpin_->setEnabled(enabled);
+  if (horizontalPointsSpin_ != nullptr)
+    horizontalPointsSpin_->setEnabled(enabled);
+  if (verticalPointsSpin_ != nullptr)
+    verticalPointsSpin_->setEnabled(enabled);
+  if (thetaMinSpin_ != nullptr)
+    thetaMinSpin_->setEnabled(enabled);
+  if (thetaMaxSpin_ != nullptr)
+    thetaMaxSpin_->setEnabled(enabled);
+}
+
 void Ur3eHemisphereScanSettingsWidget::onParameterChanged() {
   if (thetaMinSpin_->value() > thetaMaxSpin_->value())
     thetaMaxSpin_->setValue(thetaMinSpin_->value());

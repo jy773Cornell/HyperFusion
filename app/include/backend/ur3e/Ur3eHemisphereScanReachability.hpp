@@ -116,7 +116,7 @@ struct Ur3eHemisphereScanPlan
 
 
 
-/// Reachable plan indices ordered top-to-bottom (theta ascending), then phi ascending.
+/// Reachable plan indices: top θ ring first (home-nearest entry), then downward ring-by-ring φ sweep.
 
 [[nodiscard]] std::vector<int> buildHemisphereScanExecutionOrder(
 
@@ -136,8 +136,6 @@ struct Ur3eHemisphereScanPlan
                                               double toleranceRad = 0.05);
 
 void appendUr3eScanHomeJointsToJson(QJsonObject &body);
-
-
 
 } // namespace hf::ur3e
 

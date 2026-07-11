@@ -121,11 +121,22 @@ struct HardwareConfig
         bool useMockHardware = true;
         double maxLinearSpeedMPerS = 0.05;
         double maxLinearAccelMPerS2 = 0.3;
+        /// MoveIt joint-space peak speed (deg/s). UR hardware allows up to 190.
+        double maxJointVelocityDegS = 60.0;
+        /// Tool payload collision dome radius on tool0 (mm).
+        double toolPayloadRadiusMm = 100.0;
         /// Ceiling-mount workspace cube (mm). Tray centered at origin; Z=0 bottom, Z=height mount plane.
         bool workspaceBoundaryEnabled = true;
         double workspaceLengthMm = 600.0;
         double workspaceWidthMm = 600.0;
         double workspaceHeightMm = 650.0;
+        /// World -> base_link mount orientation (degrees). Default roll=180 = ceiling upside-down.
+        double mountRollDeg = 180.0;
+        double mountPitchDeg = 0.0;
+        double mountYawDeg = 0.0;
+        /// Lateral mount offset (mm) from workspace origin in X/Y.
+        double mountOffsetXMm = 0.0;
+        double mountOffsetYMm = 0.0;
         /// Scan / retreat home pose (degrees): shoulder_pan, lift, elbow, wrist_1, wrist_2, wrist_3.
         std::array<double, 6> homeJointsDeg = {0.0, -150.0, 120.0, 0.0, 90.0, 0.0};
     };

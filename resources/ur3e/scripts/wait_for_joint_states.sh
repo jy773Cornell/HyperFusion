@@ -34,26 +34,26 @@ _rclpy_probe() {
   timeout "$(( wait_s + 2 ))" "${py}" "${probe}" "${wait_s}"
 }
 
-echo "UR3e MoveIt: waiting for /joint_states (timeout ${TIMEOUT_S}s)…" >&2
+echo "UR3e: waiting for /joint_states (timeout ${TIMEOUT_S}s)…" >&2
 
 deadline=$((SECONDS + TIMEOUT_S))
 while (( SECONDS < deadline )); do
   if _sidecar_joints_live; then
-    echo "UR3e MoveIt: /joint_states is live (sidecar /joints)." >&2
+    echo "UR3e: /joint_states is live (sidecar /joints)." >&2
     exit 0
   fi
   if _rclpy_probe 6; then
-    echo "UR3e MoveIt: /joint_states is live (rclpy probe)." >&2
+    echo "UR3e: /joint_states is live (rclpy probe)." >&2
     exit 0
   fi
   elapsed=$((TIMEOUT_S - (deadline - SECONDS)))
   if (( elapsed > 0 && elapsed % 10 == 0 )); then
-    echo "UR3e MoveIt: still waiting for /joint_states (${elapsed}s)…" >&2
+    echo "UR3e: still waiting for /joint_states (${elapsed}s)…" >&2
   fi
   sleep 1
 done
 
-echo "UR3e MoveIt: ERROR — /joint_states not publishing after ${TIMEOUT_S}s." >&2
+echo "UR3e: ERROR — /joint_states not publishing after ${TIMEOUT_S}s." >&2
 echo "  Connect the robot in HyperFusion first (sidecar runs joint_states_stamper) and confirm:" >&2
 echo "    curl -s http://127.0.0.1:${SIDECAR_PORT}/joints" >&2
 echo "    export ROS_LOCALHOST_ONLY=1 && ros2 topic hz /joint_states --window 3" >&2

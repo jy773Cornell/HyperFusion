@@ -74,20 +74,21 @@ QString Ur3eMoveItManager::buildLaunchCommand() const
     return QStringLiteral(
                "export ROS_LOCALHOST_ONLY=1 && "
                "export HYPERFUSION_UR3E_REPO='%1' && "
-               "export HYPERFUSION_UR3E_SERVER_PORT='%7' && "
-               "export HYPERFUSION_CEILING_MOUNT='true' && "
-               "export HYPERFUSION_CEILING_MOUNT_HEIGHT_M='%2' && "
-               "export HYPERFUSION_USE_MOCK_HARDWARE='%6' && "
+               "export HYPERFUSION_UR3E_SERVER_PORT='%6' && "
+               "%7"
+               "%8"
+               "export HYPERFUSION_USE_MOCK_HARDWARE='%5' && "
                "pkill -f 'moveit_ros_move_group/[m]ove_group' 2>/dev/null || true; "
                "sleep 1; "
-               "sed 's/\\r$//' '%3' | bash -s %4 %5")
+               "sed 's/\\r$//' '%2' | bash -s %3 %4")
         .arg(repoLinux,
-             QString::number(cfg.workspaceHeightMm / 1000.0, 'f', 4),
              scriptPath,
              rosDistro,
              urType,
              cfg.useMockHardware ? QStringLiteral("true") : QStringLiteral("false"),
-             QString::number(cfg.serverPort));
+             QString::number(cfg.serverPort),
+             buildMountEnvExports(cfg),
+             buildToolPayloadEnvExports(cfg));
 }
 
 void Ur3eMoveItManager::start()

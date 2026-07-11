@@ -5,6 +5,7 @@
 
 
 #include "backend/HyperFusionConfig.hpp"
+#include "backend/ur3e/Ur3eMountTransform.hpp"
 
 #include <QJsonArray>
 
@@ -20,6 +21,7 @@
 
 #include <cmath>
 #include <limits>
+#include <map>
 
 
 
@@ -119,6 +121,41 @@ void rotationMatrixToRotVec(const double m00,
 
 }
 
+void buildTcpOrientationFromToolZ(const double toolZX,
+                                  const double toolZY,
+                                  const double toolZZ,
+                                  Ur3eScanTcpPose &tcp)
+{
+    double zx = toolZX;
+    double zy = toolZY;
+    double zz = toolZZ;
+    if (!normalizeVector(zx, zy, zz))
+    {
+        zx = 0.0;
+        zy = 0.0;
+        zz = -1.0;
+    }
+
+    tcp.toolZMx = zx;
+    tcp.toolZMy = zy;
+    tcp.toolZMz = zz;
+
+    double refX = std::abs(zx) < 0.9 ? 1.0 : 0.0;
+    double refY = std::abs(zx) < 0.9 ? 0.0 : 1.0;
+    const double refZ = 0.0;
+
+    double yX = zy * refZ - zz * refY;
+    double yY = zz * refX - zx * refZ;
+    double yZ = zx * refY - zy * refX;
+    normalizeVector(yX, yY, yZ);
+
+    const double xX = yY * zz - yZ * zy;
+    const double xY = yZ * zx - yX * zz;
+    const double xZ = yX * zy - yY * zx;
+
+    rotationMatrixToRotVec(xX, yX, zx, xY, yY, zy, xZ, yZ, zz, tcp.rxRad, tcp.ryRad, tcp.rzRad);
+}
+
 } // namespace
 
 
@@ -137,71 +174,21 @@ Ur3eScanTcpPose tcpPoseForHemispherePoint(const Ur3eHemisphereScanPoint &gridPoi
 
 
 
-    const double centerXM = 0.0;
+    const Ur3eMountTransform mount =
+        Ur3eMountTransform::sceneAlignFromConfig(hf::hardwareConfig().ur3e);
+    mount.transformPoint(tcp.xM, tcp.yM, tcp.zM);
 
-    const double centerYM = 0.0;
+    // Dome axis / floor-circle center (tray origin projected through sphere center).
+    double centerXM = 0.0;
+    double centerYM = 0.0;
+    double centerZM = kSampleTrayHeightM;
+    mount.transformPoint(centerXM, centerYM, centerZM);
 
-    const double centerZM = kSampleTrayHeightM;
+    const double toolZX = centerXM - tcp.xM;
+    const double toolZY = centerYM - tcp.yM;
+    const double toolZZ = centerZM - tcp.zM;
 
-
-
-    double toolZX = centerXM - tcp.xM;
-
-    double toolZY = centerYM - tcp.yM;
-
-    double toolZZ = centerZM - tcp.zM;
-
-    if (!normalizeVector(toolZX, toolZY, toolZZ))
-
-    {
-
-        toolZX = 0.0;
-
-        toolZY = 0.0;
-
-        toolZZ = -1.0;
-
-    }
-
-
-
-    tcp.toolZMx = toolZX;
-
-    tcp.toolZMy = toolZY;
-
-    tcp.toolZMz = toolZZ;
-
-
-
-    double refX = std::abs(toolZX) < 0.9 ? 1.0 : 0.0;
-
-    double refY = std::abs(toolZX) < 0.9 ? 0.0 : 1.0;
-
-    double refZ = 0.0;
-
-
-
-    double yX = toolZY * refZ - toolZZ * refY;
-
-    double yY = toolZZ * refX - toolZX * refZ;
-
-    double yZ = toolZX * refY - toolZY * refX;
-
-    normalizeVector(yX, yY, yZ);
-
-
-
-    const double xX = yY * toolZZ - yZ * toolZY;
-
-    const double xY = yZ * toolZX - yX * toolZZ;
-
-    const double xZ = yX * toolZY - yY * toolZX;
-
-
-
-    rotationMatrixToRotVec(xX, yX, toolZX, xY, yY, toolZY, xZ, yZ, toolZZ, tcp.rxRad, tcp.ryRad,
-
-                           tcp.rzRad);
+    buildTcpOrientationFromToolZ(toolZX, toolZY, toolZZ, tcp);
 
     return tcp;
 
@@ -418,12 +405,9 @@ namespace
 {
 double jointDeltaRad(const double referenceRad, const double candidateRad)
 {
-    double delta = candidateRad - referenceRad;
-    while (delta > M_PI)
-        delta -= 2.0 * M_PI;
-    while (delta <= -M_PI)
-        delta += 2.0 * M_PI;
-    return delta;
+    // Shortest signed delta in (-π, π]; matches Python joint_angles.joint_delta_rad.
+    return std::atan2(std::sin(candidateRad - referenceRad),
+                      std::cos(candidateRad - referenceRad));
 }
 } // namespace
 
@@ -461,17 +445,102 @@ void appendUr3eScanHomeJointsToJson(QJsonObject &body)
 namespace
 {
 
-void sortTopToBottomRingOrder(std::vector<int> &indices, const Ur3eHemisphereScanPlan &plan)
+[[nodiscard]] int findClosestIndexToJoints(const Ur3eHemisphereScanPlan &plan,
+                                         const std::vector<int> &candidates,
+                                         const std::vector<double> &referenceRad)
 {
-    std::sort(indices.begin(), indices.end(), [&plan](const int lhs, const int rhs) {
+    int bestIndex = -1;
+    double bestDistance = std::numeric_limits<double>::infinity();
+    for (const int index : candidates)
+    {
+        const std::vector<double> &joints =
+            plan.points[static_cast<std::size_t>(index)].jointPositionsRad;
+        const double distance = ur3eJointDistanceRad(referenceRad, joints);
+        if (distance < bestDistance)
+        {
+            bestDistance = distance;
+            bestIndex = index;
+        }
+    }
+    return bestIndex;
+}
+
+void appendRingPhiSweep(std::vector<int> &order,
+                        const Ur3eHemisphereScanPlan &plan,
+                        const std::vector<int> &ringIndices,
+                        const int entryIndex)
+{
+    if (ringIndices.empty() || entryIndex < 0)
+        return;
+
+    std::vector<int> sorted = ringIndices;
+    std::sort(sorted.begin(), sorted.end(), [&plan](const int lhs, const int rhs) {
         const Ur3eHemisphereScanPoint &a = plan.points[static_cast<std::size_t>(lhs)].gridPoint;
         const Ur3eHemisphereScanPoint &b = plan.points[static_cast<std::size_t>(rhs)].gridPoint;
-        if (a.thetaDeg != b.thetaDeg)
-            return a.thetaDeg < b.thetaDeg;
         if (a.phiDeg != b.phiDeg)
             return a.phiDeg < b.phiDeg;
         return lhs < rhs;
     });
+
+    const auto entryIt =
+        std::find(sorted.begin(), sorted.end(), entryIndex);
+    if (entryIt == sorted.end())
+    {
+        order.insert(order.end(), sorted.begin(), sorted.end());
+        return;
+    }
+
+    order.insert(order.end(), entryIt, sorted.end());
+    order.insert(order.end(), sorted.begin(), entryIt);
+}
+
+void buildTopRingFirstExecutionOrder(std::vector<int> &order,
+                                     const Ur3eHemisphereScanPlan &plan,
+                                     const std::vector<int> &reachableIndices,
+                                     const std::vector<double> &homeRad)
+{
+    if (reachableIndices.empty())
+        return;
+
+    std::map<double, std::vector<int>> ringsByTheta;
+    for (const int index : reachableIndices)
+    {
+        const double theta =
+            plan.points[static_cast<std::size_t>(index)].gridPoint.thetaDeg;
+        ringsByTheta[theta].push_back(index);
+    }
+
+    std::vector<double> ringThetas;
+    ringThetas.reserve(ringsByTheta.size());
+    for (const auto &entry : ringsByTheta)
+        ringThetas.push_back(entry.first);
+    // θ = 0° at dome apex → increasing θ walks top ring toward tray rim.
+    std::sort(ringThetas.begin(), ringThetas.end());
+
+    std::vector<double> referenceRad = homeRad;
+    bool firstRing = true;
+
+    for (const double theta : ringThetas)
+    {
+        const std::vector<int> &ringIndices = ringsByTheta[theta];
+        if (ringIndices.empty())
+            continue;
+
+        const int entryIndex =
+            firstRing ? findClosestIndexToJoints(plan, ringIndices, homeRad)
+                      : findClosestIndexToJoints(plan, ringIndices, referenceRad);
+        firstRing = false;
+        if (entryIndex < 0)
+            continue;
+
+        const std::size_t orderBefore = order.size();
+        appendRingPhiSweep(order, plan, ringIndices, entryIndex);
+        if (order.size() > orderBefore)
+        {
+            referenceRad =
+                plan.points[static_cast<std::size_t>(order.back())].jointPositionsRad;
+        }
+    }
 }
 
 } // namespace
@@ -488,8 +557,13 @@ std::vector<int> buildHemisphereScanExecutionOrder(const Ur3eHemisphereScanPlan 
         indices.push_back(index);
     }
 
-    sortTopToBottomRingOrder(indices, plan);
-    return indices;
+    std::vector<int> order;
+    order.reserve(indices.size());
+    buildTopRingFirstExecutionOrder(
+        order, plan, indices, ur3eScanHomeJointsRadFromConfig());
+    if (order.empty())
+        order = indices;
+    return order;
 }
 
 } // namespace hf::ur3e

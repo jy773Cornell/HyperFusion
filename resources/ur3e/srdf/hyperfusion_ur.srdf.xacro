@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- HyperFusion SRDF: stock UR collision matrix + tool-flange payload link. -->
+<robot xmlns:xacro="http://wiki.ros.org/xacro" name="$(arg name)">
+
+  <xacro:arg name="name" default="ur"/>
+
+  <xacro:include filename="$(find ur_moveit_config)/srdf/ur_macro.srdf.xacro"/>
+
+  <xacro:ur_srdf/>
+
+  <!-- Payload is bolted to tool0; ignore mount overlap (pinch guard checks forearm separately). -->
+  <disable_collisions link1="tool0" link2="hyperfusion_tool_payload" reason="Fixed"/>
+  <disable_collisions link1="flange" link2="hyperfusion_tool_payload" reason="Fixed"/>
+  <disable_collisions link1="wrist_3_link" link2="hyperfusion_tool_payload" reason="Adjacent"/>
+
+</robot>

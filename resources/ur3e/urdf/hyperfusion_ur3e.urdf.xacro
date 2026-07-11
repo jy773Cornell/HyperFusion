@@ -6,6 +6,7 @@
   <xacro:include filename="$(find ur_description)/urdf/ur_macro.xacro"/>
   <xacro:include filename="$(find ur_robot_driver)/urdf/ur.ros2_control.xacro" />
   <xacro:include filename="$(find ur_description)/urdf/inc/ur_transmissions.xacro" />
+  <xacro:include filename="hyperfusion_tool_payload.xacro"/>
 
   <xacro:arg name="ur_type" default="urXe"/>
   <xacro:arg name="tf_prefix" default="" />
@@ -45,6 +46,26 @@
   <!-- HyperFusion ceiling mount (matches workspace_height_mm / Z=0 tray floor). -->
   <xacro:arg name="ceiling_mount" default="true"/>
   <xacro:arg name="ceiling_mount_height_m" default="0.65"/>
+  <xacro:arg name="mount_roll_rad" default="3.14159265358979323846"/>
+  <xacro:arg name="mount_pitch_rad" default="0"/>
+  <xacro:arg name="mount_yaw_rad" default="0"/>
+  <xacro:arg name="mount_x_m" default="0"/>
+  <xacro:arg name="mount_y_m" default="0"/>
+  <!-- Tool payload placeholder (camera / sensor envelope for MoveIt collision). -->
+  <xacro:arg name="tool_payload_enabled" default="true"/>
+  <xacro:arg name="tool_payload_shape" default="hemisphere"/>
+  <xacro:arg name="tool_payload_radius_m" default="0.10"/>
+  <xacro:arg name="tool_payload_box_x_m" default="0.08"/>
+  <xacro:arg name="tool_payload_box_y_m" default="0.06"/>
+  <xacro:arg name="tool_payload_box_z_m" default="0.06"/>
+  <xacro:arg name="tool_payload_x_m" default="0"/>
+  <xacro:arg name="tool_payload_y_m" default="0"/>
+  <xacro:arg name="tool_payload_z_m" default="0"/>
+  <xacro:arg name="tool_payload_collision_gap_m" default="0.002"/>
+  <xacro:arg name="tool_payload_mesh_dir" default="meshes/"/>
+  <xacro:arg name="tool_payload_roll_rad" default="0"/>
+  <xacro:arg name="tool_payload_pitch_rad" default="0"/>
+  <xacro:arg name="tool_payload_yaw_rad" default="0"/>
   <xacro:property name="hf_pi" value="3.14159265358979323846"/>
 
   <xacro:property name="initial_positions_file" default="$(arg initial_positions_file)"/>
@@ -65,10 +86,12 @@
     >
     <xacro:if value="$(arg ceiling_mount)">
       <!-- Upside-down on ceiling plane; base_link hangs toward tray at Z=0. -->
-      <origin xyz="0 0 $(arg ceiling_mount_height_m)" rpy="${hf_pi} 0 0" />
+      <origin xyz="$(arg mount_x_m) $(arg mount_y_m) $(arg ceiling_mount_height_m)"
+              rpy="$(arg mount_roll_rad) $(arg mount_pitch_rad) $(arg mount_yaw_rad)" />
     </xacro:if>
     <xacro:unless value="$(arg ceiling_mount)">
-      <origin xyz="0 0 0" rpy="0 0 0" />
+      <origin xyz="$(arg mount_x_m) $(arg mount_y_m) 0"
+              rpy="$(arg mount_roll_rad) $(arg mount_pitch_rad) $(arg mount_yaw_rad)" />
     </xacro:unless>
   </xacro:ur_robot>
 
@@ -100,5 +123,24 @@
     script_sender_port="$(arg script_sender_port)"
     trajectory_port="$(arg trajectory_port)"
   />
+
+  <xacro:if value="$(arg tool_payload_enabled)">
+    <xacro:hyperfusion_tool_payload
+      tf_prefix="$(arg tf_prefix)"
+      shape="$(arg tool_payload_shape)"
+      radius_m="$(arg tool_payload_radius_m)"
+      mesh_dir="$(arg tool_payload_mesh_dir)"
+      collision_gap_m="$(arg tool_payload_collision_gap_m)"
+      box_x_m="$(arg tool_payload_box_x_m)"
+      box_y_m="$(arg tool_payload_box_y_m)"
+      box_z_m="$(arg tool_payload_box_z_m)"
+      origin_x_m="$(arg tool_payload_x_m)"
+      origin_y_m="$(arg tool_payload_y_m)"
+      origin_z_m="$(arg tool_payload_z_m)"
+      origin_roll_rad="$(arg tool_payload_roll_rad)"
+      origin_pitch_rad="$(arg tool_payload_pitch_rad)"
+      origin_yaw_rad="$(arg tool_payload_yaw_rad)"
+    />
+  </xacro:if>
 
 </robot>

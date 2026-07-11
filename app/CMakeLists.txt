@@ -155,6 +155,7 @@ qt_add_executable(app WIN32
     src/backend/ur3e/Ur3eHemisphereScan.cpp
     src/backend/ur3e/Ur3eHemisphereScanReachability.cpp
     src/backend/ur3e/Ur3eWorkspaceBoundary.cpp
+    src/backend/ur3e/Ur3eMountTransform.cpp
     src/backend/ur3e/Ur3eMoveItManager.cpp
     src/backend/ur3e/Ur3eRvizManager.cpp
     src/backend/ur3e/Ur3eServerManager.cpp
@@ -195,6 +196,7 @@ qt_add_executable(app WIN32
     include/backend/ur3e/Ur3eHemisphereScan.hpp
     include/backend/ur3e/Ur3eHemisphereScanReachability.hpp
     include/backend/ur3e/Ur3eWorkspaceBoundary.hpp
+    include/backend/ur3e/Ur3eMountTransform.hpp
     include/backend/ur3e/Ur3eServerManager.hpp
     include/backend/ur3e/Ur3eWslSetup.hpp
     include/backend/ur3e/Ur3eMoveItManager.hpp

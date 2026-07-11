@@ -7,10 +7,13 @@ import signal
 import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import List, Optional
 
 from hyperfusion_ur3e import PKG_ROOT
 from hyperfusion_ur3e.sidecar.config import load_yaml_config, DEFAULT_CONFIG
+from hyperfusion_ur3e.urdf.mount_config import MountConfig
+from hyperfusion_ur3e.urdf.tool_payload_config import ToolPayloadConfig
 
 HW_JOINT_STATES_TOPIC = "/joint_states"
 STAMPER_BIN = PKG_ROOT / "venv" / "bin" / "joint_states_stamper"
@@ -18,6 +21,7 @@ INITIAL_POSITIONS_PATH = PKG_ROOT / "config" / "initial_positions.yaml"
 HYPERFUSION_RSP_LAUNCH = PKG_ROOT / "launch" / "hyperfusion_ur_rsp.launch.py"
 HYPERFUSION_CONTROL_LAUNCH = PKG_ROOT / "launch" / "hyperfusion_ur_control.launch.py"
 HYPERFUSION_CONTROLLERS_PATH = PKG_ROOT / "config" / "ur_controllers_hyperfusion.yaml"
+KILL_STALE_SCRIPT = PKG_ROOT / "scripts" / "kill_stale_ur_ros.sh"
 
 CANONICAL_JOINT_NAMES = [
     "shoulder_pan_joint",
@@ -30,9 +34,14 @@ CANONICAL_JOINT_NAMES = [
 
 STALE_PROCESS_PATTERNS = [
     "ur_control.launch.py",
+    "hyperfusion_ur_control.launch.py",
+    "hyperfusion_ur_rsp.launch.py",
     "venv/bin/joint_states_stamper",
     "/controller_manager/ros2_control_node",
     "/robot_state_publisher/robot_state_publisher",
+    "/ur_robot_driver/dashboard_client",
+    "/ur_robot_driver/controller_stopper_node",
+    "/ur_robot_driver/urscript_interface",
     "/ur_robot_driver/trajectory_until_node",
     "/controller_manager/spawner",
 ]
@@ -52,6 +61,11 @@ class Ur3eRosDriverManager:
         initial_joint_deg: Optional[List[float]] = None,
         ceiling_mount: Optional[bool] = None,
         ceiling_mount_height_m: Optional[float] = None,
+        mount_roll_deg: Optional[float] = None,
+        mount_pitch_deg: Optional[float] = None,
+        mount_yaw_deg: Optional[float] = None,
+        mount_offset_x_mm: Optional[float] = None,
+        mount_offset_y_mm: Optional[float] = None,
     ) -> None:
         sidecar_cfg = load_yaml_config(DEFAULT_CONFIG)
         self.ros_distro = ros_distro
@@ -66,6 +80,20 @@ class Ur3eRosDriverManager:
             ceiling_mount_height_m = float(sidecar_cfg.get("ceiling_mount_height_m", 0.65))
         self.ceiling_mount = ceiling_mount
         self.ceiling_mount_height_m = ceiling_mount_height_m
+        self.mount_config = MountConfig.from_cli(
+            ceiling_mount_height_m=ceiling_mount_height_m,
+            roll_deg=float(mount_roll_deg if mount_roll_deg is not None else sidecar_cfg.get("mount_roll_deg", 180.0)),
+            pitch_deg=float(mount_pitch_deg if mount_pitch_deg is not None else sidecar_cfg.get("mount_pitch_deg", 0.0)),
+            yaw_deg=float(mount_yaw_deg if mount_yaw_deg is not None else sidecar_cfg.get("mount_yaw_deg", 0.0)),
+            offset_x_mm=float(
+                mount_offset_x_mm if mount_offset_x_mm is not None else sidecar_cfg.get("mount_offset_x_mm", 0.0)
+            ),
+            offset_y_mm=float(
+                mount_offset_y_mm if mount_offset_y_mm is not None else sidecar_cfg.get("mount_offset_y_mm", 0.0)
+            ),
+            ceiling_mount=ceiling_mount,
+        )
+        self.tool_payload_config = ToolPayloadConfig.from_env()
         self._process: Optional[subprocess.Popen] = None
         self._stamper_process: Optional[subprocess.Popen] = None
 
@@ -107,10 +135,10 @@ class Ur3eRosDriverManager:
             return
 
         self.write_initial_positions_yaml(self.initial_joint_deg)
+        self.stop_stale_launches()
 
         mock_flag = "true" if self.use_mock_hardware else "false"
         mock_sensor_flag = "true" if self.use_mock_hardware else "false"
-        ceiling_flag = "true" if self.ceiling_mount else "false"
         joint_controller = (
             "joint_trajectory_controller"
             if self.use_mock_hardware
@@ -118,32 +146,35 @@ class Ur3eRosDriverManager:
         )
         headless_flag = "true" if self.use_mock_hardware else "false"
         rsp_launch = HYPERFUSION_RSP_LAUNCH.as_posix()
+        control_launch = HYPERFUSION_CONTROL_LAUNCH.as_posix()
         controllers_file = HYPERFUSION_CONTROLLERS_PATH.as_posix()
         pkg_root = PKG_ROOT.as_posix()
+        payload_cfg = ToolPayloadConfig.from_env()
+        payload_exports = payload_cfg.bash_exports()
+        runtime_urdf = self._materialize_runtime_robot_description(payload_cfg)
+        runtime_urdf_export = f"export HYPERFUSION_GENERATED_URDF='{runtime_urdf.as_posix()}' && "
         ros_env = (
             "export ROS_LOCALHOST_ONLY=1 && "
             "export RCUTILS_COLORIZED_OUTPUT=0 && "
+            "export ROS2CLI_DISABLE_DAEMON=1 && "
         )
-        if self.use_mock_hardware:
-            control_launch = HYPERFUSION_CONTROL_LAUNCH.as_posix()
-            launch_target = control_launch
-        else:
-            launch_target = "ur_robot_driver ur_control.launch.py"
         launch_cmd = (
             f"export HYPERFUSION_UR3E_REPO='{pkg_root}' && "
             f"export HYPERFUSION_USE_MOCK_HARDWARE='{mock_flag}' && "
             f"export HYPERFUSION_MOCK_SENSOR_COMMANDS='{mock_sensor_flag}' && "
-            f"export HYPERFUSION_CEILING_MOUNT='{ceiling_flag}' && "
-            f"export HYPERFUSION_CEILING_MOUNT_HEIGHT_M='{self.ceiling_mount_height_m:.6f}' && "
+            f"{self.mount_config.bash_exports()}"
+            f"{payload_exports}"
+            f"{runtime_urdf_export}"
             f"{ros_env}"
             f"source /opt/ros/{self.ros_distro}/setup.bash && "
-            f"ros2 launch {launch_target} "
+            f"ros2 launch '{control_launch}' "
             f"ur_type:={self.ur_type} "
             f"robot_ip:={self.robot_ip} "
             f"reverse_ip:={self.reverse_ip} "
             f"use_mock_hardware:={mock_flag} "
-            f"description_launchfile:={rsp_launch} "
-            f"controllers_file:={controllers_file} "
+            f"mock_sensor_commands:={mock_sensor_flag} "
+            f"description_launchfile:='{rsp_launch}' "
+            f"controllers_file:='{controllers_file}' "
             f"initial_joint_controller:={joint_controller} "
             f"headless_mode:={headless_flag} "
             "launch_rviz:=false "
@@ -178,8 +209,64 @@ class Ur3eRosDriverManager:
                 raise RuntimeError(f"{exc}\n{stderr_tail}") from exc
             raise
 
-    def ensure_joint_states_stamper(self) -> None:
+    def _materialize_runtime_robot_description(self, cfg: ToolPayloadConfig) -> Path:
+        from hyperfusion_ur3e.urdf.materialize_robot_description import (
+            materialize_runtime_robot_description,
+        )
+
+        return materialize_runtime_robot_description(
+            PKG_ROOT,
+            ros_distro=self.ros_distro,
+            ur_type=self.ur_type,
+            robot_ip=self.robot_ip,
+            reverse_ip=self.reverse_ip,
+            use_mock_hardware=self.use_mock_hardware,
+            headless_mode=self.use_mock_hardware,
+            initial_positions_file=INITIAL_POSITIONS_PATH,
+            cfg=cfg,
+        )
+
+    def schedule_tool_payload_probe(self) -> None:
+        """Background check — must not block driver prestart / Connect enable."""
+        import threading
+
+        threading.Thread(
+            target=self._log_tool_payload_in_driver_urdf,
+            daemon=True,
+            name="ur3e-tool-payload-probe",
+        ).start()
+
+    def _log_tool_payload_in_driver_urdf(self) -> None:
+        from hyperfusion_ur3e.urdf.tool_payload_config import (
+            ToolPayloadConfig,
+            log_payload_probe_failure,
+            probe_robot_state_publisher_payload,
+        )
+
+        cfg = ToolPayloadConfig.from_env()
+        if not cfg.enabled:
+            return
+        if probe_robot_state_publisher_payload(
+            self.ros_distro,
+            cfg,
+            retries=6,
+            retry_delay_s=2.0,
+        ):
+            sys.stderr.write(
+                "UR3e driver: tool payload in robot_description "
+                f"({cfg.shape}, {cfg.radius_m * 1000.0:.0f} mm).\n"
+            )
+            return
+        log_payload_probe_failure("driver robot_state_publisher", cfg)
+
+    def ensure_joint_states_stamper(self, *, reset: bool = False) -> None:
         """Start hardware joint_states -> /joint_states republisher for MoveIt/RViz."""
+        home_env = ",".join(str(float(v)) for v in self.initial_joint_deg)
+        prev_env = os.environ.get("HYPERFUSION_HOME_JOINTS_DEG")
+        os.environ["HYPERFUSION_HOME_JOINTS_DEG"] = home_env
+        if reset or (prev_env is not None and prev_env != home_env and self._stamper_running()):
+            self.stop_joint_states_stamper()
+
         if self._stamper_process is not None and self._stamper_process.poll() is None:
             return
         if self._stamper_running():
@@ -217,10 +304,18 @@ class Ur3eRosDriverManager:
         )
 
     @staticmethod
-    def ensure_joint_states_stamper_for_distro(ros_distro: str) -> None:
+    def ensure_joint_states_stamper_for_distro(
+        ros_distro: str,
+        *,
+        home_joints_deg: Optional[List[float]] = None,
+        reset: bool = False,
+    ) -> None:
         """Ensure stamper is running when attaching to an external ur_control launch."""
-        helper = Ur3eRosDriverManager(ros_distro=ros_distro)
-        helper.ensure_joint_states_stamper()
+        helper = Ur3eRosDriverManager(
+            ros_distro=ros_distro,
+            initial_joint_deg=list(home_joints_deg) if home_joints_deg is not None else None,
+        )
+        helper.ensure_joint_states_stamper(reset=reset)
 
     def stop(self) -> None:
         self.stop_joint_states_stamper()
@@ -268,14 +363,22 @@ class Ur3eRosDriverManager:
     def stop_stale_launches() -> None:
         """Terminate leftover UR ROS processes from prior partial launches."""
         try:
-            for pattern in STALE_PROCESS_PATTERNS:
+            if KILL_STALE_SCRIPT.is_file():
                 subprocess.run(
-                    ["pkill", "-f", pattern],
+                    ["bash", str(KILL_STALE_SCRIPT), "--keep-sidecar"],
                     check=False,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
                 )
-            time.sleep(1.0)
+            else:
+                for pattern in STALE_PROCESS_PATTERNS:
+                    subprocess.run(
+                        ["pkill", "-f", pattern],
+                        check=False,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                time.sleep(1.0)
         except Exception:
             pass
 
@@ -402,7 +505,7 @@ class Ur3eRosDriverManager:
                 [
                     "bash",
                     "-lc",
-                    f"export ROS_LOCALHOST_ONLY=1 && "
+                    f"export ROS_LOCALHOST_ONLY=1 ROS2CLI_DISABLE_DAEMON=1 && "
                     f"source /opt/ros/{self.ros_distro}/setup.bash && "
                     f"timeout {wait_s} ros2 topic hz {topic} --window 1 2>/dev/null | "
                     "head -1 | grep -q average",
@@ -429,7 +532,7 @@ class Ur3eRosDriverManager:
             [
                 "bash",
                 "-lc",
-                f"export ROS_LOCALHOST_ONLY=1 && "
+                f"export ROS_LOCALHOST_ONLY=1 ROS2CLI_DISABLE_DAEMON=1 && "
                 f"source /opt/ros/{self.ros_distro}/setup.bash && "
                 "timeout 8 ros2 control list_controllers",
             ],

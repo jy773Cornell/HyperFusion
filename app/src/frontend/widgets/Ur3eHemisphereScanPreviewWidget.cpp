@@ -1,7 +1,10 @@
 // 3D preview of UR3e hemisphere scan over the sample tray (frontend/ui layer).
 #include "frontend/widgets/Ur3eHemisphereScanPreviewWidget.hpp"
 
+#include "backend/HyperFusionConfig.hpp"
+#include "backend/ur3e/Ur3eHemisphereScan.hpp"
 #include "backend/ur3e/Ur3eHemisphereScanReachability.hpp"
+#include "backend/ur3e/Ur3eMountTransform.hpp"
 #include "backend/ur3e/Ur3eWorkspaceBoundary.hpp"
 
 #include <QWheelEvent>
@@ -58,6 +61,7 @@ Ur3eHemisphereScanPreviewWidget::Ur3eHemisphereScanPreviewWidget(QWidget *parent
     zoomFactor_ = kDefaultZoomFactor;
     params_ = hf::ur3e::Ur3eHemisphereScanParams{};
     workspaceBoundary_ = hf::ur3e::Ur3eWorkspaceBoundary{};
+    sceneMount_ = hf::ur3e::Ur3eMountTransform::sceneAlignFromConfig(hf::hardwareConfig().ur3e);
     rebuildScanPoints();
 
     flashTimer_ = new QTimer(this);
@@ -83,7 +87,9 @@ Ur3eHemisphereScanPreviewWidget::Vec3 Ur3eHemisphereScanPreviewWidget::sceneCent
     double maxZ = kTrayHeightM + params_.sphereRadiusM;
     if (workspaceBoundary_.enabled)
         maxZ = std::max(maxZ, workspaceBoundary_.heightM());
-    return Vec3{0.0, 0.0, (minZ + maxZ) * 0.5};
+
+    const Vec3 nominalCenter{0.0, 0.0, (minZ + maxZ) * 0.5};
+    return mapScenePoint(nominalCenter);
 }
 
 Ur3eHemisphereScanPreviewWidget::Vec3d
@@ -163,6 +169,12 @@ void Ur3eHemisphereScanPreviewWidget::setWorkspaceBoundary(
     workspaceBoundary_ = boundary;
     workspaceBoundary_.normalize();
     resetCameraView();
+    update();
+}
+
+void Ur3eHemisphereScanPreviewWidget::setSceneMount(const hf::ur3e::Ur3eMountTransform &mount)
+{
+    sceneMount_ = mount;
     update();
 }
 
@@ -300,13 +312,24 @@ void Ur3eHemisphereScanPreviewWidget::rebuildScanPoints()
     }
 }
 
+Ur3eHemisphereScanPreviewWidget::Vec3 Ur3eHemisphereScanPreviewWidget::mapScenePoint(
+    const Vec3 &point) const
+{
+    double xM = point.x;
+    double yM = point.y;
+    double zM = point.z;
+    sceneMount_.transformPoint(xM, yM, zM);
+    return Vec3{xM, yM, zM};
+}
+
 Ur3eHemisphereScanPreviewWidget::ProjectedPoint
 Ur3eHemisphereScanPreviewWidget::projectPoint(const Vec3 &point,
                                               const QRectF &bounds,
                                               const double scale) const
 {
+    const Vec3 mapped = mapScenePoint(point);
     const Vec3 center = sceneCenter();
-    const Vec3d centered{point.x - center.x, point.y - center.y, point.z - center.z};
+    const Vec3d centered{mapped.x - center.x, mapped.y - center.y, mapped.z - center.z};
     const Vec3d rotated = rotateView(centered);
     ProjectedPoint projected;
     projected.depth = rotated.z;
@@ -317,12 +340,6 @@ Ur3eHemisphereScanPreviewWidget::projectPoint(const Vec3 &point,
 
 double Ur3eHemisphereScanPreviewWidget::sceneScale(const QRectF &bounds) const
 {
-    constexpr double minZ = 0.0;
-    const Vec3 center = sceneCenter();
-    double maxZ = kTrayHeightM + params_.sphereRadiusM;
-    if (workspaceBoundary_.enabled)
-        maxZ = std::max(maxZ, workspaceBoundary_.heightM());
-
     double extentX = kTrayLengthM * 0.5;
     double extentY = kTrayWidthM * 0.5;
     if (workspaceBoundary_.enabled)
@@ -331,9 +348,33 @@ double Ur3eHemisphereScanPreviewWidget::sceneScale(const QRectF &bounds) const
         extentY = std::max(extentY, workspaceBoundary_.halfWidthM());
     }
 
-    const double extentZ = std::max(center.z - minZ, maxZ - center.z);
-    const double extent = std::max({extentX, extentY, extentZ});
-    return std::min(bounds.width(), bounds.height()) / (extent * kSceneFitPadding);
+    constexpr double minZ = 0.0;
+    double maxZ = kTrayHeightM + params_.sphereRadiusM;
+    if (workspaceBoundary_.enabled)
+        maxZ = std::max(maxZ, workspaceBoundary_.heightM());
+
+    const std::array<Vec3, 8> corners = {
+        Vec3{-extentX, -extentY, minZ},
+        Vec3{extentX, -extentY, minZ},
+        Vec3{extentX, extentY, minZ},
+        Vec3{-extentX, extentY, minZ},
+        Vec3{-extentX, -extentY, maxZ},
+        Vec3{extentX, -extentY, maxZ},
+        Vec3{extentX, extentY, maxZ},
+        Vec3{-extentX, extentY, maxZ},
+    };
+
+    const Vec3 center = sceneCenter();
+    double maxExtent = 0.01;
+    for (const Vec3 &corner : corners)
+    {
+        const Vec3 mapped = mapScenePoint(corner);
+        maxExtent = std::max(maxExtent, std::abs(mapped.x - center.x));
+        maxExtent = std::max(maxExtent, std::abs(mapped.y - center.y));
+        maxExtent = std::max(maxExtent, std::abs(mapped.z - center.z));
+    }
+
+    return std::min(bounds.width(), bounds.height()) / (maxExtent * kSceneFitPadding);
 }
 
 void Ur3eHemisphereScanPreviewWidget::paintEvent(QPaintEvent *event)
@@ -799,11 +840,12 @@ void Ur3eHemisphereScanPreviewWidget::drawScanPin(QPainter &painter,
         lineWidth = 3.0;
     }
 
-    const Vec3 sphereCenter{0.0, 0.0, kTrayHeightM};
+    const Vec3 sphereCenter = mapScenePoint(Vec3{0.0, 0.0, kTrayHeightM});
     const Vec3 surface{entry.point.xM, entry.point.yM, entry.point.zM};
-    double dirX = surface.x - sphereCenter.x;
-    double dirY = surface.y - sphereCenter.y;
-    double dirZ = surface.z - sphereCenter.z;
+    const Vec3 mappedSurface = mapScenePoint(surface);
+    double dirX = mappedSurface.x - sphereCenter.x;
+    double dirY = mappedSurface.y - sphereCenter.y;
+    double dirZ = mappedSurface.z - sphereCenter.z;
     const double length = std::sqrt(dirX * dirX + dirY * dirY + dirZ * dirZ);
     if (length <= 1.0e-9)
         return;
@@ -814,14 +856,14 @@ void Ur3eHemisphereScanPreviewWidget::drawScanPin(QPainter &painter,
 
     const double halfLen = kNormalDisplayLengthM * 0.5;
     const Vec3 pinStart{
-        surface.x - dirX * halfLen,
-        surface.y - dirY * halfLen,
-        surface.z - dirZ * halfLen,
+        mappedSurface.x - dirX * halfLen,
+        mappedSurface.y - dirY * halfLen,
+        mappedSurface.z - dirZ * halfLen,
     };
     const Vec3 pinEnd{
-        surface.x + dirX * halfLen,
-        surface.y + dirY * halfLen,
-        surface.z + dirZ * halfLen,
+        mappedSurface.x + dirX * halfLen,
+        mappedSurface.y + dirY * halfLen,
+        mappedSurface.z + dirZ * halfLen,
     };
 
     const QPointF start = projectPoint(pinStart, bounds, scale).screen;

@@ -181,6 +181,8 @@ QString Ur3eServerManager::buildLaunchCommand() const
     serverArgs += QStringLiteral(" --rtde-port %1").arg(cfg.rtdePort);
     serverArgs += QStringLiteral(" --max-linear-speed %1").arg(cfg.maxLinearSpeedMPerS, 0, 'g', 6);
     serverArgs += QStringLiteral(" --max-linear-accel %1").arg(cfg.maxLinearAccelMPerS2, 0, 'g', 6);
+    serverArgs += QStringLiteral(" --max-joint-velocity-deg %1").arg(cfg.maxJointVelocityDegS, 0, 'g', 6);
+    serverArgs += QStringLiteral(" --tool-payload-radius-mm %1").arg(cfg.toolPayloadRadiusMm, 0, 'f', 1);
     if (cfg.useMockHardware)
         serverArgs += QStringLiteral(" --use-mock-hardware");
     else
@@ -189,7 +191,6 @@ QString Ur3eServerManager::buildLaunchCommand() const
     serverArgs += QStringLiteral(" --ur-type %1").arg(cfg.urType);
     if (cfg.prestartDriver)
         serverArgs += QStringLiteral(" --prestart-driver");
-    if (cfg.useMockHardware)
     {
         QStringList jointDegParts;
         for (int jointIndex = 0; jointIndex < 6; ++jointIndex)
@@ -198,6 +199,11 @@ QString Ur3eServerManager::buildLaunchCommand() const
     }
     serverArgs += QStringLiteral(" --ceiling-mount-height-mm %1")
                       .arg(cfg.workspaceHeightMm, 0, 'f', 1);
+    serverArgs += QStringLiteral(" --mount-roll-deg %1").arg(cfg.mountRollDeg, 0, 'g', 6);
+    serverArgs += QStringLiteral(" --mount-pitch-deg %1").arg(cfg.mountPitchDeg, 0, 'g', 6);
+    serverArgs += QStringLiteral(" --mount-yaw-deg %1").arg(cfg.mountYawDeg, 0, 'g', 6);
+    serverArgs += QStringLiteral(" --mount-offset-x-mm %1").arg(cfg.mountOffsetXMm, 0, 'f', 1);
+    serverArgs += QStringLiteral(" --mount-offset-y-mm %1").arg(cfg.mountOffsetYMm, 0, 'f', 1);
     if (cfg.workspaceBoundaryEnabled)
         serverArgs += QStringLiteral(" --workspace-boundary-enabled");
     else
@@ -228,14 +234,11 @@ void Ur3eServerManager::beginAsyncCleanup()
         cleanupProcess_.waitForFinished(500);
     }
 
-    // Clear leftover CLI / prior-session UR ROS processes before binding server_port.
-    const QString cleanup = QStringLiteral(
-        "pkill -f '[u]r_control.launch.py' 2>/dev/null || true; "
-        "pkill -f '[r]os2_control_node' 2>/dev/null || true; "
-        "pkill -f '[j]oint_states_stamper' 2>/dev/null || true; "
-        "pkill -f '[u]r3e_server' 2>/dev/null || true; "
-        "pkill -f '[h]yperfusion_ur3e.sidecar.server' 2>/dev/null || true; "
-        "sleep 2");
+    const QString repoLinux = resolveUr3eRepoLinuxPath();
+    const QString cleanup = repoLinux.isEmpty()
+                                ? QStringLiteral("exit 1")
+                                : QStringLiteral("bash '%1/scripts/kill_stale_ur_ros.sh'")
+                                      .arg(repoLinux);
 
     cleanupProcess_.setProgram(QStringLiteral("wsl.exe"));
     cleanupProcess_.setArguments(wslBashArguments(cleanup));

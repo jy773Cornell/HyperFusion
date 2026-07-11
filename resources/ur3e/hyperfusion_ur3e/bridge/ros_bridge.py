@@ -45,6 +45,11 @@ class Ur3eRosBridge:
       use_mock_hardware: bool = True,
       initial_joint_deg: Optional[List[float]] = None,
       ceiling_mount_height_m: Optional[float] = None,
+      mount_roll_deg: Optional[float] = None,
+      mount_pitch_deg: Optional[float] = None,
+      mount_yaw_deg: Optional[float] = None,
+      mount_offset_x_mm: Optional[float] = None,
+      mount_offset_y_mm: Optional[float] = None,
       workspace_boundary_enabled: bool = True,
       workspace_length_m: float = 0.6,
       workspace_width_m: float = 0.6,
@@ -59,7 +64,17 @@ class Ur3eRosBridge:
     self.ur_type = ur_type
     self.use_mock_hardware = use_mock_hardware
     self.initial_joint_deg = initial_joint_deg or [0.0, -150.0, 120.0, 0.0, 90.0, 0.0]
-    self.ceiling_mount_height_m = ceiling_mount_height_m
+    from hyperfusion_ur3e.urdf.mount_config import MountConfig
+
+    self.mount_config = MountConfig.from_cli(
+        ceiling_mount_height_m=ceiling_mount_height_m or 0.65,
+        roll_deg=mount_roll_deg if mount_roll_deg is not None else 180.0,
+        pitch_deg=mount_pitch_deg if mount_pitch_deg is not None else 0.0,
+        yaw_deg=mount_yaw_deg if mount_yaw_deg is not None else 0.0,
+        offset_x_mm=mount_offset_x_mm if mount_offset_x_mm is not None else 0.0,
+        offset_y_mm=mount_offset_y_mm if mount_offset_y_mm is not None else 0.0,
+    )
+    self.ceiling_mount_height_m = self.mount_config.height_m
     self.workspace_boundary_enabled = workspace_boundary_enabled
     self.workspace_length_m = workspace_length_m
     self.workspace_width_m = workspace_width_m
@@ -92,6 +107,24 @@ class Ur3eRosBridge:
     self._connect_message = ""
     self._connect_error: Optional[str] = None
     self._connect_result: Optional[Dict[str, Any]] = None
+
+  def _configured_home_joints_rad(self) -> List[float]:
+    import math
+
+    return [math.radians(float(deg)) for deg in self.initial_joint_deg]
+
+  def _ensure_joint_states_stamper(self, *, reset: bool = False) -> None:
+    Ur3eRosDriverManager.ensure_joint_states_stamper_for_distro(
+        self.ros_distro,
+        home_joints_deg=self.initial_joint_deg,
+        reset=reset,
+    )
+
+  def _apply_home_joints_to_planner(self) -> None:
+    from hyperfusion_ur3e.moveit.scan_planner import get_scan_planner
+
+    planner = get_scan_planner(ros_distro=self.ros_distro, ur_type=self.ur_type)
+    planner.apply_home_joints_from_body({"home_joints_deg": self.initial_joint_deg})
 
   def configured_workspace(self) -> Any:
     from hyperfusion_ur3e.moveit.scan_planner import WorkspaceBox
@@ -161,8 +194,25 @@ class Ur3eRosBridge:
         return True
     return not saw_expected and "ur_control.launch.py" in (proc.stdout or "")
 
-  def _verify_ros_hardware_mode_unlocked(self) -> None:
-    """Fail fast when ROS controllers are not ready for the requested mode."""
+  def _verify_ros_hardware_mode_unlocked(self, *, require_active_controller: Optional[bool] = None) -> None:
+    """Fail fast when ROS controllers are not ready for the requested mode.
+
+    On real hardware, scaled_joint_trajectory_controller becomes active only after
+    External Control Play — so connect/prestart may skip that check until EC is up.
+    """
+    if require_active_controller is None:
+      require_active_controller = self.use_mock_hardware
+
+    if self._driver_mode_conflict_unlocked():
+      raise RuntimeError(
+          "The active UR driver was launched with the opposite use_mock_hardware mode. "
+          "HyperFusion should stop stale WSL processes before launch; if this persists, "
+          "close other UR3e CLI sessions and restart HyperFusion."
+      )
+
+    if not require_active_controller:
+      return
+
     if self.use_mock_hardware:
       if self._joint_states_publishing(timeout_s=4.0):
         return
@@ -189,12 +239,6 @@ class Ur3eRosBridge:
     )
     mode = "simulation (mock)" if self.use_mock_hardware else "hardware (real robot)"
 
-    if self._driver_mode_conflict_unlocked():
-        raise RuntimeError(
-            "The active UR driver was launched with the opposite use_mock_hardware mode. "
-            "HyperFusion should stop stale WSL processes before launch; if this persists, "
-            "close other UR3e CLI sessions and restart HyperFusion."
-        )
     if not expected_active:
       detail = output.strip()[-1500:] or (proc.stderr or "").strip()[-1500:]
       raise RuntimeError(
@@ -323,6 +367,11 @@ class Ur3eRosBridge:
         use_mock_hardware=self.use_mock_hardware,
         initial_joint_deg=self.initial_joint_deg,
         ceiling_mount_height_m=self.ceiling_mount_height_m,
+        mount_roll_deg=self.mount_config.roll_deg,
+        mount_pitch_deg=self.mount_config.pitch_deg,
+        mount_yaw_deg=self.mount_config.yaw_deg,
+        mount_offset_x_mm=self.mount_config.offset_x_m * 1000.0,
+        mount_offset_y_mm=self.mount_config.offset_y_m * 1000.0,
     )
 
   def driver_ready_for_connect(self) -> bool:
@@ -398,16 +447,29 @@ class Ur3eRosBridge:
         external_running = self._external_driver_running()
 
     if reuse:
+      from hyperfusion_ur3e.urdf.tool_payload_config import (
+        ToolPayloadConfig,
+        log_payload_probe_failure,
+        probe_robot_state_publisher_payload,
+      )
+
+      payload_cfg = ToolPayloadConfig.from_env()
+      if payload_cfg.enabled and not probe_robot_state_publisher_payload(
+          self.ros_distro, payload_cfg, retries=3, retry_delay_s=1.0
+      ):
+        log_payload_probe_failure("active driver missing tool payload", payload_cfg)
       sys.stderr.write(
           "UR3e bridge: reusing mock driver subprocess "
           "(ros2 control CLI can be slow during warmup).\n"
           if self.use_mock_hardware
           else "UR3e bridge: reusing active driver subprocess\n"
       )
-      Ur3eRosDriverManager.ensure_joint_states_stamper_for_distro(self.ros_distro)
+      self._ensure_joint_states_stamper()
       with self._lock:
         self._status.driver_state = "idle"
         self._status.fault = ""
+      if self._driver is not None:
+        self._driver.schedule_tool_payload_probe()
       return
 
     if conflict:
@@ -448,15 +510,17 @@ class Ur3eRosBridge:
     if not self.use_mock_hardware:
       try:
         with self._lock:
-          self._verify_ros_hardware_mode_unlocked()
+          self._verify_ros_hardware_mode_unlocked(require_active_controller=False)
       except Exception as exc:
         sys.stderr.write(f"UR3e bridge: driver ready but controller check pending: {exc}\n")
-    Ur3eRosDriverManager.ensure_joint_states_stamper_for_distro(self.ros_distro)
+    self._ensure_joint_states_stamper()
     sys.stderr.write(
         "UR3e bridge: simulation driver prestart complete.\n"
         if self.use_mock_hardware
         else "UR3e bridge: driver prestart complete.\n"
     )
+    if self._driver is not None:
+      self._driver.schedule_tool_payload_probe()
 
   def _set_connect_phase(self, phase: str, message: str) -> None:
     with self._lock:
@@ -687,6 +751,7 @@ class Ur3eRosBridge:
       mode = "simulation" if self.use_mock_hardware else "hardware"
       self._status.driver_state = "idle"
       self._status.fault = ""
+      self._apply_home_joints_to_planner()
       return {
         "ok": True,
         "mode": mode,
@@ -798,27 +863,39 @@ class Ur3eRosBridge:
         self._driver = None
 
     if self._driver is not None and self._driver.running:
-      if self._driver.controller_manager_ready():
-        sys.stderr.write("UR3e bridge: reusing active driver subprocess\n")
-      elif (
-          not self.use_mock_hardware
-          and self._external_control_reverse_connected()
+      from hyperfusion_ur3e.urdf.tool_payload_config import (
+        ToolPayloadConfig,
+        log_payload_probe_failure,
+        probe_robot_state_publisher_payload,
+      )
+
+      payload_cfg = ToolPayloadConfig.from_env()
+      if payload_cfg.enabled and not probe_robot_state_publisher_payload(
+          self.ros_distro, payload_cfg, retries=3, retry_delay_s=1.0
       ):
-        sys.stderr.write(
-            "UR3e bridge: reusing driver — External Control reverse ports are active "
-            "(ros2 control CLI is slow).\n"
-        )
-      elif self.use_mock_hardware:
-        sys.stderr.write(
-            "UR3e bridge: reusing mock driver subprocess "
-            "(ros2 control CLI can be slow during warmup).\n"
-        )
-      else:
-        sys.stderr.write(
-            "UR3e bridge: driver process present but controller manager not ready — restarting…\n"
-        )
-        self._driver.stop()
-        self._driver = None
+        log_payload_probe_failure("active driver missing tool payload", payload_cfg)
+      if self._driver is not None and self._driver.running:
+        if self._driver.controller_manager_ready():
+          sys.stderr.write("UR3e bridge: reusing active driver subprocess\n")
+        elif (
+            not self.use_mock_hardware
+            and self._external_control_reverse_connected()
+        ):
+          sys.stderr.write(
+              "UR3e bridge: reusing driver — External Control reverse ports are active "
+              "(ros2 control CLI is slow).\n"
+          )
+        elif self.use_mock_hardware:
+          sys.stderr.write(
+              "UR3e bridge: reusing mock driver subprocess "
+              "(ros2 control CLI can be slow during warmup).\n"
+          )
+        else:
+          sys.stderr.write(
+              "UR3e bridge: driver process present but controller manager not ready — restarting…\n"
+          )
+          self._driver.stop()
+          self._driver = None
 
     if self._driver is None or not self._driver.running:
       if self._external_driver_running():
@@ -829,8 +906,8 @@ class Ur3eRosBridge:
         sys.stderr.write("UR3e bridge: starting ur_robot_driver (may take ~2 min)…\n")
       self._start_driver_unlocked()
 
-    self._verify_ros_hardware_mode_unlocked()
-    Ur3eRosDriverManager.ensure_joint_states_stamper_for_distro(self.ros_distro)
+    self._verify_ros_hardware_mode_unlocked(require_active_controller=self.use_mock_hardware)
+    self._ensure_joint_states_stamper()
 
   def _connect_ros_unlocked(self) -> None:
     last_exc: Optional[Exception] = None
@@ -877,8 +954,9 @@ class Ur3eRosBridge:
     else:
       self._ensure_driver_running()
 
-    self._verify_ros_hardware_mode_unlocked()
-    Ur3eRosDriverManager.ensure_joint_states_stamper_for_distro(self.ros_distro)
+    self._verify_ros_hardware_mode_unlocked(require_active_controller=self.use_mock_hardware)
+    self._ensure_joint_states_stamper(reset=True)
+    self._apply_home_joints_to_planner()
 
     if not self.use_mock_hardware and self._script_port_listening():
       self._set_connect_phase(
@@ -1047,6 +1125,11 @@ class Ur3eRosBridge:
       if not self._status.connected:
         raise RuntimeError("Robot not connected.")
       names, positions = self._ordered_joint_state_unlocked()
+      from hyperfusion_ur3e.joint_angles import coalesce_joints_for_moveit
+
+      home_rad = self._configured_home_joints_rad()
+      if len(positions) == 6 and len(home_rad) == 6:
+        positions = coalesce_joints_for_moveit(home_rad, positions)
       return {
         "ok": True,
         "names": names,

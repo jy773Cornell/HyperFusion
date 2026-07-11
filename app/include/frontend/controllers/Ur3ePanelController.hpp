@@ -50,6 +50,7 @@ private:
     enum class HomeEnsureContext
     {
         AfterConnect,
+        BeforeScanExecute,
         BeforeDisconnect,
         BeforeShutdown,
     };
@@ -167,6 +168,7 @@ private:
     bool busy_ = false;
     bool scanPlanReady_ = false;
     bool scanExecuting_ = false;
+    bool scanPlanning_ = false;
     bool motionInProgress_ = false;
     Ur3eHemisphereScanPlan plannedScanPlan_;
     std::atomic<bool> stopRequested_{false};

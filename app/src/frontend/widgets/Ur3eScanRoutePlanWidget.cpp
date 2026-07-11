@@ -33,6 +33,12 @@ void Ur3eScanRoutePlanWidget::setWorkspaceBoundary(
         previewWidget_->setWorkspaceBoundary(boundary);
 }
 
+void Ur3eScanRoutePlanWidget::setSceneMount(const hf::ur3e::Ur3eMountTransform &mount)
+{
+    if (previewWidget_ != nullptr)
+        previewWidget_->setSceneMount(mount);
+}
+
 void Ur3eScanRoutePlanWidget::setScanPlan(const hf::ur3e::Ur3eHemisphereScanPlan &plan)
 {
     if (previewWidget_ != nullptr)

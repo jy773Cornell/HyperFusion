@@ -3,6 +3,7 @@
 
 #include "backend/ur3e/Ur3eHemisphereScan.hpp"
 #include "backend/ur3e/Ur3eHemisphereScanReachability.hpp"
+#include "backend/ur3e/Ur3eMountTransform.hpp"
 #include "backend/ur3e/Ur3eWorkspaceBoundary.hpp"
 
 #include <QPoint>
@@ -26,6 +27,7 @@ public:
 
     void setScanParams(const hf::ur3e::Ur3eHemisphereScanParams &params);
     void setWorkspaceBoundary(const hf::ur3e::Ur3eWorkspaceBoundary &boundary);
+    void setSceneMount(const hf::ur3e::Ur3eMountTransform &mount);
     void setScanPlan(const hf::ur3e::Ur3eHemisphereScanPlan &plan);
     void clearScanPlan();
     void beginScanExecution();
@@ -72,6 +74,7 @@ private:
     };
 
     [[nodiscard]] Vec3 sceneCenter() const;
+    [[nodiscard]] Vec3 mapScenePoint(const Vec3 &point) const;
     [[nodiscard]] ProjectedPoint projectPoint(const Vec3 &point, const QRectF &bounds, double scale) const;
     [[nodiscard]] Vec3d rotateView(const Vec3d &point) const;
     void rebuildScanPoints();
@@ -92,6 +95,7 @@ private:
 
     hf::ur3e::Ur3eHemisphereScanParams params_;
     hf::ur3e::Ur3eWorkspaceBoundary workspaceBoundary_;
+    hf::ur3e::Ur3eMountTransform sceneMount_;
     std::vector<PreviewScanPoint> scanPoints_;
     double yawRad_ = 0.0;
     double pitchRad_ = 0.0;

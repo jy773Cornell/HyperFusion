@@ -7,7 +7,9 @@
 #include <QTextStream>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <vector>
 
 #include <QHash>
 
@@ -198,6 +200,22 @@ bool parseDouble(const QString &text, double &valueOut)
         return false;
 
     valueOut = parsed;
+    return true;
+}
+
+bool parseSixJointDegList(const QString &text, std::array<double, 6> &jointsOut)
+{
+    QStringList parts = text.split(QLatin1Char(','), Qt::KeepEmptyParts);
+    if (parts.size() != 6)
+        return false;
+
+    for (int jointIndex = 0; jointIndex < 6; ++jointIndex)
+    {
+        double jointDeg = 0.0;
+        if (!parseDouble(parts[jointIndex].trimmed(), jointDeg))
+            return false;
+        jointsOut[static_cast<std::size_t>(jointIndex)] = jointDeg;
+    }
     return true;
 }
 
@@ -960,6 +978,20 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 else
                     config.ur3e.maxLinearAccelMPerS2 = numericValue;
             }
+            else if (key == QStringLiteral("max_joint_velocity_deg_s"))
+            {
+                if (!hasNumber || numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral("Invalid ur3e max_joint_velocity_deg_s: %1").arg(value));
+                else
+                    config.ur3e.maxJointVelocityDegS = qMin(numericValue, 190.0);
+            }
+            else if (key == QStringLiteral("tool_payload_radius_mm"))
+            {
+                if (!hasNumber || numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral("Invalid ur3e tool_payload_radius_mm: %1").arg(value));
+                else
+                    config.ur3e.toolPayloadRadiusMm = numericValue;
+            }
             else if (key == QStringLiteral("workspace_boundary_enabled"))
             {
                 const QString lower = value.trimmed().toLower();
@@ -987,6 +1019,41 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                     warnings.push_back(QStringLiteral("Invalid ur3e workspace_height_mm: %1").arg(value));
                 else
                     config.ur3e.workspaceHeightMm = numericValue;
+            }
+            else if (key == QStringLiteral("mount_roll_deg"))
+            {
+                if (hasNumber)
+                    config.ur3e.mountRollDeg = numericValue;
+                else
+                    warnings.push_back(QStringLiteral("Invalid ur3e mount_roll_deg: %1").arg(value));
+            }
+            else if (key == QStringLiteral("mount_pitch_deg"))
+            {
+                if (hasNumber)
+                    config.ur3e.mountPitchDeg = numericValue;
+                else
+                    warnings.push_back(QStringLiteral("Invalid ur3e mount_pitch_deg: %1").arg(value));
+            }
+            else if (key == QStringLiteral("mount_yaw_deg"))
+            {
+                if (hasNumber)
+                    config.ur3e.mountYawDeg = numericValue;
+                else
+                    warnings.push_back(QStringLiteral("Invalid ur3e mount_yaw_deg: %1").arg(value));
+            }
+            else if (key == QStringLiteral("mount_offset_x_mm"))
+            {
+                if (hasNumber)
+                    config.ur3e.mountOffsetXMm = numericValue;
+                else
+                    warnings.push_back(QStringLiteral("Invalid ur3e mount_offset_x_mm: %1").arg(value));
+            }
+            else if (key == QStringLiteral("mount_offset_y_mm"))
+            {
+                if (hasNumber)
+                    config.ur3e.mountOffsetYMm = numericValue;
+                else
+                    warnings.push_back(QStringLiteral("Invalid ur3e mount_offset_y_mm: %1").arg(value));
             }
             else if (key == QStringLiteral("home_joints_deg"))
             {
@@ -1174,11 +1241,19 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "use_mock_hardware = true\n"
         << "max_linear_speed_m_per_s = 0.05\n"
         << "max_linear_accel_m_per_s2 = 0.3\n"
+        << "max_joint_velocity_deg_s = 60\n"
+        << "tool_payload_radius_mm = 100\n"
         << "# Workspace boundary cube (mm). Tray centered at origin; Z=0 tray bottom, Z=height robot mount.\n"
         << "workspace_boundary_enabled = true\n"
         << "workspace_length_mm = 600\n"
         << "workspace_width_mm = 600\n"
         << "workspace_height_mm = 650\n"
+        << "# Mount transform (world -> robot base). Roll=180 = ceiling upside-down.\n"
+        << "mount_roll_deg = 180\n"
+        << "mount_pitch_deg = 0\n"
+        << "mount_yaw_deg = 0\n"
+        << "mount_offset_x_mm = 0\n"
+        << "mount_offset_y_mm = 0\n"
         << "# Scan home pose (degrees): pan, lift, elbow, wrist_1, wrist_2, wrist_3.\n"
         << "home_joints_deg = 0,-150,120,0,90,0\n";
 

@@ -8,6 +8,7 @@ robot:
 motion:
   max_linear_speed_m_per_s: 0.05
   max_linear_accel_m_per_s2: 0.3
+  max_joint_velocity_deg_s: 60.0
 
 server:
   host: "0.0.0.0"
@@ -29,3 +30,9 @@ home_joints_deg: [0, -150, 120, 0, 90, 0]
 # Ceiling mount for HyperFusion enclosure (robot on top face, tray at Z=0).
 ceiling_mount: true
 ceiling_mount_height_m: 0.65
+# Mount orientation (degrees) and lateral offset (mm). Tune if RViz != real robot.
+mount_roll_deg: 180
+mount_pitch_deg: 0
+mount_yaw_deg: 0
+mount_offset_x_mm: 0
+mount_offset_y_mm: 0

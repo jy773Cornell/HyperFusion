@@ -30,11 +30,49 @@ fi
 
 source "/opt/ros/${ROS_DISTRO}/setup.bash"
 export ROS_LOCALHOST_ONLY=1
+export ROS2CLI_DISABLE_DAEMON=1
+# WSLg / native X: use host display when not set (RViz needs this).
+if [[ -z "${DISPLAY:-}" ]] && [[ -n "${WAYLAND_DISPLAY:-}" || -d /mnt/wslg ]]; then
+  export DISPLAY=:0
+fi
 
-# Robot model + TF come from the running driver (robot_state_publisher). Wait for joints first.
+# Robot model + TF come from the running driver (robot_state_publisher).
 "${SCRIPT_DIR}/wait_for_joint_states.sh" "${ROS_DISTRO}" 120
 
 RVIZ_CONFIG="${SCRIPT_DIR}/../config/hyperfusion_view.rviz"
+RUNTIME_URDF="${SCRIPT_DIR}/../config/runtime_robot_description.urdf"
+
+if [[ ! -f "${RUNTIME_URDF}" ]] || ! grep -q hyperfusion_tool_payload "${RUNTIME_URDF}"; then
+  echo "UR3e RViz: WARNING — ${RUNTIME_URDF} missing tool payload; connect sidecar first." >&2
+else
+  echo "UR3e RViz: using materialized URDF (${RUNTIME_URDF})." >&2
+  RVIZ_LAUNCH_CONFIG="/tmp/hyperfusion_view_runtime.rviz"
+  python3 <<PY
+from pathlib import Path
+import re
+
+base = Path("${RVIZ_CONFIG}")
+runtime = Path("${RUNTIME_URDF}").resolve().as_posix()
+text = base.read_text(encoding="utf-8")
+topic_block = re.compile(
+    r"Description Source: Topic\s+Description Topic:\s+"
+    r"Depth: \d+\s+Durability Policy: [^\n]+\s+"
+    r"History Policy: [^\n]+\s+Reliability Policy: [^\n]+\s+"
+    r"Value: /robot_description",
+    re.MULTILINE,
+)
+replacement = f"Description Source: File\n      Description File: {runtime}"
+patched, count = topic_block.subn(replacement, text, count=1)
+if count != 1:
+    # Already file-based or config layout changed — write file-based RobotModel block.
+    patched = text
+out = Path("${RVIZ_LAUNCH_CONFIG}")
+out.write_text(patched, encoding="utf-8")
+PY
+  if [[ -f "${RVIZ_LAUNCH_CONFIG}" ]]; then
+    RVIZ_CONFIG="${RVIZ_LAUNCH_CONFIG}"
+  fi
+fi
 
 echo "UR3e RViz: launching visualization (ur_type=${UR_TYPE})…" >&2
 

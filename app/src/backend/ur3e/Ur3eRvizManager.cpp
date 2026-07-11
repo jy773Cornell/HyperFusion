@@ -71,16 +71,17 @@ QString Ur3eRvizManager::buildLaunchCommand() const
     return QStringLiteral(
                "export ROS_LOCALHOST_ONLY=1 && "
                "export HYPERFUSION_UR3E_REPO='%1' && "
-               "export HYPERFUSION_UR3E_SERVER_PORT='%6' && "
-               "export HYPERFUSION_CEILING_MOUNT='true' && "
-               "export HYPERFUSION_CEILING_MOUNT_HEIGHT_M='%2' && "
-               "sed 's/\\r$//' '%3' | bash -s %4 %5")
+               "export HYPERFUSION_UR3E_SERVER_PORT='%5' && "
+               "%6"
+               "%7"
+               "sed 's/\\r$//' '%2' | bash -s %3 %4")
         .arg(repoLinux,
-             QString::number(cfg.workspaceHeightMm / 1000.0, 'f', 4),
              scriptPath,
              rosDistro,
              urType,
-             QString::number(cfg.serverPort));
+             QString::number(cfg.serverPort),
+             buildMountEnvExports(cfg),
+             buildToolPayloadEnvExports(cfg));
 }
 
 void Ur3eRvizManager::start()

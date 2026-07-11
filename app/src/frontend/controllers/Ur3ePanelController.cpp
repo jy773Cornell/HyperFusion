@@ -5,6 +5,7 @@
 #include "backend/ur3e/Ur3eClient.hpp"
 #include "backend/ur3e/Ur3eHemisphereScan.hpp"
 #include "backend/ur3e/Ur3eHemisphereScanReachability.hpp"
+#include "backend/ur3e/Ur3eMountTransform.hpp"
 #include "backend/ur3e/Ur3eWorkspaceBoundary.hpp"
 #include "backend/ur3e/Ur3eMoveItManager.hpp"
 #include "backend/ur3e/Ur3eRvizManager.hpp"
@@ -250,6 +251,7 @@ bool Ur3ePanelController::shutdownSync()
         onConnectDialogCancelled();
 
     scanExecuting_ = false;
+    scanPlanning_ = false;
     motionInProgress_ = false;
 
     if (robotConnected_ && serverManager_ != nullptr && serverManager_->isServerConnected())
@@ -605,6 +607,7 @@ void Ur3ePanelController::updateRobotUi()
         host_->ur3eHemisphereScanSettings_->setExecuteEnabled(canStartMotion && scanPlanReady_
                                                                && plannedScanPlan_.reachableCount > 0
                                                                && !scanExecuting_);
+        host_->ur3eHemisphereScanSettings_->setParamsEnabled(!scanPlanning_ && !scanExecuting_);
     }
 }
 
@@ -677,7 +680,11 @@ void Ur3ePanelController::syncWorkspaceBoundaryPreview()
         host_->ur3eHemisphereScanSettings_->applyBoundaryLimits(boundary);
 
     if (host_->ur3eScanRoutePlanWidget_ != nullptr)
+    {
         host_->ur3eScanRoutePlanWidget_->setWorkspaceBoundary(boundary);
+        host_->ur3eScanRoutePlanWidget_->setSceneMount(
+            Ur3eMountTransform::sceneAlignFromConfig(hf::hardwareConfig().ur3e));
+    }
 
     pushWorkspaceBoundaryToMoveIt();
     scheduleManualTargetPreview();
@@ -937,6 +944,10 @@ void Ur3ePanelController::onMoveRequested()
             detail = QStringLiteral("MoveIt move complete — %1").arg(targetSummary);
         else if (result.stopped)
             detail = result.errorMessage.isEmpty() ? QStringLiteral("Motion stopped.") : result.errorMessage;
+        else if (result.skipped)
+            detail = result.errorMessage.isEmpty()
+                         ? QStringLiteral("Move skipped — no collision-free path.")
+                         : result.errorMessage;
         else
             detail = result.errorMessage.isEmpty() ? QStringLiteral("MoveIt motion failed.") : result.errorMessage;
         QMetaObject::invokeMethod(
@@ -1011,6 +1022,7 @@ void Ur3ePanelController::onPlanHemisphereScanRequested()
     const QString serverUrl = serverManager_->serverUrl();
 
     host_->appendLog(QStringLiteral("UR3e scan plan: running MoveIt IK + collision check…"));
+    scanPlanning_ = true;
     setBusy(true);
 
     std::thread([this, scanParams, boundary, serverUrl]() {
@@ -1027,6 +1039,7 @@ void Ur3ePanelController::onPlanHemisphereScanRequested()
 void Ur3ePanelController::finishScanPlan(const Ur3eHemisphereScanPlan &plan,
                                          const QString &errorMessage)
 {
+    scanPlanning_ = false;
     setBusy(false);
 
     if (!errorMessage.isEmpty() && plan.points.empty())
@@ -1098,7 +1111,7 @@ void Ur3ePanelController::onExecuteHemisphereScanRequested()
 
     const QString serverUrl = serverManager_->serverUrl();
     host_->appendLog(
-        QStringLiteral("UR3e scan execute: %1 reachable point(s), top-to-bottom rings (2 s dwell each)…")
+        QStringLiteral("UR3e scan execute: %1 reachable point(s), top-ring-first sweep (2 s dwell each)…")
             .arg(order.size()));
     stopRequested_.store(false, std::memory_order_release);
     scanExecuting_ = true;
@@ -1131,44 +1144,21 @@ void Ur3ePanelController::onExecuteHemisphereScanRequested()
                 this,
                 [this]() {
                     host_->appendLog(
-                        QStringLiteral("UR3e scan execute: moving to home pose before scan…"));
+                        QStringLiteral("UR3e scan execute: verifying scan home before scan…"));
                     syncHomeJointTargetSliders();
                 },
                 Qt::BlockingQueuedConnection);
 
-            const Ur3eScanWaypointMoveResult preHomeResult = ur3eExecuteMoveHome(serverUrl);
-            if (preHomeResult.stopped)
+            const HomeEnsureOutcome preHomeOutcome =
+                ensureRobotAtHomeSync(HomeEnsureContext::BeforeScanExecute);
+            if (preHomeOutcome.cancelled)
             {
-                if (stopRequested_.load(std::memory_order_acquire))
-                    ur3eStopMotion(serverUrl);
                 QMetaObject::invokeMethod(
                     this,
                     "scanExecuteFinish",
                     Qt::QueuedConnection,
                     Q_ARG(bool, false),
-                    Q_ARG(QString, preHomeResult.errorMessage),
-                    Q_ARG(int, 0),
-                    Q_ARG(bool, true));
-                return;
-            }
-            if (!preHomeResult.ok)
-            {
-                const QString reason = preHomeResult.errorMessage.isEmpty()
-                                           ? QStringLiteral("could not move to home")
-                                           : preHomeResult.errorMessage;
-                QMetaObject::invokeMethod(
-                    this,
-                    [this, reason]() {
-                        host_->appendLog(
-                            QStringLiteral("UR3e scan execute aborted: %1").arg(reason));
-                    },
-                    Qt::QueuedConnection);
-                QMetaObject::invokeMethod(
-                    this,
-                    "scanExecuteFinish",
-                    Qt::QueuedConnection,
-                    Q_ARG(bool, false),
-                    Q_ARG(QString, reason),
+                    Q_ARG(QString, QStringLiteral("Scan aborted — homing cancelled.")),
                     Q_ARG(int, 0),
                     Q_ARG(bool, false));
                 return;
@@ -2103,19 +2093,7 @@ Ur3ePanelController::HomeEnsureOutcome Ur3ePanelController::ensureRobotAtHomeSyn
             return outcome;
         }
 
-        const Ur3eJointsState joints = ur3eGetJoints(serverUrl);
-        if (joints.ok && ur3eIsNearScanHomeJoints(joints.positionsRad))
-        {
-            host_->appendLog(QStringLiteral("UR3e: verified at scan home position."));
-            outcome.success = true;
-            outcome.alreadyAtHome = true;
-            outcome.atHomeVerified = true;
-            QMetaObject::invokeMethod(
-                this, &Ur3ePanelController::syncHomeJointTargetSliders, Qt::BlockingQueuedConnection);
-            return outcome;
-        }
-
-        host_->appendLog(QStringLiteral("UR3e: MoveIt moving to scan home\u2026"));
+        host_->appendLog(QStringLiteral("UR3e: MoveIt verifying scan home\u2026"));
         const Ur3eScanWaypointMoveResult moveResult = ur3eExecuteMoveHome(serverUrl);
         if (moveResult.stopped)
         {
@@ -2145,10 +2123,14 @@ Ur3ePanelController::HomeEnsureOutcome Ur3ePanelController::ensureRobotAtHomeSyn
             continue;
 
         if (choice == HomeEnsurePromptChoice::ContinueWithoutHoming
-            && context == HomeEnsureContext::AfterConnect)
+            && (context == HomeEnsureContext::AfterConnect
+                || context == HomeEnsureContext::BeforeScanExecute))
         {
             outcome.success = true;
-            host_->appendLog(QStringLiteral("UR3e: continuing without scan home verification."));
+            if (context == HomeEnsureContext::BeforeScanExecute)
+                host_->appendLog(QStringLiteral("UR3e: starting scan without valid scan home."));
+            else
+                host_->appendLog(QStringLiteral("UR3e: continuing without scan home verification."));
             return outcome;
         }
 
@@ -2193,15 +2175,17 @@ Ur3ePanelController::HomeEnsurePromptChoice Ur3ePanelController::showManualHomeP
     QMessageBox box(host_);
     box.setIcon(QMessageBox::Warning);
     if (context == HomeEnsureContext::AfterConnect)
-        box.setWindowTitle(QStringLiteral("UR3e Scan Home Required"));
+        box.setWindowTitle(QStringLiteral("UR3e Homing Failed"));
+    else if (context == HomeEnsureContext::BeforeScanExecute)
+        box.setWindowTitle(QStringLiteral("UR3e Homing Failed — Cannot Start Scan"));
     else if (context == HomeEnsureContext::BeforeDisconnect)
-        box.setWindowTitle(QStringLiteral("UR3e Return Home Before Disconnect"));
+        box.setWindowTitle(QStringLiteral("UR3e Homing Failed — Before Disconnect"));
     else
-        box.setWindowTitle(QStringLiteral("UR3e Return Home Before Closing"));
+        box.setWindowTitle(QStringLiteral("UR3e Homing Failed — Before Closing"));
 
     const QString body =
         QStringLiteral(
-            "MoveIt could not verify or reach the configured scan home pose.\n\n"
+            "The robot could not reach or verify the configured scan home pose.\n\n"
             "Reason: %1\n\n"
             "Configured home: %2\n\n"
             "Manually jog the robot closer to home using the joint controls or teach "
@@ -2219,6 +2203,12 @@ Ur3ePanelController::HomeEnsurePromptChoice Ur3ePanelController::showManualHomeP
         secondaryButton =
             box.addButton(QStringLiteral("Continue without homing"), QMessageBox::DestructiveRole);
         cancelButton = box.addButton(QStringLiteral("Disconnect"), QMessageBox::RejectRole);
+    }
+    else if (context == HomeEnsureContext::BeforeScanExecute)
+    {
+        secondaryButton =
+            box.addButton(QStringLiteral("Start scan anyway"), QMessageBox::DestructiveRole);
+        cancelButton = box.addButton(QStringLiteral("Abort scan"), QMessageBox::RejectRole);
     }
     else if (context == HomeEnsureContext::BeforeDisconnect)
     {
