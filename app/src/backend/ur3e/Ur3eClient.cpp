@@ -276,6 +276,7 @@ QJsonObject buildScanMotionRequestBody()
     workspace.insert(QStringLiteral("length_m"), boundary.lengthM());
     workspace.insert(QStringLiteral("width_m"), boundary.widthM());
     workspace.insert(QStringLiteral("height_m"), boundary.heightM());
+    workspace.insert(QStringLiteral("mount_height_m"), boundary.mountHeightM());
 
     QJsonObject body;
     body.insert(QStringLiteral("workspace"), workspace);

@@ -167,11 +167,12 @@ void Ur3eHemisphereScanSettingsWidget::applyBoundaryLimits(
   if (boundaryLimits_.enabled) {
     sphereRadiusSpin_->setToolTip(
         QStringLiteral(
-            "Max %1 mm for workspace %2×%3×%4 mm in hyperfusion.cfg.")
+            "Max %1 mm for workspace %2×%3×%4 mm (depth below mount at %5 mm) in hyperfusion.cfg.")
             .arg(maxRadiusMm, 0, 'f', 0)
             .arg(static_cast<int>(boundaryLimits_.lengthMm))
             .arg(static_cast<int>(boundaryLimits_.widthMm))
-            .arg(static_cast<int>(boundaryLimits_.heightMm)));
+            .arg(static_cast<int>(boundaryLimits_.heightMm))
+            .arg(static_cast<int>(boundaryLimits_.mountHeightMm)));
   } else {
     sphereRadiusSpin_->setToolTip(
         QStringLiteral("Workspace limits disabled in hyperfusion.cfg."));

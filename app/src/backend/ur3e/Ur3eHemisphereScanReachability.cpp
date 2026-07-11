@@ -286,7 +286,7 @@ Ur3eHemisphereScanPlan evaluateHemisphereScanPlanMoveIt(const QString &serverUrl
 
     workspace.insert(QStringLiteral("height_m"), boundary.heightM());
 
-
+    workspace.insert(QStringLiteral("mount_height_m"), boundary.mountHeightM());
 
     QJsonObject body;
 

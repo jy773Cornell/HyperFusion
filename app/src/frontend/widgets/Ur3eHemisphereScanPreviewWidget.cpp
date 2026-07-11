@@ -86,7 +86,7 @@ Ur3eHemisphereScanPreviewWidget::Vec3 Ur3eHemisphereScanPreviewWidget::sceneCent
     constexpr double minZ = 0.0;
     double maxZ = kTrayHeightM + params_.sphereRadiusM;
     if (workspaceBoundary_.enabled)
-        maxZ = std::max(maxZ, workspaceBoundary_.heightM());
+        maxZ = std::max(maxZ, workspaceBoundary_.topZM());
 
     const Vec3 nominalCenter{0.0, 0.0, (minZ + maxZ) * 0.5};
     return mapScenePoint(nominalCenter);
@@ -351,7 +351,7 @@ double Ur3eHemisphereScanPreviewWidget::sceneScale(const QRectF &bounds) const
     constexpr double minZ = 0.0;
     double maxZ = kTrayHeightM + params_.sphereRadiusM;
     if (workspaceBoundary_.enabled)
-        maxZ = std::max(maxZ, workspaceBoundary_.heightM());
+        maxZ = std::max(maxZ, workspaceBoundary_.topZM());
 
     const std::array<Vec3, 8> corners = {
         Vec3{-extentX, -extentY, minZ},
@@ -493,17 +493,18 @@ void Ur3eHemisphereScanPreviewWidget::drawWorkspaceBoundary(QPainter &painter,
 {
     const double halfLength = workspaceBoundary_.halfLengthM();
     const double halfWidth = workspaceBoundary_.halfWidthM();
-    const double heightM = workspaceBoundary_.heightM();
+    const double floorZM = workspaceBoundary_.floorZM();
+    const double topZM = workspaceBoundary_.topZM();
 
     const std::array<Vec3, 8> vertices = {
-        Vec3{-halfLength, -halfWidth, 0.0},
-        Vec3{halfLength, -halfWidth, 0.0},
-        Vec3{halfLength, halfWidth, 0.0},
-        Vec3{-halfLength, halfWidth, 0.0},
-        Vec3{-halfLength, -halfWidth, heightM},
-        Vec3{halfLength, -halfWidth, heightM},
-        Vec3{halfLength, halfWidth, heightM},
-        Vec3{-halfLength, halfWidth, heightM},
+        Vec3{-halfLength, -halfWidth, floorZM},
+        Vec3{halfLength, -halfWidth, floorZM},
+        Vec3{halfLength, halfWidth, floorZM},
+        Vec3{-halfLength, halfWidth, floorZM},
+        Vec3{-halfLength, -halfWidth, topZM},
+        Vec3{halfLength, -halfWidth, topZM},
+        Vec3{halfLength, halfWidth, topZM},
+        Vec3{-halfLength, halfWidth, topZM},
     };
 
     const std::array<std::pair<int, int>, 12> edges = {{

@@ -43,7 +43,7 @@
   <xacro:arg name="simulation_controllers" default="" />
   <xacro:arg name="initial_positions_file" default="$(find ur_description)/config/initial_positions.yaml"/>
 
-  <!-- HyperFusion ceiling mount (matches workspace_height_mm / Z=0 tray floor). -->
+  <!-- HyperFusion ceiling mount. Tray/sample stage at Z=0; mount height from ceiling_mount_height_mm. -->
   <xacro:arg name="ceiling_mount" default="true"/>
   <xacro:arg name="ceiling_mount_height_m" default="0.65"/>
   <xacro:arg name="mount_roll_rad" default="3.14159265358979323846"/>

@@ -125,7 +125,9 @@ struct HardwareConfig
         double maxJointVelocityDegS = 60.0;
         /// Tool payload collision dome radius on tool0 (mm).
         double toolPayloadRadiusMm = 100.0;
-        /// Ceiling-mount workspace cube (mm). Tray centered at origin; Z=0 bottom, Z=height mount plane.
+        /// Robot base mount height in world frame (mm). Z=0 is tray floor; mount plane is at this height.
+        double ceilingMountHeightMm = 650.0;
+        /// MoveIt workspace collision cube (mm). Extends downward from the mount plane (relative to robot).
         bool workspaceBoundaryEnabled = true;
         double workspaceLengthMm = 600.0;
         double workspaceWidthMm = 600.0;

@@ -52,7 +52,7 @@ QString buildMountEnvExports(const hf::HardwareConfig::Ur3eConfig &cfg)
                           "export HYPERFUSION_MOUNT_YAW_DEG='%4' && "
                           "export HYPERFUSION_MOUNT_OFFSET_X_M='%5' && "
                           "export HYPERFUSION_MOUNT_OFFSET_Y_M='%6' && ")
-        .arg(QString::number(cfg.workspaceHeightMm / 1000.0, 'f', 6),
+        .arg(QString::number(cfg.ceilingMountHeightMm / 1000.0, 'f', 6),
              QString::number(cfg.mountRollDeg, 'g', 6),
              QString::number(cfg.mountPitchDeg, 'g', 6),
              QString::number(cfg.mountYawDeg, 'g', 6),

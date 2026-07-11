@@ -53,6 +53,7 @@ class Ur3eRosBridge:
       workspace_boundary_enabled: bool = True,
       workspace_length_m: float = 0.6,
       workspace_width_m: float = 0.6,
+      workspace_height_m: float = 0.65,
   ) -> None:
     self.robot_ip = robot_ip
     self.reverse_ip = reverse_ip.strip() or "0.0.0.0"
@@ -78,6 +79,7 @@ class Ur3eRosBridge:
     self.workspace_boundary_enabled = workspace_boundary_enabled
     self.workspace_length_m = workspace_length_m
     self.workspace_width_m = workspace_width_m
+    self.workspace_height_m = workspace_height_m
 
     self._lock = threading.RLock()
     self._driver_startup_lock = threading.RLock()
@@ -129,12 +131,12 @@ class Ur3eRosBridge:
   def configured_workspace(self) -> Any:
     from hyperfusion_ur3e.moveit.scan_planner import WorkspaceBox
 
-    height_m = self.ceiling_mount_height_m if self.ceiling_mount_height_m else 0.65
     return WorkspaceBox(
         enabled=self.workspace_boundary_enabled,
         length_m=self.workspace_length_m,
         width_m=self.workspace_width_m,
-        height_m=height_m,
+        height_m=self.workspace_height_m,
+        mount_height_m=self.ceiling_mount_height_m,
     )
 
   def start_workspace_boundary_sync(self) -> None:
@@ -1489,6 +1491,9 @@ class Ur3eRosBridge:
       length_m=float(workspace_cfg.get("length_m", 0.6)),
       width_m=float(workspace_cfg.get("width_m", 0.6)),
       height_m=float(workspace_cfg.get("height_m", 0.65)),
+      mount_height_m=float(
+          workspace_cfg.get("mount_height_m", workspace_cfg.get("height_m", 0.65))
+      ),
     )
 
     targets: List[ScanPoseTarget] = []

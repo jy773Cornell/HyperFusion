@@ -64,53 +64,106 @@ The system must:
 
 ### 3.1 Dome grid
 
-Pins lie on a **spherical cap** above the tray:
-
+Pins lie on a **spherical cap** above the sample tray:
 
 | Parameter         | Meaning                                               |
 | ----------------- | ----------------------------------------------------- |
 | **θ (theta)**     | Polar angle from dome apex (0°) toward tray rim (90°) |
 | **φ (phi)**       | Azimuth around the dome (0°–360°)                     |
-| **Sphere radius** | Distance from sphere center to each pin               |
-
+| **Sphere radius R** | Distance from sphere center to each pin (UI, mm → m) |
 
 Grid generation (`generateHemisphereScanPoints`):
 
 - θ: linear samples from `thetaMinDeg` → `thetaMaxDeg` (`verticalPoints` rings)
 - φ: evenly spaced per ring (`horizontalPoints` per ring)
-- Cartesian position on sphere:
+- Cartesian position on the sphere (relative to sphere center):
   - `x = R sin(θ) cos(φ)`
   - `y = R sin(θ) sin(φ)`
-  - `z = R cos(θ)` (above tray center)
+  - `z = R cos(θ)`
+- World position: add tray height (see §3.4), then apply mount yaw/pitch/offset for scene alignment
 
+### 3.2 Sample tray vs scan hemisphere (flat rim)
 
+The UR3e scan model uses a **fixed tray** in the MoveIt / preview world frame. This is **not** the same as `[sample_stage_position]` in `hyperfusion.cfg` (FX10e/SWIR **linear rail** positions in mm).
 
-### 3.2 TCP orientation
+| Reference | World Z | Notes |
+| --------- | ------- | ----- |
+| Workspace floor / tray **bottom** | **0 mm** | Workspace collision box floor slab |
+| Tray **top** + **sphere center** | **20 mm** | Constant `kSampleTrayHeightM` (0.02 m) |
+| Flat rim of scan hemisphere (θ = 90°) | **20 mm** | Equator of the scan sphere |
+| Dome apex (θ = 0°, over tray center) | **20 mm + R** | Highest pin ring |
+| Lowest pin ring (θ = θ max) | **20 mm + R cos(θ max)** | Above rim if θ max < 90° |
+
+**Pin height in world frame** (before mount transform):
+
+```text
+tip Z = 20 mm + R × cos(θ)
+```
+
+At **θ = 90°** (the flat opening of the hemisphere): `tip Z = 20 mm` — the rim lies in the **same horizontal plane as the tray top** (0 mm vertical gap by design). There is no separate physical “contact” mesh; the rim is a geometric cut plane, like a bowl sitting with its opening on the tray surface.
+
+**Sample height:** The model does not add sample thickness. A tall sample on the tray extends **above** Z = 20 mm into the dome; only the tray plane is modeled.
+
+**Tray footprint (preview / clamp):** 540 × 490 mm centered at the origin (`kSampleTrayLengthM` × `kSampleTrayWidthM`).
+
+### 3.3 Tool payload vs scan sphere
+
+Two different hemispheres appear in the system:
+
+| Object | Source | Role |
+| ------ | ------ | ---- |
+| **Scan sphere** | UI sphere radius + grid | Virtual dome; pin poses for planning |
+| **Tool payload dome** | `tool_payload_radius_mm` in cfg | Collision mesh on `tool0` (camera stand-in) |
+
+Scan pins are placed on the **scan sphere** surface at `tool0` in the current milestone (grid point + tray offset). The payload mesh radius (e.g. 50 mm) is for MoveIt self-collision only, not for shifting pin positions on the scan dome.
+
+### 3.4 TCP orientation
 
 For each grid point, `tcpPoseForHemispherePoint` sets:
 
-- **Position:** pin on dome, offset by tray height, then mount transform
-- **Tool +Z:** unit vector **inward** toward the dome / floor-circle center `(0, 0, tray_height)`
+- **Position:** pin on the scan dome, offset by tray height (20 mm), then mount transform (yaw/pitch/offset)
+- **Tool +Z:** unit vector **inward** toward the dome center `(0, 0, tray_height)` after mount transform
 - **Rotation:** UR rotation vector (axis-angle) from that frame
 - **IK filter:** MoveIt solutions whose tool0 +Z dot product with the desired inward axis is below 0.95 are rejected (prevents 180° “facing outward” wrist flips)
 
+### 3.5 Workspace boundary and robot mount
 
-
-### 3.3 Workspace boundary
-
-From `hyperfusion.cfg` — a **600 × 600 × 650 mm** cube (defaults):
-
-- Tray centered at origin
-- Z = 0: tray bottom
-- Z = height: robot mount plane (ceiling)
-- MoveIt adds thin collision slabs (floor, ceiling, four walls) during plan/execute
-
-### 3.3.1 Mount orientation (align RViz with real robot)
-
-The robot base is placed in the URDF via a **world → base_link** transform. Defaults match a ceiling mount (roll = 180°). If RViz/simulation looks rotated or mirrored vs your real install, tune these keys in `hyperfusion.cfg` `[ur3e]`:
+Robot mount height and the MoveIt workspace box are **separate** settings in `hyperfusion.cfg` `[ur3e]`:
 
 ```ini
-# Degrees / mm. Z height comes from workspace_height_mm.
+# World Z of robot base / ceiling mount. Tray + hemisphere stay at Z=0 / 20 mm.
+ceiling_mount_height_mm = 600
+
+# Collision box: X/Y centered on tray; Z depth extends downward from mount plane.
+workspace_boundary_enabled = true
+workspace_length_mm = 900
+workspace_width_mm = 600
+workspace_height_mm = 600
+```
+
+| Key | Meaning |
+| --- | ------- |
+| **`ceiling_mount_height_mm`** | World Z of `base_link` (URDF, RViz, sidecar). Does **not** move the tray or scan pins. |
+| **`workspace_height_mm`** | Vertical **depth** of the collision box **below** the mount plane (relative to robot), not mount height. |
+| **`workspace_length_mm` / `workspace_width_mm`** | Horizontal extent centered on the tray origin. |
+
+**Workspace box in world Z:**
+
+- Top face: `Z = ceiling_mount_height_mm`
+- Bottom face: `Z = max(0, ceiling_mount_height_mm − workspace_height_mm)`
+- Example: mount 600 mm, depth 600 mm → box from Z = 0 to Z = 600 mm
+
+MoveIt adds thin collision slabs on **all six faces** (floor, ceiling, four walls) during plan/execute. The ceiling face is at the mount plane (`Z = ceiling_mount_height_mm`); the robot base bolts at/above that plane.
+
+**Max scan radius clamp:** `maxHemisphereRadiusM` uses horizontal workspace/tray limits and vertical reach `ceiling_mount_height_mm − 20 mm` (tray top to mount), not `workspace_height_mm`.
+
+**Not affected by these keys:** `[sample_stage_position]` (spectrometer rail), hemisphere grid params (UI), or tray/sphere geometry at Z = 0 / 20 mm.
+
+### 3.6 Mount orientation (align RViz with real robot)
+
+The robot base is placed in the URDF via a **world → base_link** transform at `Z = ceiling_mount_height_mm`. Defaults match a ceiling mount (roll = 180°). If RViz/simulation looks rotated or mirrored vs your real install, tune these keys in `hyperfusion.cfg` `[ur3e]`:
+
+```ini
 mount_roll_deg = 180
 mount_pitch_deg = 0
 mount_yaw_deg = 0        # try 180 if left/right or forward/back is flipped
@@ -124,15 +177,16 @@ mount_offset_y_mm = 0    # shift base laterally if bolt pattern is off-center
 | Left/right (Y) reversed | `mount_yaw_deg = 180` or negate `mount_offset_y_mm` |
 | Sim arm reaches opposite corner of tray | adjust `mount_yaw_deg` in 90° steps first |
 
-**Also applied to:** URDF robot base (full roll/pitch/yaw + offset), hemisphere **pin preview** (tray, dome, workspace box, pins), and MoveIt scan TCP targets (yaw/pitch/offset — roll is ceiling robot flip only).
+**Also applied to:** URDF robot base (roll/pitch/yaw + offset at ceiling height), hemisphere **pin preview** (tray, dome, workspace box, pins), and MoveIt scan TCP targets (yaw/pitch/offset — roll is ceiling robot flip only).
 
-Restart the UR3e sidecar and reopen MoveIt/RViz after changing mount values (URDF is built at launch). Restart the app to reload `hyperfusion.cfg` for the scan-route preview.
+Restart the UR3e sidecar and reopen MoveIt/RViz after changing mount height or orientation (URDF is built at launch). Restart the app to reload `hyperfusion.cfg` for the scan-route preview.
 
+### 3.7 Scan home pose
 
 From `hyperfusion.cfg` `[ur3e]`:
 
 ```ini
-home_joints_deg = 0,-130,120,0,90,0
+home_joints_deg = 160, 0, -90, 0, 90, 180
 ```
 
 Six joint angles (degrees): `pan, lift, elbow, wrist_1, wrist_2, wrist_3`.
@@ -146,7 +200,7 @@ Used for:
 
 **Important:** Home must pass MoveIt **static collision** checks inside the workspace box, not just match joint numbers. Joint tolerance alone is not enough — see §6.6 and §11.
 
-### 3.5 IK seeds (home + current, 45° permutations)
+### 3.8 IK seeds (home + current, 45° permutations)
 
 IK seeds are generated automatically — there are **no cfg-defined midpoints**. For each pin, the seed set is built from two base poses:
 
@@ -167,13 +221,17 @@ This replaces the old `ik_seed_midpoints_deg` cfg key (removed) and the earlier 
 | Setting             | Source            | Role                                      |
 | ------------------- | ----------------- | ----------------------------------------- |
 | Grid size (H × V)   | UI                | Pin count                                 |
-| Sphere radius       | UI                | Dome size                                 |
+| Sphere radius       | UI                | Scan dome size (pin placement)            |
 | θ range             | UI                | Which part of hemisphere                  |
-| Workspace box       | `hyperfusion.cfg` | Collision limits                          |
+| `ceiling_mount_height_mm` | `hyperfusion.cfg` | Robot mount Z in world (URDF)       |
+| Workspace box       | `hyperfusion.cfg` | MoveIt collision limits (depth below mount) |
+| `tool_payload_radius_mm` | `hyperfusion.cfg` | Collision dome on tool0 (not pin R) |
 | Mount RPY / offset  | `hyperfusion.cfg` | URDF base pose (RViz vs real alignment)   |
 | Home joints         | `hyperfusion.cfg` | Primary IK seed + retreat pose            |
 | IK seeds            | auto              | home + current pose, 45° joint permutations |
 | `use_mock_hardware` | `hyperfusion.cfg` | Mock vs real robot                        |
+
+**Separate from UR3e scan:** `[sample_stage_position]` — linear spectrometer stage (mm along rail), not tray Z or dome geometry.
 
 
 ---
@@ -190,7 +248,7 @@ This replaces the old `ik_seed_midpoints_deg` cfg key (removed) and the earlier 
 2. Build grid locally: `generateHemisphereScanPoints`
 3. Compute TCP pose per pin: `tcpPoseForHemispherePoint`
 4. POST all poses to sidecar: `/plan_hemisphere_scan`
-  - Includes `workspace` and `home_joints_deg`
+  - Includes `workspace` (`length_m`, `width_m`, `height_m`, `mount_height_m`) and `home_joints_deg`
 5. Requires robot **connected** (`initial_seed` = current joints — used as the first pin’s “current pin” seed until a reachable pin is found)
 
 
@@ -567,13 +625,15 @@ If the pendant shows **External Control speed limit** on **joint 5** (wrist_3) o
 ## 12. Operational checklist
 
 1. Start sidecar / connect UR3e
-2. Set `home_joints_deg` in `hyperfusion.cfg` to match robot (6 values; must be collision-free and pinch-safe in workspace)
-3. **Connect** — confirm homing succeeds (or fix pose via dialog)
+2. Set `ceiling_mount_height_mm` (robot mount) and workspace box separately in `hyperfusion.cfg`
+3. Set `home_joints_deg` to match robot (6 values; must be collision-free and pinch-safe in workspace)
+4. **Connect** — confirm homing succeeds (or fix pose via dialog)
 4. **Plan** — review green/blue pins
 5. **Execute** — home → pins → home (top ring first, home-nearest entry on top ring)
 6. After **Python** changes → restart sidecar
 7. After **C++** changes → rebuild app
 8. Avoid running two `move_group` instances without restart
+9. Avoid RViz **Plan & Execute** while HyperFusion scan plan is running (shared `move_group`)
 
 ---
 
@@ -585,6 +645,10 @@ If the pendant shows **External Control speed limit** on **joint 5** (wrist_3) o
 | Term             | Definition                                                     |
 | ---------------- | -------------------------------------------------------------- |
 | **Pin**          | One dome grid point + TCP pose + (if reachable) joint solution |
+| **Tray**         | Sample surface plane at Z = 20 mm; bottom at Z = 0             |
+| **Flat rim**     | Scan hemisphere equator (θ = 90°); coplanar with tray top      |
+| **Scan sphere**  | Virtual dome for pin placement (UI radius R)                   |
+| **Payload dome** | Collision mesh on tool0 (`tool_payload_radius_mm`)             |
 | **Ring**         | All pins at the same θ (elevation)                             |
 | **Plan joints**  | Joint angles stored at Plan for a pin                          |
 | **Home**         | Configured safe reference pose; retreat and bookends               |
@@ -629,4 +693,4 @@ If the pendant shows **External Control speed limit** on **joint 5** (wrist_3) o
 | `POST /execute_move_home`     | MoveIt plan+execute to configured home |
 
 
-Request bodies include `workspace` and `home_joints_deg` from `hyperfusion.cfg`.
+Request bodies include `workspace` (`length_m`, `width_m`, `height_m`, `mount_height_m`) and `home_joints_deg` from `hyperfusion.cfg`.

@@ -64,6 +64,7 @@ def get_bridge(args: argparse.Namespace) -> Ur3eRosBridge:
                 workspace_boundary_enabled=args.workspace_boundary_enabled,
                 workspace_length_m=args.workspace_length_mm / 1000.0,
                 workspace_width_m=args.workspace_width_mm / 1000.0,
+                workspace_height_m=args.workspace_height_mm / 1000.0,
             )
             try:
                 _bridge.start_workspace_boundary_sync()
@@ -140,7 +141,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--ceiling-mount-height-mm",
         type=float,
         default=float(cfg.get("ceiling_mount_height_m", 0.65)) * 1000.0,
-        help="Ceiling mount height in mm (matches workspace_height_mm / Z=0 tray floor).",
+        help="Ceiling mount height in mm (world Z of robot base; tray stays at Z=0).",
     )
     parser.add_argument(
         "--mount-roll-deg",
@@ -189,6 +190,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         type=float,
         default=600.0,
         help="Workspace tray width in mm (Y axis).",
+    )
+    parser.add_argument(
+        "--workspace-height-mm",
+        type=float,
+        default=650.0,
+        help="Workspace collision box depth in mm (extends downward from mount plane).",
     )
     return parser
 

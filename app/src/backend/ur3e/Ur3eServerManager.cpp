@@ -198,7 +198,7 @@ QString Ur3eServerManager::buildLaunchCommand() const
         serverArgs += QStringLiteral(" --initial-joint-deg %1").arg(jointDegParts.join(QLatin1Char(',')));
     }
     serverArgs += QStringLiteral(" --ceiling-mount-height-mm %1")
-                      .arg(cfg.workspaceHeightMm, 0, 'f', 1);
+                      .arg(cfg.ceilingMountHeightMm, 0, 'f', 1);
     serverArgs += QStringLiteral(" --mount-roll-deg %1").arg(cfg.mountRollDeg, 0, 'g', 6);
     serverArgs += QStringLiteral(" --mount-pitch-deg %1").arg(cfg.mountPitchDeg, 0, 'g', 6);
     serverArgs += QStringLiteral(" --mount-yaw-deg %1").arg(cfg.mountYawDeg, 0, 'g', 6);
@@ -210,6 +210,7 @@ QString Ur3eServerManager::buildLaunchCommand() const
         serverArgs += QStringLiteral(" --no-workspace-boundary-enabled");
     serverArgs += QStringLiteral(" --workspace-length-mm %1").arg(cfg.workspaceLengthMm, 0, 'f', 1);
     serverArgs += QStringLiteral(" --workspace-width-mm %1").arg(cfg.workspaceWidthMm, 0, 'f', 1);
+    serverArgs += QStringLiteral(" --workspace-height-mm %1").arg(cfg.workspaceHeightMm, 0, 'f', 1);
 
     const QString extraShell = cfg.wslBashCommand.trimmed();
     const QString rosDistro = cfg.rosDistro.trimmed().isEmpty() ? QStringLiteral("jazzy")

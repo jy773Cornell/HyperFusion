@@ -1013,6 +1013,14 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 else
                     config.ur3e.workspaceWidthMm = numericValue;
             }
+            else if (key == QStringLiteral("ceiling_mount_height_mm"))
+            {
+                if (!hasNumber || numericValue <= 0.0)
+                    warnings.push_back(
+                        QStringLiteral("Invalid ur3e ceiling_mount_height_mm: %1").arg(value));
+                else
+                    config.ur3e.ceilingMountHeightMm = numericValue;
+            }
             else if (key == QStringLiteral("workspace_height_mm"))
             {
                 if (!hasNumber || numericValue <= 0.0)
@@ -1243,7 +1251,9 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "max_linear_accel_m_per_s2 = 0.3\n"
         << "max_joint_velocity_deg_s = 60\n"
         << "tool_payload_radius_mm = 100\n"
-        << "# Workspace boundary cube (mm). Tray centered at origin; Z=0 tray bottom, Z=height robot mount.\n"
+        << "# Robot mount height (mm): world Z of base_link / ceiling plane. Tray/sample stage stays at Z=0.\n"
+        << "ceiling_mount_height_mm = 650\n"
+        << "# Workspace collision box (mm): X/Y centered on tray; Z depth extends downward from mount.\n"
         << "workspace_boundary_enabled = true\n"
         << "workspace_length_mm = 600\n"
         << "workspace_width_mm = 600\n"

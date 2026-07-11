@@ -90,6 +90,14 @@ TRAJECTORY_MAX_VELOCITY_SCALEUP = 20.0
 # UR External Control servos at 500 Hz; never send consecutive setpoints closer than this.
 MIN_TRAJECTORY_SEGMENT_S = 0.02
 WRIST_3_JOINT_INDEX = 5
+HARDWARE_JOINT_TRAJECTORY_ACTION = (
+    "/scaled_joint_trajectory_controller/follow_joint_trajectory"
+)
+MOCK_JOINT_TRAJECTORY_ACTION = (
+    "/joint_trajectory_controller/follow_joint_trajectory"
+)
+# control_msgs/FollowJointTrajectory.Result error codes (ROS 2).
+CONTROLLER_TRAJECTORY_SUCCESS = 0
 
 
 def configured_max_joint_velocity_deg_s() -> float:
@@ -114,18 +122,30 @@ class WorkspaceBox:
     enabled: bool = False
     length_m: float = 0.6
     width_m: float = 0.6
+    """Vertical depth below the mount plane (collision box extent)."""
     height_m: float = 0.65
+    """World Z of the robot mount / box top face (tray floor remains at Z=0)."""
+    mount_height_m: float = 0.65
 
 
 def workspace_from_dict(cfg: Optional[Dict[str, Any]]) -> WorkspaceBox:
     if not isinstance(cfg, dict):
         return WorkspaceBox()
+    height_m = float(cfg.get("height_m", 0.65))
+    mount_height_m = float(cfg.get("mount_height_m", height_m))
     return WorkspaceBox(
         enabled=bool(cfg.get("enabled", False)),
         length_m=float(cfg.get("length_m", 0.6)),
         width_m=float(cfg.get("width_m", 0.6)),
-        height_m=float(cfg.get("height_m", 0.65)),
+        height_m=height_m,
+        mount_height_m=mount_height_m,
     )
+
+
+def workspace_vertical_bounds(workspace: WorkspaceBox) -> tuple[float, float]:
+    z_top = float(workspace.mount_height_m)
+    z_bottom = max(0.0, z_top - float(workspace.height_m))
+    return z_bottom, z_top
 
 
 def home_joints_rad_from_body(body: Optional[Dict[str, Any]]) -> List[float]:
@@ -576,6 +596,7 @@ class MoveItScanPlanner:
         self._pinch_guard_warned = False
         self._move_client = None
         self._execute_trajectory_client = None
+        self._joint_trajectory_client = None
         self._executor = None
         self._spin_thread: Optional[threading.Thread] = None
         self._spin_stop = threading.Event()
@@ -1072,6 +1093,15 @@ class MoveItScanPlanner:
     def _joint_delta_rad(a: float, b: float) -> float:
         return joint_delta_rad(a, b)
 
+    @staticmethod
+    def _segment_joint_delta_for_timing(reference: float, candidate: float) -> float:
+        """Largest of wrapped and numeric delta — UR RTDE uses numeric joint jumps."""
+        ref = float(reference)
+        cand = float(candidate)
+        wrapped = abs(joint_delta_rad(ref, cand))
+        raw = abs(cand - ref)
+        return max(wrapped, raw)
+
     @classmethod
     def _joint_distance_rad(cls, reference: Sequence[float], candidate: Sequence[float]) -> float:
         return joint_distance_rad(reference, candidate)
@@ -1145,6 +1175,7 @@ class MoveItScanPlanner:
             round(workspace.length_m, 6),
             round(workspace.width_m, 6),
             round(workspace.height_m, 6),
+            round(workspace.mount_height_m, 6),
         )
 
     def _ensure_planning_scene_client(self) -> None:
@@ -1224,12 +1255,13 @@ class MoveItScanPlanner:
         return collision_object
 
     def _make_workspace_boundary_objects(self, workspace: WorkspaceBox) -> List[Any]:
-        """Thin collision slabs on all six faces — any robot link contact fails planning."""
+        """Thin collision slabs on all six faces — enclosed box; top at mount plane."""
         thickness = BOUNDARY_SLAB_THICKNESS_M
         half_l = workspace.length_m * 0.5
         half_w = workspace.width_m * 0.5
-        height_m = workspace.height_m
-        wall_height = max(thickness, height_m)
+        z_bottom, z_top = workspace_vertical_bounds(workspace)
+        wall_height = max(thickness, z_top - z_bottom)
+        wall_center_z = z_bottom + (wall_height * 0.5)
 
         return [
             self._make_box_collision_object(
@@ -1239,8 +1271,9 @@ class MoveItScanPlanner:
                 size_z=thickness,
                 center_x=0.0,
                 center_y=0.0,
-                center_z=-thickness * 0.5,
+                center_z=z_bottom - (thickness * 0.5),
             ),
+            # Ceiling slab: underside at z_top closes the box; robot base mounts at/above z_top.
             self._make_box_collision_object(
                 BOUNDARY_OBJECT_IDS[1],
                 size_x=workspace.length_m,
@@ -1248,7 +1281,7 @@ class MoveItScanPlanner:
                 size_z=thickness,
                 center_x=0.0,
                 center_y=0.0,
-                center_z=height_m + (thickness * 0.5),
+                center_z=z_top + (thickness * 0.5),
             ),
             self._make_box_collision_object(
                 BOUNDARY_OBJECT_IDS[2],
@@ -1257,7 +1290,7 @@ class MoveItScanPlanner:
                 size_z=wall_height,
                 center_x=half_l + (thickness * 0.5),
                 center_y=0.0,
-                center_z=wall_height * 0.5,
+                center_z=wall_center_z,
             ),
             self._make_box_collision_object(
                 BOUNDARY_OBJECT_IDS[3],
@@ -1266,7 +1299,7 @@ class MoveItScanPlanner:
                 size_z=wall_height,
                 center_x=-half_l - (thickness * 0.5),
                 center_y=0.0,
-                center_z=wall_height * 0.5,
+                center_z=wall_center_z,
             ),
             self._make_box_collision_object(
                 BOUNDARY_OBJECT_IDS[4],
@@ -1275,7 +1308,7 @@ class MoveItScanPlanner:
                 size_z=wall_height,
                 center_x=0.0,
                 center_y=half_w + (thickness * 0.5),
-                center_z=wall_height * 0.5,
+                center_z=wall_center_z,
             ),
             self._make_box_collision_object(
                 BOUNDARY_OBJECT_IDS[5],
@@ -1284,7 +1317,7 @@ class MoveItScanPlanner:
                 size_z=wall_height,
                 center_x=0.0,
                 center_y=-half_w - (thickness * 0.5),
-                center_z=wall_height * 0.5,
+                center_z=wall_center_z,
             ),
         ]
 
@@ -1341,10 +1374,11 @@ class MoveItScanPlanner:
         self._apply_planning_scene_objects(collision_objects)
 
         self._workspace_applied = workspace_key
+        z_bottom, z_top = workspace_vertical_bounds(workspace)
         sys.stderr.write(
             "UR3e MoveIt: workspace boundary enabled "
-            f"(whole-arm collision box {workspace.length_m:.3f} x "
-            f"{workspace.width_m:.3f} x {workspace.height_m:.3f} m).\n"
+            f"(enclosed box {workspace.length_m:.3f} x {workspace.width_m:.3f} x "
+            f"{workspace.height_m:.3f} m; mount Z={z_top:.3f} m, floor Z={z_bottom:.3f} m).\n"
         )
         return True
 
@@ -1564,6 +1598,7 @@ class MoveItScanPlanner:
             return 0.0
 
         max_velocity = 0.0
+        max_wrapped_velocity = 0.0
         previous_positions: Optional[List[float]] = None
         previous_time = 0.0
         for point in joint_traj.points:
@@ -1575,12 +1610,56 @@ class MoveItScanPlanner:
                 dt = time_s - previous_time
                 if dt > 1.0e-6:
                     for prev, curr in zip(previous_positions, positions):
-                        velocity = abs(self._joint_delta_rad(prev, curr)) / dt
+                        timing_delta = self._segment_joint_delta_for_timing(prev, curr)
+                        wrapped_delta = abs(self._joint_delta_rad(prev, curr))
+                        velocity = timing_delta / dt
                         if velocity > max_velocity:
                             max_velocity = velocity
+                        if wrapped_delta / dt > max_wrapped_velocity:
+                            max_wrapped_velocity = wrapped_delta / dt
             previous_positions = positions
             previous_time = time_s
+        if (
+            max_velocity > max_wrapped_velocity * 1.5
+            and math.degrees(max_velocity - max_wrapped_velocity) > 10.0
+        ):
+            sys.stderr.write(
+                "UR3e MoveIt execute: trajectory has numeric branch jumps — "
+                f"RTDE peak {math.degrees(max_velocity):.0f} deg/s, "
+                f"wrapped {math.degrees(max_wrapped_velocity):.0f} deg/s.\n"
+            )
         return max_velocity
+
+    def _trajectory_branch_continuity_ok(self, trajectory: Any) -> bool:
+        """Reject trajectories whose numeric joint samples still jump by ≥90° after unwrap."""
+        indices = self._trajectory_joint_indices(trajectory)
+        joint_traj = getattr(trajectory, "joint_trajectory", None)
+        if indices is None or joint_traj is None or len(joint_traj.points) < 2:
+            return True
+
+        max_raw_deg = 0.0
+        worst_joint = ""
+        prev_positions: Optional[List[float]] = None
+        for point in joint_traj.points:
+            if len(point.positions) <= max(indices):
+                continue
+            positions = [float(point.positions[index]) for index in indices]
+            if prev_positions is not None:
+                for joint_index, (prev, curr) in enumerate(zip(prev_positions, positions)):
+                    raw_deg = math.degrees(abs(curr - prev))
+                    if raw_deg > max_raw_deg:
+                        max_raw_deg = raw_deg
+                        worst_joint = CANONICAL_JOINT_NAMES[joint_index]
+            prev_positions = positions
+
+        if max_raw_deg >= 90.0:
+            sys.stderr.write(
+                "UR3e MoveIt execute: rejecting trajectory — numeric "
+                f"{worst_joint} step {max_raw_deg:.0f}° between samples "
+                "(branch unwrap failed; UR would see >100 deg/s).\n"
+            )
+            return False
+        return True
 
     def _stretch_trajectory_segment_times(self, trajectory: Any) -> None:
         """Ensure each segment respects joint speed and UR External Control sample period."""
@@ -1606,7 +1685,7 @@ class MoveItScanPlanner:
             dt_required = MIN_TRAJECTORY_SEGMENT_S
             if prev_positions is not None:
                 for prev, curr in zip(prev_positions, positions):
-                    delta = abs(self._joint_delta_rad(prev, curr))
+                    delta = self._segment_joint_delta_for_timing(prev, curr)
                     if delta > 1e-9:
                         dt_required = max(dt_required, (delta / limit) * margin)
 
@@ -1672,6 +1751,9 @@ class MoveItScanPlanner:
         self._strip_trajectory_derivatives(trajectory)
         self._stretch_trajectory_segment_times(trajectory)
 
+        if not self._trajectory_branch_continuity_ok(trajectory):
+            return False
+
         max_velocity = self._trajectory_max_joint_velocity_rad_s(trajectory)
         limit = configured_max_joint_velocity_rad_s()
         limit_deg = configured_max_joint_velocity_deg_s()
@@ -1679,8 +1761,8 @@ class MoveItScanPlanner:
             if max_velocity > 0.0:
                 sys.stderr.write(
                     "UR3e MoveIt execute: trajectory peak joint velocity "
-                    f"{math.degrees(max_velocity):.1f} deg/s "
-                    f"(limit {limit_deg:.0f} deg/s).\n"
+                    f"{math.degrees(max_velocity):.1f} deg/s (RTDE timing, "
+                    f"limit {limit_deg:.0f} deg/s).\n"
                 )
             return True
 
@@ -2010,6 +2092,121 @@ class MoveItScanPlanner:
                 return client
         return None
 
+    def _joint_trajectory_action_name(self) -> str:
+        if self._use_mock_hardware():
+            return MOCK_JOINT_TRAJECTORY_ACTION
+        return HARDWARE_JOINT_TRAJECTORY_ACTION
+
+    def _ensure_joint_trajectory_client(self) -> Optional[Any]:
+        from control_msgs.action import FollowJointTrajectory
+        from rclpy.action import ActionClient
+
+        if self._joint_trajectory_client is not None:
+            return self._joint_trajectory_client
+
+        action_name = self._joint_trajectory_action_name()
+        client = ActionClient(self._node, FollowJointTrajectory, action_name)
+        if client.wait_for_server(timeout_sec=60.0):
+            self._joint_trajectory_client = client
+            return client
+        return None
+
+    def _log_trajectory_start_deltas(self, trajectory: Any) -> None:
+        """Log per-joint gap between trajectory start and live MoveIt / RTDE feedback."""
+        indices = self._trajectory_joint_indices(trajectory)
+        joint_traj = getattr(trajectory, "joint_trajectory", None)
+        if indices is None or joint_traj is None or not joint_traj.points:
+            return
+
+        first = joint_traj.points[0]
+        if len(first.positions) <= max(indices):
+            return
+
+        traj_start = [float(first.positions[index]) for index in indices]
+        moveit = self._moveit_start_joint_positions()
+        hardware = self._hardware_joint_positions()
+        parts: List[str] = []
+        for joint_index, joint_name in enumerate(CANONICAL_JOINT_NAMES):
+            traj_deg = math.degrees(traj_start[joint_index])
+            detail = f"{joint_name}={traj_deg:.1f}°"
+            if moveit is not None:
+                delta = joint_delta_rad(moveit[joint_index], traj_start[joint_index])
+                detail += f" moveitΔ={math.degrees(delta):+.1f}°"
+            if hardware is not None:
+                delta = joint_delta_rad(hardware[joint_index], traj_start[joint_index])
+                detail += f" rtdeΔ={math.degrees(delta):+.1f}°"
+            parts.append(detail)
+        sys.stderr.write(
+            "UR3e MoveIt execute: trajectory start — "
+            + "; ".join(parts)
+            + ".\n"
+        )
+
+    def _execute_trajectory_via_controller(
+        self,
+        trajectory: Any,
+        *,
+        stop_event: Optional[threading.Event] = None,
+    ) -> int:
+        """Send a hardware-branch trajectory directly to ros2_control (bypass MoveIt execute)."""
+        from moveit_msgs.msg import MoveItErrorCodes
+
+        client = self._ensure_joint_trajectory_client()
+        if client is None:
+            sys.stderr.write(
+                "UR3e MoveIt execute: joint trajectory action server unavailable "
+                f"({self._joint_trajectory_action_name()}).\n"
+            )
+            return MoveItErrorCodes.CONTROL_FAILED
+
+        joint_traj = getattr(trajectory, "joint_trajectory", None)
+        if joint_traj is None or not joint_traj.points:
+            return MoveItErrorCodes.FAILURE
+
+        from control_msgs.action import FollowJointTrajectory
+
+        goal = FollowJointTrajectory.Goal()
+        goal.trajectory = joint_traj
+
+        sys.stderr.write(
+            "UR3e MoveIt execute: sending RTDE-branch trajectory to "
+            f"{self._joint_trajectory_action_name()} "
+            f"({len(joint_traj.points)} waypoints).\n"
+        )
+
+        send_future = client.send_goal_async(goal)
+        goal_handle = self._wait_future(send_future, 20.0, stop_event)
+        if goal_handle is None or not goal_handle.accepted:
+            if stop_event is not None and stop_event.is_set():
+                raise RuntimeError("stopped")
+            sys.stderr.write(
+                "UR3e MoveIt execute: joint trajectory goal rejected by controller.\n"
+            )
+            return MoveItErrorCodes.CONTROL_FAILED
+
+        with self._move_goal_lock:
+            self._active_move_goal_handle = goal_handle
+
+        try:
+            result_future = goal_handle.get_result_async()
+            result = self._wait_future(result_future, 120.0, stop_event)
+            error_code = int(result.result.error_code)
+            if error_code == CONTROLLER_TRAJECTORY_SUCCESS:
+                return MoveItErrorCodes.SUCCESS
+
+            error_string = str(getattr(result.result, "error_string", "") or "").strip()
+            detail = f"code={error_code}"
+            if error_string:
+                detail += f", {error_string}"
+            sys.stderr.write(
+                "UR3e MoveIt execute: controller rejected trajectory "
+                f"({detail}).\n"
+            )
+            return MoveItErrorCodes.CONTROL_FAILED
+        finally:
+            with self._move_goal_lock:
+                self._active_move_goal_handle = None
+
     def _build_move_group_joint_goal(
         self,
         goal_joints: Sequence[float],
@@ -2187,14 +2384,21 @@ class MoveItScanPlanner:
         from moveit_msgs.action import ExecuteTrajectory
         from moveit_msgs.msg import MoveItErrorCodes
 
-        execute_client = self._ensure_execute_trajectory_client()
-        if execute_client is None:
-            return MoveItErrorCodes.FAILURE
-
         if not already_prepared and not self._prepare_trajectory_for_robot(trajectory):
             sys.stderr.write(
                 "UR3e MoveIt execute: trajectory failed unwrap/velocity check.\n"
             )
+            return MoveItErrorCodes.FAILURE
+
+        self._log_trajectory_start_deltas(trajectory)
+
+        if not self._use_mock_hardware():
+            return self._execute_trajectory_via_controller(
+                trajectory, stop_event=stop_event
+            )
+
+        execute_client = self._ensure_execute_trajectory_client()
+        if execute_client is None:
             return MoveItErrorCodes.FAILURE
 
         goal = ExecuteTrajectory.Goal()

@@ -12,11 +12,18 @@ void Ur3eWorkspaceBoundary::normalize()
     lengthMm = std::max(100.0, lengthMm);
     widthMm = std::max(100.0, widthMm);
     heightMm = std::max(100.0, heightMm);
+    mountHeightMm = std::max(100.0, mountHeightMm);
 }
 
 double Ur3eWorkspaceBoundary::lengthM() const { return lengthMm * 0.001; }
 double Ur3eWorkspaceBoundary::widthM() const { return widthMm * 0.001; }
 double Ur3eWorkspaceBoundary::heightM() const { return heightMm * 0.001; }
+double Ur3eWorkspaceBoundary::mountHeightM() const { return mountHeightMm * 0.001; }
+double Ur3eWorkspaceBoundary::floorZM() const
+{
+    return std::max(0.0, mountHeightM() - heightM());
+}
+double Ur3eWorkspaceBoundary::topZM() const { return mountHeightM(); }
 double Ur3eWorkspaceBoundary::halfLengthM() const { return lengthM() * 0.5; }
 double Ur3eWorkspaceBoundary::halfWidthM() const { return widthM() * 0.5; }
 
@@ -24,8 +31,8 @@ bool Ur3eWorkspaceBoundary::containsPointM(const double xM, const double yM, con
 {
     if (!enabled)
         return true;
-    return std::abs(xM) <= halfLengthM() && std::abs(yM) <= halfWidthM() && zM >= 0.0
-           && zM <= heightM();
+    return std::abs(xM) <= halfLengthM() && std::abs(yM) <= halfWidthM() && zM >= floorZM()
+           && zM <= topZM();
 }
 
 Ur3eWorkspaceBoundary workspaceBoundaryFromConfig(const HardwareConfig::Ur3eConfig &config)
@@ -35,6 +42,7 @@ Ur3eWorkspaceBoundary workspaceBoundaryFromConfig(const HardwareConfig::Ur3eConf
     boundary.lengthMm = config.workspaceLengthMm;
     boundary.widthMm = config.workspaceWidthMm;
     boundary.heightMm = config.workspaceHeightMm;
+    boundary.mountHeightMm = config.ceilingMountHeightMm;
     boundary.normalize();
     return boundary;
 }
@@ -50,7 +58,7 @@ double maxHemisphereRadiusM(const Ur3eWorkspaceBoundary &boundary)
         std::min(kSampleTrayLengthM * 0.5, kSampleTrayWidthM * 0.5);
     const double horizontalLimit = std::min(boundaryHorizontal, trayHorizontal);
     const double verticalLimit =
-        std::max(0.01, boundary.heightM() - kSampleTrayHeightM);
+        std::max(0.01, boundary.mountHeightM() - kSampleTrayHeightM);
     return std::max(0.01, std::min(horizontalLimit, verticalLimit));
 }
 

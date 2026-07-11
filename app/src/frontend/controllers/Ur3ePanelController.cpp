@@ -2263,7 +2263,7 @@ void Ur3ePanelController::finishHomeEnsureAfterConnect(const HomeEnsureOutcome &
     setBusy(false);
     if (outcome.alreadyAtHome)
         host_->appendLog(QStringLiteral("UR3e: verified at scan home position."));
-    else if (outcome.success)
+    else if (outcome.atHomeVerified)
         host_->appendLog(QStringLiteral("UR3e: moved to scan home position."));
     pollJointsSync();
     if (outcome.atHomeVerified)
