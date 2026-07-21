@@ -1,4 +1,4 @@
-# Fused ROI mean reflectance CSV + mean±std spectrum plots (backend/offline).
+# Fused ROI mean spectrum CSV + mean±std spectrum plots (backend/offline).
 from __future__ import annotations
 
 import csv
@@ -25,6 +25,13 @@ class RoiSpectraRow:
     wavelengths_nm: list[float]
     mean: np.ndarray
     std: np.ndarray
+
+
+def spectrum_y_axis_label(mode: str) -> str:
+    """Y-axis label for ROI spectrum plots from illumination mode folder name."""
+    if mode.strip().lower() == "transmittance":
+        return "Transmittance"
+    return "Reflectance"
 
 
 def fx_roi_label(session: Path, mode: str, roi: int) -> str:
@@ -250,6 +257,7 @@ def export_fusion_roi_spectra(
         std=row.std,
         title=f"ROI {fx_roi} fused FX10e+SWIR3 spectrum",
         series_label=f"ROI {fx_roi}: {row.label}" if row.label else f"ROI {fx_roi}",
+        y_axis_label=spectrum_y_axis_label(mode),
     )
     return row
 
@@ -268,5 +276,6 @@ def write_combined_roi_spectra_artifacts(
         plot_path,
         rows,
         title=f"Fused FX10e+SWIR3 ROI spectra ({mode})",
+        y_axis_label=spectrum_y_axis_label(mode),
     )
     return csv_path, plot_path
