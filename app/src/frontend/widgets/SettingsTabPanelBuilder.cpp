@@ -1,4 +1,4 @@
-﻿// Builds the left-hand settings tab panel (camera, stage, light, UR3e, capture).
+﻿// Builds the left-hand settings tab panel (camera, stage, light, 3D Scanning, capture).
 // MainWindow method definitions extracted from MainWindow.cpp for clarity.
 #include "frontend/widgets/MainWindow.hpp"
 #include <QTabWidget>
@@ -15,10 +15,10 @@ QWidget *MainWindow::createSettingsPanel()
     settingsTabs_->addTab(createCameraSettingsTab(), QStringLiteral("Cameras"));
     settingsTabs_->addTab(createStageSettingsTab(), QStringLiteral("Stage"));
     settingsTabs_->addTab(createLightSettingsTab(), QStringLiteral("Light"));
-    if (useUr3e_)
+    if (use3dScanning_)
     {
         ur3eSettingsTabIndex_ = settingsTabs_->count();
-        settingsTabs_->addTab(createUr3eSettingsTab(), QStringLiteral("UR3e"));
+        settingsTabs_->addTab(createUr3eSettingsTab(), QStringLiteral("3D Scanning"));
     }
     else
     {

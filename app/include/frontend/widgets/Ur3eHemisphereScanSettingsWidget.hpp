@@ -1,8 +1,8 @@
 // Hemisphere scan parameters for UR3e sample-tray dome (frontend/ui layer).
 #pragma once
 
-#include "backend/ur3e/Ur3eHemisphereScan.hpp"
-#include "backend/ur3e/Ur3eWorkspaceBoundary.hpp"
+#include "backend/3dscanning/Ur3eHemisphereScan.hpp"
+#include "backend/3dscanning/Ur3eWorkspaceBoundary.hpp"
 
 #include <QWidget>
 

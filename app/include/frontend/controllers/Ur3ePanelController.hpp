@@ -6,9 +6,9 @@
 #include <QStringList>
 #include <QVariant>
 
-#include "backend/ur3e/Ur3eHemisphereScanReachability.hpp"
-#include "backend/ur3e/Ur3eServerManager.hpp"
-#include "backend/ur3e/Ur3eClient.hpp"
+#include "backend/3dscanning/Ur3eHemisphereScanReachability.hpp"
+#include "backend/3dscanning/Ur3eServerManager.hpp"
+#include "backend/3dscanning/Ur3eClient.hpp"
 
 #include <atomic>
 #include <memory>

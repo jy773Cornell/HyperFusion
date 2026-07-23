@@ -2,10 +2,10 @@
 #include "frontend/widgets/Ur3eHemisphereScanPreviewWidget.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/ur3e/Ur3eHemisphereScan.hpp"
-#include "backend/ur3e/Ur3eHemisphereScanReachability.hpp"
-#include "backend/ur3e/Ur3eMountTransform.hpp"
-#include "backend/ur3e/Ur3eWorkspaceBoundary.hpp"
+#include "backend/3dscanning/Ur3eHemisphereScan.hpp"
+#include "backend/3dscanning/Ur3eHemisphereScanReachability.hpp"
+#include "backend/3dscanning/Ur3eMountTransform.hpp"
+#include "backend/3dscanning/Ur3eWorkspaceBoundary.hpp"
 
 #include <QWheelEvent>
 #include <QFont>

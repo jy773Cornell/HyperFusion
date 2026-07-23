@@ -4,9 +4,11 @@
 #include <QColor>
 #include <QIcon>
 #include <QPainter>
+#include <QPalette>
 #include <QPixmap>
 #include <QPolygon>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSize>
 #include <QStyle>
 #include <QToolButton>
@@ -170,6 +172,26 @@ QPushButton *makeRecorderButton(QWidget *parent, const QIcon &icon, const QStrin
         "QPushButton:pressed { background-color: #e0e0e0; }"
         "QPushButton:disabled { color: #999999; background-color: #f5f5f5; }"));
     return button;
+}
+
+void applyWhiteSettingsBackground(QWidget *widget)
+{
+    if (widget == nullptr)
+        return;
+    widget->setAutoFillBackground(true);
+    QPalette palette = widget->palette();
+    palette.setColor(QPalette::Window, Qt::white);
+    palette.setColor(QPalette::Base, Qt::white);
+    widget->setPalette(palette);
+}
+
+void applyWhiteSettingsScrollBackground(QScrollArea *scroll)
+{
+    if (scroll == nullptr)
+        return;
+    applyWhiteSettingsBackground(scroll);
+    applyWhiteSettingsBackground(scroll->viewport());
+    applyWhiteSettingsBackground(scroll->widget());
 }
 
 bool lumoProfileMatchesFx10eSlot(const QString &name)

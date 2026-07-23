@@ -1,5 +1,5 @@
-// Sanitizes WSL subprocess log text for HyperFusion UI (backend/ur3e layer).
-#include "backend/ur3e/Ur3eWslLogUtil.hpp"
+// Sanitizes WSL subprocess log text for HyperFusion UI (backend/3dscanning layer).
+#include "backend/3dscanning/Ur3eWslLogUtil.hpp"
 
 #include <QRegularExpression>
 

@@ -1,4 +1,4 @@
-// Sanitizes WSL subprocess log text for HyperFusion UI (backend/ur3e layer).
+// Sanitizes WSL subprocess log text for HyperFusion UI (backend/3dscanning layer).
 #pragma once
 
 #include <QByteArray>

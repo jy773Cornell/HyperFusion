@@ -2,8 +2,8 @@
 #include "frontend/widgets/Ur3eHemisphereScanSettingsWidget.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/ur3e/Ur3eHemisphereScan.hpp"
-#include "backend/ur3e/Ur3eWorkspaceBoundary.hpp"
+#include "backend/3dscanning/Ur3eHemisphereScan.hpp"
+#include "backend/3dscanning/Ur3eWorkspaceBoundary.hpp"
 
 #include "frontend/settings/AppSettingsStore.hpp"
 

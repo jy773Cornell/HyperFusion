@@ -19,6 +19,11 @@
 #include <optional>
 #include <vector>
 
+namespace hf::bfs
+{
+class BfsPanelController;
+}
+
 namespace hf::camera
 {
 class CameraPanelController;
@@ -69,6 +74,7 @@ class DetectorCrosshairWidget;
 class IntensityBarWidget;
 class ProfilePlotWidget;
 class StageAxisWidget;
+class BfsCameraSettingsWidget;
 class Ur3eJointBarWidget;
 class Ur3eScanRoutePlanWidget;
 class Ur3eHemisphereScanSettingsWidget;
@@ -91,6 +97,7 @@ class MainWindow : public QMainWindow
     friend class hf::capture::CapturePanelController;
     friend class hf::stage::StagePanelController;
     friend class hf::ur3e::Ur3ePanelController;
+    friend class hf::bfs::BfsPanelController;
     friend class hf::light::LightPanelController;
     friend class hf::camera::CameraPanelController;
     friend class hf::settings::UiSettingsController;
@@ -153,13 +160,13 @@ private:
     static constexpr int kStreamTabCamera2 = 1;
     static constexpr int kStreamTabCaptureWhenUr3eEnabled = 3;
 
-    bool useUr3e_ = true;
+    bool use3dScanning_ = true;
     int ur3eSettingsTabIndex_ = -1;
     int ur3eStreamTabIndex_ = -1;
     int captureSettingsTabIndex_ = kSettingsTabCaptureWhenUr3eEnabled;
     int captureStreamTabIndex_ = kStreamTabCaptureWhenUr3eEnabled;
 
-    [[nodiscard]] bool useUr3eEnabled() const { return useUr3e_; }
+    [[nodiscard]] bool use3dScanningEnabled() const { return use3dScanning_; }
     [[nodiscard]] int captureStreamTabIndex() const { return captureStreamTabIndex_; }
 
     // UR3e stream tab
@@ -233,6 +240,8 @@ private:
     QGroupBox *captureMetadataBox_ = nullptr;
     QGroupBox *capturePositionBox_ = nullptr;
     QGroupBox *captureCamerasBox_ = nullptr;
+    QTabWidget *scanningSettingsTabs_ = nullptr;
+    ui::BfsCameraSettingsWidget *bfsCameraSettings_ = nullptr;
     QWidget *ur3eSettingsPage_ = nullptr;
     QLineEdit *ur3eRobotIpEdit_ = nullptr;
     QPushButton *ur3eConnectBtn_ = nullptr;
@@ -276,6 +285,7 @@ private:
 
     std::unique_ptr<hf::stage::StagePanelController> stagePanel_;
     std::unique_ptr<hf::ur3e::Ur3ePanelController> ur3ePanel_;
+    std::unique_ptr<hf::bfs::BfsPanelController> bfsPanel_;
     std::unique_ptr<hf::light::LightPanelController> lightPanel_;
     std::unique_ptr<hf::camera::CameraPanelController> cameraPanel_;
     std::unique_ptr<hf::settings::UiSettingsController> settingsPanel_;
@@ -283,5 +293,4 @@ private:
 
 private slots:
     void onSettingsTabChanged(int index);
-    void onStreamTabChanged(int index);
 };

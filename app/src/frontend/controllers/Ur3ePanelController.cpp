@@ -2,15 +2,15 @@
 #include "frontend/controllers/Ur3ePanelController.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/ur3e/Ur3eClient.hpp"
-#include "backend/ur3e/Ur3eHemisphereScan.hpp"
-#include "backend/ur3e/Ur3eHemisphereScanReachability.hpp"
-#include "backend/ur3e/Ur3eMountTransform.hpp"
-#include "backend/ur3e/Ur3eWorkspaceBoundary.hpp"
-#include "backend/ur3e/Ur3eMoveItManager.hpp"
-#include "backend/ur3e/Ur3eRvizManager.hpp"
-#include "backend/ur3e/Ur3eServerManager.hpp"
-#include "backend/ur3e/Ur3eWslSetup.hpp"
+#include "backend/3dscanning/Ur3eClient.hpp"
+#include "backend/3dscanning/Ur3eHemisphereScan.hpp"
+#include "backend/3dscanning/Ur3eHemisphereScanReachability.hpp"
+#include "backend/3dscanning/Ur3eMountTransform.hpp"
+#include "backend/3dscanning/Ur3eWorkspaceBoundary.hpp"
+#include "backend/3dscanning/Ur3eMoveItManager.hpp"
+#include "backend/3dscanning/Ur3eRvizManager.hpp"
+#include "backend/3dscanning/Ur3eServerManager.hpp"
+#include "backend/3dscanning/Ur3eWslSetup.hpp"
 #include "frontend/widgets/MainWindow.hpp"
 #include "frontend/widgets/Ur3eExternalControlWaitDialog.hpp"
 #include "frontend/widgets/Ur3eHemisphereScanSettingsWidget.hpp"
@@ -209,7 +209,7 @@ void Ur3ePanelController::startSidecarOnLaunch()
         return;
 
     const hf::HardwareConfig::Ur3eConfig &cfg = hf::hardwareConfig().ur3e;
-    if (!cfg.useUr3e)
+    if (!cfg.use3dScanning)
         return;
 
     host_->appendLog(QStringLiteral(
@@ -240,7 +240,7 @@ void Ur3ePanelController::refreshUi()
 
 bool Ur3ePanelController::shutdownSync()
 {
-    if (!hf::hardwareConfig().ur3e.useUr3e)
+    if (!hf::hardwareConfig().ur3e.use3dScanning)
         return true;
 
     shutdownRequested_.store(true, std::memory_order_release);

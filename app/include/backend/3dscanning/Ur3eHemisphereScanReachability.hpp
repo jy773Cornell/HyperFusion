@@ -4,11 +4,11 @@
 
 
 
-#include "backend/ur3e/Ur3eHemisphereScan.hpp"
+#include "backend/3dscanning/Ur3eHemisphereScan.hpp"
 
-#include "backend/ur3e/Ur3eClient.hpp"
+#include "backend/3dscanning/Ur3eClient.hpp"
 
-#include "backend/ur3e/Ur3eWorkspaceBoundary.hpp"
+#include "backend/3dscanning/Ur3eWorkspaceBoundary.hpp"
 
 #include <QJsonObject>
 #include <QString>
@@ -124,7 +124,7 @@ struct Ur3eHemisphereScanPlan
 
 
 
-/// Home pose from hyperfusion.cfg `[ur3e] home_joints_deg` (radians).
+/// Home pose from hyperfusion.cfg `[3d scanning] home_joints_deg` (radians).
 
 [[nodiscard]] std::vector<double> ur3eScanHomeJointsRadFromConfig();
 

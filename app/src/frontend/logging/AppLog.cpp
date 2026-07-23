@@ -27,7 +27,7 @@ QString channelLabel(Channel channel)
     case Channel::Light:
         return QStringLiteral("Light");
     case Channel::Ur3e:
-        return QStringLiteral("UR3e");
+        return QStringLiteral("3D Scanning");
     case Channel::Capture:
         return QStringLiteral("Capture");
     }

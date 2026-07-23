@@ -1,5 +1,5 @@
 // Windows ↔ WSL path helpers for UR3e sidecar integration.
-#include "backend/ur3e/Ur3eWslPathUtil.hpp"
+#include "backend/3dscanning/Ur3eWslPathUtil.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
 #include "backend/camera/processing/GsamWslPathUtil.hpp"

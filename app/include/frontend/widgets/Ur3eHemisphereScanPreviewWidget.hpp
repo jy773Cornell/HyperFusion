@@ -1,10 +1,10 @@
 // 3D preview of UR3e hemisphere scan over the sample tray (frontend/ui layer).
 #pragma once
 
-#include "backend/ur3e/Ur3eHemisphereScan.hpp"
-#include "backend/ur3e/Ur3eHemisphereScanReachability.hpp"
-#include "backend/ur3e/Ur3eMountTransform.hpp"
-#include "backend/ur3e/Ur3eWorkspaceBoundary.hpp"
+#include "backend/3dscanning/Ur3eHemisphereScan.hpp"
+#include "backend/3dscanning/Ur3eHemisphereScanReachability.hpp"
+#include "backend/3dscanning/Ur3eMountTransform.hpp"
+#include "backend/3dscanning/Ur3eWorkspaceBoundary.hpp"
 
 #include <QPoint>
 #include <QTimer>

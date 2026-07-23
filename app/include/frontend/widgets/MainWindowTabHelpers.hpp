@@ -5,6 +5,7 @@
 
 class QIcon;
 class QPushButton;
+class QScrollArea;
 class QToolButton;
 class QWidget;
 
@@ -18,6 +19,10 @@ QIcon makeRecorderPreviewIcon(int size = 14);
 QIcon makeRecorderRecordIcon(int size = 14);
 QPushButton *makeCaptureCompactWhiteButton(QWidget *parent, const QString &label);
 QPushButton *makeRecorderButton(QWidget *parent, const QIcon &icon, const QString &label);
+
+/// Match FX10e/SWIR settings pane (white), not the default gray QScrollArea viewport.
+void applyWhiteSettingsBackground(QWidget *widget);
+void applyWhiteSettingsScrollBackground(QScrollArea *scroll);
 
 bool lumoProfileMatchesFx10eSlot(const QString &name);
 bool lumoProfileMatchesSwir3Slot(const QString &name);

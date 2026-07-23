@@ -1,11 +1,11 @@
 // MoveIt-backed hemisphere scan planning for UR3e (backend layer).
 
-#include "backend/ur3e/Ur3eHemisphereScanReachability.hpp"
+#include "backend/3dscanning/Ur3eHemisphereScanReachability.hpp"
 
 
 
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/ur3e/Ur3eMountTransform.hpp"
+#include "backend/3dscanning/Ur3eMountTransform.hpp"
 
 #include <QJsonArray>
 

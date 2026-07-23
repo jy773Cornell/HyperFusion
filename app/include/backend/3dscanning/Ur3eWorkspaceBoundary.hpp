@@ -3,7 +3,7 @@
 
 #include "backend/HyperFusionConfig.hpp"
 
-#include "backend/ur3e/Ur3eHemisphereScan.hpp"
+#include "backend/3dscanning/Ur3eHemisphereScan.hpp"
 
 #include <vector>
 

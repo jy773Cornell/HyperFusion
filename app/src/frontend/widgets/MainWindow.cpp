@@ -9,6 +9,7 @@
 #include "frontend/controllers/UiSettingsController.hpp"
 #include "frontend/controllers/StagePanelController.hpp"
 #include "frontend/controllers/Ur3ePanelController.hpp"
+#include "frontend/controllers/BfsPanelController.hpp"
 
 #include "adapters/lumo/LumoCamera.hpp"
 #include "adapters/lumo/LumoDeviceTypes.hpp"
@@ -150,11 +151,14 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     setMinimumSize(1180, 760);
 
     (void)hf::loadHardwareConfig();
-    useUr3e_ = hf::hardwareConfig().ur3e.useUr3e;
+    use3dScanning_ = hf::hardwareConfig().ur3e.use3dScanning;
 
     stagePanel_ = std::make_unique<hf::stage::StagePanelController>(this);
-    if (useUr3e_)
+    if (use3dScanning_)
+    {
         ur3ePanel_ = std::make_unique<hf::ur3e::Ur3ePanelController>(this);
+        bfsPanel_ = std::make_unique<hf::bfs::BfsPanelController>(this);
+    }
     lightPanel_ = std::make_unique<hf::light::LightPanelController>(this);
     cameraPanel_ = std::make_unique<hf::camera::CameraPanelController>(this);
     settingsPanel_ = std::make_unique<hf::settings::UiSettingsController>(this);
@@ -215,10 +219,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 
     stagePanel_->initializeWorker();
     stagePanel_->wireSettingsTabConnections();
-    if (useUr3e_)
+    if (use3dScanning_)
     {
         ur3ePanel_->applyHardwareConfigToUi();
         ur3ePanel_->wireSettingsTabConnections();
+        bfsPanel_->initializeWorker();
+        bfsPanel_->wireSettingsTabConnections();
     }
     lightPanel_->initializeWorker();
 
@@ -233,7 +239,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
             appendLog(hf::log::Channel::App,
                       QStringLiteral("Session log file: %1").arg(sessionLog_.filePath()));
         }
-        if (useUr3e_ && ur3ePanel_ != nullptr)
+        if (use3dScanning_ && ur3ePanel_ != nullptr)
             ur3ePanel_->startSidecarOnLaunch();
     });
 
@@ -275,27 +281,10 @@ void MainWindow::onSettingsTabChanged(const int index)
     else if (ur3eSettingsTabIndex_ >= 0 && index == ur3eSettingsTabIndex_ && ur3ePanel_ != nullptr)
         ur3ePanel_->refreshUi();
 
-    if (streamTabs_ != nullptr && ur3eStreamTabIndex_ >= 0 && index == ur3eSettingsTabIndex_)
-    {
-        QSignalBlocker blocker(streamTabs_);
-        streamTabs_->setCurrentIndex(ur3eStreamTabIndex_);
-    }
-
     if (streamTabs_ != nullptr && streamTabs_->currentIndex() == captureStreamTabIndex_
         && cameraPanel_ != nullptr)
     {
         cameraPanel_->refreshWaterfallDisplayTargets();
-    }
-}
-
-void MainWindow::onStreamTabChanged(const int index)
-{
-    if (settingsTabs_ != nullptr && ur3eStreamTabIndex_ >= 0 && index == ur3eStreamTabIndex_)
-    {
-        QSignalBlocker blocker(settingsTabs_);
-        settingsTabs_->setCurrentIndex(ur3eSettingsTabIndex_);
-        if (ur3ePanel_ != nullptr)
-            ur3ePanel_->refreshUi();
     }
 }
 
@@ -341,10 +330,10 @@ QWidget *MainWindow::createStreamTabsPanel()
     streamTabs_->addTab(ui::CameraStreamTabBuilder::buildCameraStreamTab(
                             this, cameraPanel_->profileTabNameForUi(camera2Ui_), camera2Ui_, streamHooks),
                         cameraPanel_->profileTabNameForUi(camera2Ui_));
-    if (useUr3e_)
+    if (use3dScanning_)
     {
         ur3eStreamTabIndex_ = streamTabs_->count();
-        streamTabs_->addTab(createUr3eStreamTab(), QStringLiteral("UR3e"));
+        streamTabs_->addTab(createUr3eStreamTab(), QStringLiteral("3D Scanning"));
     }
     else
     {
@@ -352,8 +341,6 @@ QWidget *MainWindow::createStreamTabsPanel()
     }
     captureStreamTabIndex_ = streamTabs_->count();
     streamTabs_->addTab(capturePanel_->createStreamTab(), QStringLiteral("Capture"));
-
-    connect(streamTabs_, &QTabWidget::currentChanged, this, &MainWindow::onStreamTabChanged);
 
     layout->addWidget(streamTabs_, 1);
     return panel;
@@ -429,6 +416,17 @@ bool MainWindow::performGracefulShutdown()
         });
     }
 
+    // Release Spinnaker before stage/light/UR3e teardown so GigE camera is free on exit.
+    if (use3dScanning_ && bfsPanel_ != nullptr)
+    {
+        waitDialog.setStatusText(tr("Disconnecting BFS camera\u2026"));
+        QApplication::processEvents();
+        waitWithBusyDialog(waitDialog, [this]() {
+            if (bfsPanel_ != nullptr)
+                bfsPanel_->shutdownSync();
+        });
+    }
+
     if (stagePanel_ != nullptr)
     {
         if (isStageSessionActive())
@@ -455,7 +453,7 @@ bool MainWindow::performGracefulShutdown()
         });
     }
 
-    if (useUr3e_ && ur3ePanel_ != nullptr)
+    if (use3dScanning_ && ur3ePanel_ != nullptr)
     {
         if (ur3ePanel_->isRobotConnected())
         {

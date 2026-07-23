@@ -55,6 +55,30 @@ struct PersistedUr3eHemisphereScanSettings
     double thetaMaxDeg = 90.0;
 };
 
+struct PersistedBfsCameraSettings
+{
+    QString cameraId;
+    QString acquisitionMode = QStringLiteral("Continuous");
+    bool acquisitionFrameRateEnable = true;
+    double acquisitionFrameRateHz = 7.44;
+    int deviceLinkThroughputLimit = 94776971;
+    double evCompensation = 0.0;
+    QString exposureMode = QStringLiteral("Timed");
+    QString exposureAuto = QStringLiteral("Continuous");
+    double exposureTimeUs = 15005.0;
+    int exposureTimeLowerLimitMinUs = 100;
+    int exposureTimeLowerLimitMaxUs = 15000;
+    QString gainAuto = QStringLiteral("Continuous");
+    double gainDb = 16.9;
+    bool gammaEnable = true;
+    double gamma = 0.8;
+    QString blackLevelSelector = QStringLiteral("All");
+    double blackLevelPercent = 0.0;
+    QString balanceRatioSelector = QStringLiteral("Red");
+    double balanceRatio = 1.21;
+    QString balanceWhiteAuto = QStringLiteral("Continuous");
+};
+
 class AppSettingsStore
 {
 public:
@@ -74,6 +98,9 @@ public:
 
     static PersistedUr3eHemisphereScanSettings loadUr3eHemisphereScan();
     static void saveUr3eHemisphereScan(const PersistedUr3eHemisphereScanSettings &settings);
+
+    static PersistedBfsCameraSettings loadBfsCameraSettings();
+    static void saveBfsCameraSettings(const PersistedBfsCameraSettings &settings);
 
     static void sync();
 };

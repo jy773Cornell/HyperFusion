@@ -22,6 +22,22 @@ endif()
 
 set(LUMO_SDK_ROOT "${LUMO_SDK_ROOT}" CACHE PATH "Specim Lumo Sensor SDK root (include/, bin/x64/)")
 
+# Teledyne Spinnaker SDK (Blackfly S / BFS RGB). Override with -DSPINNAKER_ROOT=... or env.
+set(HF_DEFAULT_SPINNAKER_ROOT "C:/Program Files/Teledyne/Spinnaker")
+if(DEFINED ENV{SPINNAKER_ROOT} AND NOT "$ENV{SPINNAKER_ROOT}" STREQUAL "")
+    set(SPINNAKER_ROOT "$ENV{SPINNAKER_ROOT}")
+elseif(NOT SPINNAKER_ROOT)
+    set(SPINNAKER_ROOT "${HF_DEFAULT_SPINNAKER_ROOT}")
+endif()
+set(SPINNAKER_ROOT "${SPINNAKER_ROOT}" CACHE PATH "Teledyne Spinnaker SDK root (include/, lib64/vs2015/, bin64/vs2015/)")
+if(EXISTS "${SPINNAKER_ROOT}/include/Spinnaker.h")
+    set(HF_HAVE_SPINNAKER ON)
+    message(STATUS "Spinnaker SDK found at ${SPINNAKER_ROOT}")
+else()
+    set(HF_HAVE_SPINNAKER OFF)
+    message(STATUS "Spinnaker SDK not found (SPINNAKER_ROOT). BFS adapter will build as stub.")
+endif()
+
 # Zaber Motion Library (stage backend — optional until adapters/zaber is added).
 if(DEFINED ENV{ZML_ROOT} AND NOT "$ENV{ZML_ROOT}" STREQUAL "")
     set(ZML_ROOT "$ENV{ZML_ROOT}")
@@ -67,6 +83,7 @@ qt_add_executable(app WIN32
     src/frontend/controllers/UiSettingsController.cpp
     src/frontend/controllers/CapturePanelController.cpp
     src/frontend/controllers/Ur3ePanelController.cpp
+    src/frontend/controllers/BfsPanelController.cpp
     src/frontend/logging/AppLog.cpp
     src/frontend/logging/AppLogSession.cpp
     src/frontend/widgets/MainWindowTabHelpers.cpp
@@ -80,6 +97,7 @@ qt_add_executable(app WIN32
     src/frontend/widgets/Ur3eHemisphereScanPreviewWidget.cpp
     src/frontend/widgets/Ur3eStreamTab.cpp
     src/frontend/widgets/Ur3eSettingsTab.cpp
+    src/frontend/widgets/BfsCameraSettingsWidget.cpp
     src/frontend/widgets/CaptureSettingsTab.cpp
     src/frontend/streaming/FrameCoalescer.cpp
     src/frontend/streaming/CameraStreamPipeline.cpp
@@ -96,6 +114,7 @@ qt_add_executable(app WIN32
     include/frontend/widgets/Ur3eHemisphereScanSettingsWidget.hpp
     include/frontend/widgets/Ur3eHemisphereScanPreviewWidget.hpp
     include/frontend/widgets/Ur3eJointBarWidget.hpp
+    include/frontend/widgets/BfsCameraSettingsWidget.hpp
     include/frontend/widgets/LumoCameraUi.hpp
     include/frontend/widgets/WaterfallDisplayWidget.hpp
     include/frontend/widgets/StreamPaneHelpers.hpp
@@ -106,6 +125,7 @@ qt_add_executable(app WIN32
     include/frontend/controllers/UiSettingsController.hpp
     include/frontend/controllers/CapturePanelController.hpp
     include/frontend/controllers/Ur3ePanelController.hpp
+    include/frontend/controllers/BfsPanelController.hpp
     include/frontend/logging/AppLog.hpp
     include/frontend/logging/AppLogSession.hpp
     include/frontend/widgets/MainWindowTabHelpers.hpp
@@ -151,17 +171,20 @@ qt_add_executable(app WIN32
     src/backend/camera/processing/Gsam2RoiAnalysis.cpp
     src/backend/camera/processing/Gsam2SpectrumPlot.cpp
     src/backend/camera/processing/GsamWslPathUtil.cpp
-    src/backend/ur3e/Ur3eClient.cpp
-    src/backend/ur3e/Ur3eHemisphereScan.cpp
-    src/backend/ur3e/Ur3eHemisphereScanReachability.cpp
-    src/backend/ur3e/Ur3eWorkspaceBoundary.cpp
-    src/backend/ur3e/Ur3eMountTransform.cpp
-    src/backend/ur3e/Ur3eMoveItManager.cpp
-    src/backend/ur3e/Ur3eRvizManager.cpp
-    src/backend/ur3e/Ur3eServerManager.cpp
-    src/backend/ur3e/Ur3eWslSetup.cpp
-    src/backend/ur3e/Ur3eWslLogUtil.cpp
-    src/backend/ur3e/Ur3eWslPathUtil.cpp
+    src/backend/3dscanning/Ur3eClient.cpp
+    src/backend/3dscanning/Ur3eHemisphereScan.cpp
+    src/backend/3dscanning/Ur3eHemisphereScanReachability.cpp
+    src/backend/3dscanning/Ur3eWorkspaceBoundary.cpp
+    src/backend/3dscanning/Ur3eMountTransform.cpp
+    src/backend/3dscanning/Ur3eMoveItManager.cpp
+    src/backend/3dscanning/Ur3eRvizManager.cpp
+    src/backend/3dscanning/Ur3eServerManager.cpp
+    src/backend/3dscanning/Ur3eWslSetup.cpp
+    src/backend/3dscanning/Ur3eWslLogUtil.cpp
+    src/backend/3dscanning/Ur3eWslPathUtil.cpp
+    src/backend/3dscanning/BfsSpinnakerCamera.cpp
+    src/backend/3dscanning/BfsCameraWorker.cpp
+    src/backend/3dscanning/BfsTiffIo.cpp
     src/backend/camera/processing/IlluminantTables.cpp
     src/backend/camera/processing/ReferenceBuilder.cpp
     src/backend/camera/processing/EnviBilWriter.cpp
@@ -192,17 +215,21 @@ qt_add_executable(app WIN32
     include/backend/camera/processing/Gsam2RoiAnalysis.hpp
     include/backend/camera/processing/Gsam2SpectrumPlot.hpp
     include/backend/camera/processing/GsamWslPathUtil.hpp
-    include/backend/ur3e/Ur3eClient.hpp
-    include/backend/ur3e/Ur3eHemisphereScan.hpp
-    include/backend/ur3e/Ur3eHemisphereScanReachability.hpp
-    include/backend/ur3e/Ur3eWorkspaceBoundary.hpp
-    include/backend/ur3e/Ur3eMountTransform.hpp
-    include/backend/ur3e/Ur3eServerManager.hpp
-    include/backend/ur3e/Ur3eWslSetup.hpp
-    include/backend/ur3e/Ur3eMoveItManager.hpp
-    include/backend/ur3e/Ur3eRvizManager.hpp
-    include/backend/ur3e/Ur3eWslLogUtil.hpp
-    include/backend/ur3e/Ur3eWslPathUtil.hpp
+    include/backend/3dscanning/Ur3eClient.hpp
+    include/backend/3dscanning/Ur3eHemisphereScan.hpp
+    include/backend/3dscanning/Ur3eHemisphereScanReachability.hpp
+    include/backend/3dscanning/Ur3eWorkspaceBoundary.hpp
+    include/backend/3dscanning/Ur3eMountTransform.hpp
+    include/backend/3dscanning/Ur3eServerManager.hpp
+    include/backend/3dscanning/Ur3eWslSetup.hpp
+    include/backend/3dscanning/Ur3eMoveItManager.hpp
+    include/backend/3dscanning/Ur3eRvizManager.hpp
+    include/backend/3dscanning/Ur3eWslLogUtil.hpp
+    include/backend/3dscanning/Ur3eWslPathUtil.hpp
+    include/backend/3dscanning/BfsCameraTypes.hpp
+    include/backend/3dscanning/BfsSpinnakerCamera.hpp
+    include/backend/3dscanning/BfsCameraWorker.hpp
+    include/backend/3dscanning/BfsTiffIo.hpp
     include/backend/camera/processing/CapturePostProcessor.hpp
     include/backend/camera/processing/HfFusionRunner.hpp
     include/backend/camera/processing/HfFusionWorker.hpp
@@ -237,6 +264,35 @@ qt_add_executable(app WIN32
 )
 
 target_include_directories(app PRIVATE include)
+
+if(HF_HAVE_SPINNAKER)
+    target_compile_definitions(app PRIVATE HF_HAVE_SPINNAKER)
+    target_include_directories(app PRIVATE "${SPINNAKER_ROOT}/include")
+    find_library(SPINNAKER_LIB Spinnaker_v140
+        PATHS
+            "${SPINNAKER_ROOT}/lib64/vs2015"
+            "${SPINNAKER_ROOT}/lib64"
+        NO_DEFAULT_PATH)
+    if(SPINNAKER_LIB)
+        target_link_libraries(app PRIVATE "${SPINNAKER_LIB}")
+        message(STATUS "Linked Spinnaker library: ${SPINNAKER_LIB}")
+    else()
+        message(FATAL_ERROR "Spinnaker_v140.lib not found under ${SPINNAKER_ROOT}/lib64/vs2015")
+    endif()
+
+    set(_spinnaker_runtime_bin "${SPINNAKER_ROOT}/bin64/vs2015")
+    if(EXISTS "${_spinnaker_runtime_bin}")
+        file(GLOB _spinnaker_runtime_dlls "${_spinnaker_runtime_bin}/*.dll")
+        foreach(_spin_dll IN LISTS _spinnaker_runtime_dlls)
+            add_custom_command(
+                TARGET app POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_spin_dll}"
+                        "$<TARGET_FILE_DIR:app>"
+                COMMENT "Copying Spinnaker runtime DLL to output directory")
+        endforeach()
+    endif()
+endif()
 
 if(HF_HAVE_LUMO_SDK)
     target_compile_definitions(app PRIVATE HF_HAVE_LUMO_SDK)

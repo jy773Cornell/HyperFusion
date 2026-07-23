@@ -1,10 +1,10 @@
 // HTTP client for the UR3e WSL sidecar server (via wsl curl).
-#include "backend/ur3e/Ur3eClient.hpp"
+#include "backend/3dscanning/Ur3eClient.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
 #include "backend/camera/processing/GsamWslPathUtil.hpp"
-#include "backend/ur3e/Ur3eHemisphereScanReachability.hpp"
-#include "backend/ur3e/Ur3eWorkspaceBoundary.hpp"
+#include "backend/3dscanning/Ur3eHemisphereScanReachability.hpp"
+#include "backend/3dscanning/Ur3eWorkspaceBoundary.hpp"
 
 #include <QJsonArray>
 #include <QJsonDocument>

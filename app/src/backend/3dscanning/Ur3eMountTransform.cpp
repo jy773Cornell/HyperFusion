@@ -1,7 +1,7 @@
 // Stage / scene alignment from hyperfusion.cfg mount keys (backend layer).
-#include "backend/ur3e/Ur3eMountTransform.hpp"
+#include "backend/3dscanning/Ur3eMountTransform.hpp"
 
-#include "backend/ur3e/Ur3eHemisphereScanReachability.hpp"
+#include "backend/3dscanning/Ur3eHemisphereScanReachability.hpp"
 
 #include <cmath>
 

@@ -1,8 +1,8 @@
 // One-time UR3e WSL network setup (elevated PowerShell) and stale-process cleanup.
-#include "backend/ur3e/Ur3eWslSetup.hpp"
+#include "backend/3dscanning/Ur3eWslSetup.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/ur3e/Ur3eWslPathUtil.hpp"
+#include "backend/3dscanning/Ur3eWslPathUtil.hpp"
 
 #include <QDir>
 #include <QFileInfo>

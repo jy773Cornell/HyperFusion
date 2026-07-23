@@ -893,10 +893,10 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
             else
                 warnings.push_back(QStringLiteral("Unknown key in [fusion]: %1").arg(key));
         }
-        else if (section == QStringLiteral("ur3e"))
+        else if (section == QStringLiteral("3d scanning") || section == QStringLiteral("ur3e"))
         {
-            if (key == QStringLiteral("use_ur3e"))
-                config.ur3e.useUr3e =
+            if (key == QStringLiteral("use_3d_scanning") || key == QStringLiteral("use_ur3e"))
+                config.ur3e.use3dScanning =
                     value.trimmed().toLower() == QStringLiteral("true") || value.trimmed() == QStringLiteral("1")
                     || value.trimmed().toLower() == QStringLiteral("yes");
             else if (key == QStringLiteral("wsl_distro"))
@@ -1096,7 +1096,7 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 }
             }
             else
-                warnings.push_back(QStringLiteral("Unknown key in [ur3e]: %1").arg(key));
+                warnings.push_back(QStringLiteral("Unknown key in [3d scanning]: %1").arg(key));
         }
         else if (section.isEmpty())
         {
@@ -1231,9 +1231,10 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "fusion_margin_mm = 5.0\n"
         << "fusion_timeout_ms = 3600000\n"
         << "\n"
-        << "[ur3e]\n"
-        << "# Set use_ur3e = false to hide UR3e UI and skip WSL sidecar/driver.\n"
-        << "use_ur3e = true\n"
+        << "[3d scanning]\n"
+        << "# Set use_3d_scanning = false to hide 3D Scanning UI (UR3e + BFS) and skip WSL sidecar/driver.\n"
+        << "# Legacy section [ur3e] / key use_ur3e still accepted.\n"
+        << "use_3d_scanning = true\n"
         << "# UR3e WSL sidecar (ROS 2). See resources/ur3e/README.md.\n"
         << "wsl_distro = Ubuntu\n"
         << "wsl_bash_command = \n"

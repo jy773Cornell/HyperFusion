@@ -38,6 +38,7 @@ QWidget *MainWindow::createCaptureSettingsTab()
 
     auto *page = new QWidget();
     scrollArea->setWidget(page);
+    ui::applyWhiteSettingsScrollBackground(scrollArea);
 
     auto *layout = new QVBoxLayout(page);
     layout->setContentsMargins(0, 0, 0, 0);

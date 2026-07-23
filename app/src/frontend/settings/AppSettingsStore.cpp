@@ -141,6 +141,88 @@ void AppSettingsStore::saveUr3eHemisphereScan(const PersistedUr3eHemisphereScanS
     settings.setValue(QStringLiteral("ur3e/hemisphereScan/thetaMaxDeg"), scan.thetaMaxDeg);
 }
 
+PersistedBfsCameraSettings AppSettingsStore::loadBfsCameraSettings()
+{
+    QSettings &settings = storage();
+    const     PersistedBfsCameraSettings defaults;
+    PersistedBfsCameraSettings bfs;
+    bfs.cameraId = settings.value(QStringLiteral("bfs/cameraId"), defaults.cameraId).toString();
+    bfs.acquisitionMode =
+        settings.value(QStringLiteral("bfs/acquisitionMode"), defaults.acquisitionMode).toString();
+    bfs.acquisitionFrameRateEnable =
+        settings.value(QStringLiteral("bfs/acquisitionFrameRateEnable"),
+                       defaults.acquisitionFrameRateEnable)
+            .toBool();
+    bfs.acquisitionFrameRateHz =
+        settings.value(QStringLiteral("bfs/acquisitionFrameRateHz"), defaults.acquisitionFrameRateHz)
+            .toDouble();
+    bfs.deviceLinkThroughputLimit =
+        settings.value(QStringLiteral("bfs/deviceLinkThroughputLimit"),
+                       defaults.deviceLinkThroughputLimit)
+            .toInt();
+    bfs.evCompensation =
+        settings.value(QStringLiteral("bfs/evCompensation"), defaults.evCompensation).toDouble();
+    bfs.exposureMode =
+        settings.value(QStringLiteral("bfs/exposureMode"), defaults.exposureMode).toString();
+    bfs.exposureAuto =
+        settings.value(QStringLiteral("bfs/exposureAuto"), defaults.exposureAuto).toString();
+    bfs.exposureTimeUs =
+        settings.value(QStringLiteral("bfs/exposureTimeUs"), defaults.exposureTimeUs).toDouble();
+    bfs.exposureTimeLowerLimitMinUs =
+        settings.value(QStringLiteral("bfs/exposureTimeLowerLimitMinUs"),
+                       defaults.exposureTimeLowerLimitMinUs)
+            .toInt();
+    bfs.exposureTimeLowerLimitMaxUs =
+        settings.value(QStringLiteral("bfs/exposureTimeLowerLimitMaxUs"),
+                       defaults.exposureTimeLowerLimitMaxUs)
+            .toInt();
+    bfs.gainAuto = settings.value(QStringLiteral("bfs/gainAuto"), defaults.gainAuto).toString();
+    bfs.gainDb = settings.value(QStringLiteral("bfs/gainDb"), defaults.gainDb).toDouble();
+    bfs.gammaEnable =
+        settings.value(QStringLiteral("bfs/gammaEnable"), defaults.gammaEnable).toBool();
+    bfs.gamma = settings.value(QStringLiteral("bfs/gamma"), defaults.gamma).toDouble();
+    bfs.blackLevelSelector =
+        settings.value(QStringLiteral("bfs/blackLevelSelector"), defaults.blackLevelSelector)
+            .toString();
+    bfs.blackLevelPercent =
+        settings.value(QStringLiteral("bfs/blackLevelPercent"), defaults.blackLevelPercent).toDouble();
+    bfs.balanceRatioSelector =
+        settings.value(QStringLiteral("bfs/balanceRatioSelector"), defaults.balanceRatioSelector)
+            .toString();
+    bfs.balanceRatio =
+        settings.value(QStringLiteral("bfs/balanceRatio"), defaults.balanceRatio).toDouble();
+    bfs.balanceWhiteAuto =
+        settings.value(QStringLiteral("bfs/balanceWhiteAuto"), defaults.balanceWhiteAuto).toString();
+    return bfs;
+}
+
+void AppSettingsStore::saveBfsCameraSettings(const PersistedBfsCameraSettings &bfs)
+{
+    QSettings &settings = storage();
+    settings.setValue(QStringLiteral("bfs/cameraId"), bfs.cameraId);
+    settings.setValue(QStringLiteral("bfs/acquisitionMode"), bfs.acquisitionMode);
+    settings.setValue(QStringLiteral("bfs/acquisitionFrameRateEnable"), bfs.acquisitionFrameRateEnable);
+    settings.setValue(QStringLiteral("bfs/acquisitionFrameRateHz"), bfs.acquisitionFrameRateHz);
+    settings.setValue(QStringLiteral("bfs/deviceLinkThroughputLimit"), bfs.deviceLinkThroughputLimit);
+    settings.setValue(QStringLiteral("bfs/evCompensation"), bfs.evCompensation);
+    settings.setValue(QStringLiteral("bfs/exposureMode"), bfs.exposureMode);
+    settings.setValue(QStringLiteral("bfs/exposureAuto"), bfs.exposureAuto);
+    settings.setValue(QStringLiteral("bfs/exposureTimeUs"), bfs.exposureTimeUs);
+    settings.setValue(QStringLiteral("bfs/exposureTimeLowerLimitMinUs"),
+                      bfs.exposureTimeLowerLimitMinUs);
+    settings.setValue(QStringLiteral("bfs/exposureTimeLowerLimitMaxUs"),
+                      bfs.exposureTimeLowerLimitMaxUs);
+    settings.setValue(QStringLiteral("bfs/gainAuto"), bfs.gainAuto);
+    settings.setValue(QStringLiteral("bfs/gainDb"), bfs.gainDb);
+    settings.setValue(QStringLiteral("bfs/gammaEnable"), bfs.gammaEnable);
+    settings.setValue(QStringLiteral("bfs/gamma"), bfs.gamma);
+    settings.setValue(QStringLiteral("bfs/blackLevelSelector"), bfs.blackLevelSelector);
+    settings.setValue(QStringLiteral("bfs/blackLevelPercent"), bfs.blackLevelPercent);
+    settings.setValue(QStringLiteral("bfs/balanceRatioSelector"), bfs.balanceRatioSelector);
+    settings.setValue(QStringLiteral("bfs/balanceRatio"), bfs.balanceRatio);
+    settings.setValue(QStringLiteral("bfs/balanceWhiteAuto"), bfs.balanceWhiteAuto);
+}
+
 void AppSettingsStore::saveCameraSettings(const std::size_t cameraIndex,
                                           const PersistedCameraSettings &camera)
 {

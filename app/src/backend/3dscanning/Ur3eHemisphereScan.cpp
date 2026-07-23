@@ -1,5 +1,5 @@
 // Hemisphere scan grid for UR3e sample-tray dome (backend layer).
-#include "backend/ur3e/Ur3eHemisphereScan.hpp"
+#include "backend/3dscanning/Ur3eHemisphereScan.hpp"
 
 #include <algorithm>
 #include <cmath>

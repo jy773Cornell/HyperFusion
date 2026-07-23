@@ -1,10 +1,10 @@
 // WSL UR3e HTTP server lifecycle manager (QProcess sidecar).
-#include "backend/ur3e/Ur3eServerManager.hpp"
+#include "backend/3dscanning/Ur3eServerManager.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/ur3e/Ur3eClient.hpp"
-#include "backend/ur3e/Ur3eWslLogUtil.hpp"
-#include "backend/ur3e/Ur3eWslPathUtil.hpp"
+#include "backend/3dscanning/Ur3eClient.hpp"
+#include "backend/3dscanning/Ur3eWslLogUtil.hpp"
+#include "backend/3dscanning/Ur3eWslPathUtil.hpp"
 
 #include <QMetaObject>
 #include <QTimer>
@@ -325,7 +325,7 @@ void Ur3eServerManager::launchServerProcess()
 
 void Ur3eServerManager::tryAutoStart()
 {
-    if (!hf::hardwareConfig().ur3e.useUr3e)
+    if (!hf::hardwareConfig().ur3e.use3dScanning)
         return;
 
     if (state_ == State::Starting || state_ == State::Running)
@@ -342,7 +342,7 @@ void Ur3eServerManager::tryAutoStart()
 
 void Ur3eServerManager::startServer()
 {
-    if (!hf::hardwareConfig().ur3e.useUr3e)
+    if (!hf::hardwareConfig().ur3e.use3dScanning)
         return;
 
     if (state_ == State::Starting || state_ == State::Running)

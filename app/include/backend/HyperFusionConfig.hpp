@@ -103,8 +103,8 @@ struct HardwareConfig
 
     struct Ur3eConfig
     {
-        /// When false, UR3e tabs and WSL sidecar/driver are disabled.
-        bool useUr3e = true;
+        /// When false, 3D Scanning tabs (UR3e + BFS) and WSL sidecar/driver are disabled.
+        bool use3dScanning = true;
         QString wslDistro = QStringLiteral("Ubuntu");
         QString wslBashCommand;
         QString ur3eRepoLinux;
