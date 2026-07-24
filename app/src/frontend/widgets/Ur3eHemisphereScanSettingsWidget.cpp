@@ -7,6 +7,7 @@
 
 #include "frontend/settings/AppSettingsStore.hpp"
 
+#include <QCheckBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -25,7 +26,7 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
   layout->setContentsMargins(0, 0, 0, 0);
   layout->setSpacing(6);
 
-  auto *group = new QGroupBox(QStringLiteral("Scanning route"), this);
+  auto *group = new QGroupBox(QStringLiteral("Scanning"), this);
   auto *form = new QFormLayout(group);
 
   sphereRadiusSpin_ = new QDoubleSpinBox(group);
@@ -84,6 +85,13 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
   thetaLayout->addWidget(thetaMaxSpin_);
   form->addRow(QStringLiteral("Theta range"), thetaRow);
 
+  rememberLastPlanCheck_ = new QCheckBox(QStringLiteral("Remember last plan"), group);
+  rememberLastPlanCheck_->setChecked(true);
+  rememberLastPlanCheck_->setToolTip(
+      QStringLiteral("Save Plan results beside the app and reload on startup when "
+                     "hyperfusion.cfg robot geometry and these scan parameters are unchanged."));
+  form->addRow(QStringLiteral(""), rememberLastPlanCheck_);
+
   planBtn_ = new QPushButton(QStringLiteral("Plan"), group);
   planBtn_->setToolTip(
       QStringLiteral("Generate the scan grid and check each pose with MoveIt IK + collision."));
@@ -114,6 +122,9 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
           hook);
   connect(thetaMaxSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
           hook);
+  connect(rememberLastPlanCheck_, &QCheckBox::toggled, this, [this](bool) {
+    saveToSettings();
+  });
   connect(planBtn_, &QPushButton::clicked, this,
           [this]() { emit planScanRequested(); });
   connect(executeBtn_, &QPushButton::clicked, this,
@@ -134,12 +145,14 @@ void Ur3eHemisphereScanSettingsWidget::loadFromSettings()
     const QSignalBlocker blockVertical(verticalPointsSpin_);
     const QSignalBlocker blockThetaMin(thetaMinSpin_);
     const QSignalBlocker blockThetaMax(thetaMaxSpin_);
+    const QSignalBlocker blockRemember(rememberLastPlanCheck_);
 
     sphereRadiusSpin_->setValue(saved.sphereRadiusMm);
     horizontalPointsSpin_->setValue(saved.horizontalPoints);
     verticalPointsSpin_->setValue(saved.verticalPoints);
     thetaMinSpin_->setValue(saved.thetaMinDeg);
     thetaMaxSpin_->setValue(saved.thetaMaxDeg);
+    rememberLastPlanCheck_->setChecked(saved.rememberLastPlan);
 }
 
 void Ur3eHemisphereScanSettingsWidget::saveToSettings() const
@@ -150,6 +163,8 @@ void Ur3eHemisphereScanSettingsWidget::saveToSettings() const
     saved.verticalPoints = verticalPointsSpin_->value();
     saved.thetaMinDeg = thetaMinSpin_->value();
     saved.thetaMaxDeg = thetaMaxSpin_->value();
+    saved.rememberLastPlan =
+        rememberLastPlanCheck_ != nullptr && rememberLastPlanCheck_->isChecked();
     AppSettingsStore::saveUr3eHemisphereScan(saved);
 }
 
@@ -189,6 +204,11 @@ Ur3eHemisphereScanSettingsWidget::params() const {
   scanParams.thetaMaxDeg = thetaMaxSpin_->value();
   hf::ur3e::clampHemisphereScanParamsToBoundary(scanParams, boundaryLimits_);
   return scanParams;
+}
+
+bool Ur3eHemisphereScanSettingsWidget::rememberLastPlan() const
+{
+    return rememberLastPlanCheck_ != nullptr && rememberLastPlanCheck_->isChecked();
 }
 
 void Ur3eHemisphereScanSettingsWidget::setPlanEnabled(const bool enabled) {

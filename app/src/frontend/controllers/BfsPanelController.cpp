@@ -11,14 +11,15 @@
 
 #include <QDateTime>
 #include <QFileDialog>
+#include <QFont>
 #include <QImage>
 #include <QLabel>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QPainter>
 #include <QPixmap>
 #include <QPushButton>
 #include <QSizePolicy>
-#include <QTabWidget>
 
 #include <string>
 
@@ -111,7 +112,10 @@ void BfsPanelController::shutdownSync()
         pendingFrame_.reset();
         frameFlushQueued_ = false;
     }
-    lastFrame_.reset();
+    {
+        std::lock_guard<std::mutex> lock(lastFrameMutex_);
+        lastFrame_.reset();
+    }
     updatePreviewDisconnected();
 
     if (host_ != nullptr && host_->bfsCameraSettings_ != nullptr)
@@ -156,6 +160,14 @@ BfsCameraSettings BfsPanelController::settingsFromUi() const
     return host_->bfsCameraSettings_->currentSettings();
 }
 
+bool BfsPanelController::isCameraConnected() const
+{
+    if (worker_ == nullptr)
+        return false;
+    const BfsCameraState state = worker_->currentState();
+    return state == BfsCameraState::Connected || state == BfsCameraState::Streaming;
+}
+
 void BfsPanelController::onRefreshClicked()
 {
     if (worker_ == nullptr)
@@ -191,15 +203,27 @@ void BfsPanelController::onDisconnectClicked()
     worker_->requestDisconnect();
 }
 
+bool BfsPanelController::tryCopyLastFrame(BfsRgbFrame &out) const
+{
+    std::lock_guard<std::mutex> lock(lastFrameMutex_);
+    if (!lastFrame_.has_value() || lastFrame_->width <= 0 || lastFrame_->height <= 0
+        || lastFrame_->rgb.size()
+               < static_cast<std::size_t>(lastFrame_->width)
+                     * static_cast<std::size_t>(lastFrame_->height) * 3u)
+    {
+        return false;
+    }
+    out = *lastFrame_;
+    return true;
+}
+
 void BfsPanelController::onCaptureClicked()
 {
     if (host_ == nullptr)
         return;
 
-    if (!lastFrame_.has_value() || lastFrame_->width <= 0 || lastFrame_->height <= 0
-        || lastFrame_->rgb.size()
-               < static_cast<std::size_t>(lastFrame_->width)
-                     * static_cast<std::size_t>(lastFrame_->height) * 3u)
+    BfsRgbFrame frame;
+    if (!tryCopyLastFrame(frame))
     {
         QMessageBox::warning(host_, QStringLiteral("BFS Capture"),
                              QStringLiteral("No streamed frame available to save."));
@@ -222,10 +246,10 @@ void BfsPanelController::onCaptureClicked()
         path += QStringLiteral(".tif");
 
     const std::string error = saveRgb8AsTiff(path,
-                                             lastFrame_->width,
-                                             lastFrame_->height,
-                                             lastFrame_->rgb.data(),
-                                             lastFrame_->rgb.size());
+                                             frame.width,
+                                             frame.height,
+                                             frame.rgb.data(),
+                                             frame.rgb.size());
     if (!error.empty())
     {
         const QString detail = QString::fromStdString(error);
@@ -249,13 +273,6 @@ void BfsPanelController::onSettingsEdited()
     worker_->requestApplySettings(settingsFromUi());
 }
 
-void BfsPanelController::focusBfsStreamTab()
-{
-    if (host_ == nullptr || host_->streamTabs_ == nullptr || host_->ur3eStreamTabIndex_ < 0)
-        return;
-    host_->streamTabs_->setCurrentIndex(host_->ur3eStreamTabIndex_);
-}
-
 void BfsPanelController::onStateChanged(const BfsCameraState state)
 {
     if (host_->bfsCameraSettings_ == nullptr)
@@ -266,16 +283,20 @@ void BfsPanelController::onStateChanged(const BfsCameraState state)
     host_->bfsCameraSettings_->setConnectedUi(connected);
     host_->bfsCameraSettings_->setConnectionStatus(stateLabel(state));
 
-    if (state == BfsCameraState::Streaming)
-        focusBfsStreamTab();
-
     if (!connected)
     {
-        lastFrame_.reset();
+        {
+            std::lock_guard<std::mutex> lock(lastFrameMutex_);
+            lastFrame_.reset();
+        }
+        streamFps_.reset();
         updatePreviewDisconnected();
         if (host_->bfsCameraSettings_ != nullptr)
             host_->bfsCameraSettings_->setCaptureEnabled(false);
     }
+
+    if (host_->capturePanel() != nullptr)
+        host_->capturePanel()->updateCamerasList();
 
     host_->appendLog(hf::log::Channel::Ur3e, QStringLiteral("BFS: %1").arg(stateLabel(state)));
 }
@@ -315,6 +336,7 @@ void BfsPanelController::onDevices(const std::vector<BfsDeviceInfo> &devices)
 
 void BfsPanelController::queueFrame(BfsRgbFrame frame)
 {
+    streamFps_.noteFrame();
     bool scheduleFlush = false;
     {
         std::lock_guard<std::mutex> lock(pendingFrameMutex_);
@@ -349,15 +371,17 @@ void BfsPanelController::flushPendingFrame()
         frameFlushQueued_ = false;
     }
     showFrameOnPreview(frame);
-    lastFrame_ = std::move(frame);
+    {
+        std::lock_guard<std::mutex> lock(lastFrameMutex_);
+        lastFrame_ = std::move(frame);
+    }
     if (host_->bfsCameraSettings_ != nullptr)
         host_->bfsCameraSettings_->setCaptureEnabled(true);
 }
 
 void BfsPanelController::showFrameOnPreview(const BfsRgbFrame &frame)
 {
-    if (host_ == nullptr || host_->ur3eRgbPreviewLabel_ == nullptr || frame.width <= 0
-        || frame.height <= 0
+    if (host_ == nullptr || frame.width <= 0 || frame.height <= 0
         || frame.rgb.size()
                < static_cast<std::size_t>(frame.width) * static_cast<std::size_t>(frame.height) * 3u)
         return;
@@ -368,33 +392,64 @@ void BfsPanelController::showFrameOnPreview(const BfsRgbFrame &frame)
                  frame.width * 3,
                  QImage::Format_RGB888);
     const QImage owned = image.copy();
+    const double fps = streamFps_.fps();
 
-    QLabel *label = host_->ur3eRgbPreviewLabel_;
-    label->setText(QString());
-    label->setWordWrap(false);
-    label->setAlignment(Qt::AlignCenter);
-    label->setMinimumSize(1, 1);
-    label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    const auto paintLabel = [&owned, fps](QLabel *label) {
+        if (label == nullptr)
+            return;
+        label->setText(QString());
+        label->setWordWrap(false);
+        label->setAlignment(Qt::AlignCenter);
+        label->setMinimumSize(1, 1);
+        label->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 
-    const QSize target = label->contentsRect().size();
-    if (target.width() > 1 && target.height() > 1)
-    {
-        label->setPixmap(QPixmap::fromImage(
-            owned.scaled(target, Qt::KeepAspectRatio, Qt::FastTransformation)));
-    }
-    else
-    {
-        label->setPixmap(QPixmap::fromImage(owned));
-    }
+        const QSize target = label->contentsRect().size();
+        if (target.width() <= 1 || target.height() <= 1)
+        {
+            label->setPixmap(QPixmap::fromImage(owned));
+            return;
+        }
+
+        QPixmap canvas(target);
+        canvas.fill(QColor(0x11, 0x11, 0x11));
+
+        const QPixmap framePm = QPixmap::fromImage(
+            owned.scaled(target, Qt::KeepAspectRatio, Qt::FastTransformation));
+        const QPoint origin((target.width() - framePm.width()) / 2,
+                            (target.height() - framePm.height()) / 2);
+
+        QPainter painter(&canvas);
+        painter.drawPixmap(origin, framePm);
+
+        if (fps > 0.0)
+        {
+            QFont font = painter.font();
+            font.setBold(true);
+            font.setPointSize(10);
+            painter.setFont(font);
+            painter.setPen(QColor(0xcc, 0xcc, 0xcc));
+            painter.drawText(QRect(8, 8, target.width() - 16, 24),
+                             Qt::AlignTop | Qt::AlignLeft,
+                             QStringLiteral("%1 fps").arg(fps, 0, 'f', 1));
+        }
+
+        label->setPixmap(canvas);
+    };
+
+    paintLabel(host_->ur3eRgbPreviewLabel_);
+    if (host_->capturePanel() != nullptr && host_->capturePanel()->isBfsCaptureSelected())
+        paintLabel(host_->captureBfsPreviewLabel_);
 }
 
 void BfsPanelController::updatePreviewDisconnected()
 {
-    if (host_->ur3eRgbPreviewLabel_ == nullptr)
-        return;
-    host_->ur3eRgbPreviewLabel_->setPixmap(QPixmap());
-    ui::setPreviewDisconnectedText(host_->ur3eRgbPreviewLabel_,
-                                   QStringLiteral("stream"),
-                                   QStringLiteral("BFS"));
+    const auto clearLabel = [](QLabel *label) {
+        if (label == nullptr)
+            return;
+        label->setPixmap(QPixmap());
+        ui::setPreviewDisconnectedText(label, QStringLiteral("stream"), QStringLiteral("BFS"));
+    };
+    clearLabel(host_->ur3eRgbPreviewLabel_);
+    clearLabel(host_->captureBfsPreviewLabel_);
 }
 } // namespace hf::bfs

@@ -25,6 +25,14 @@ namespace hf::ur3e
 class Ur3eMoveItManager;
 class Ur3eRvizManager;
 
+struct HemisphereScanExecuteOptions
+{
+    /// Empty = motion-only (UR3e Execute / Capture Preview). Non-empty = save BFS stills.
+    QString captureOutputDir;
+    /// Dwell after arriving at each pin before optional capture (ms).
+    int stabilizeMs = 2000;
+};
+
 class Ur3ePanelController : public QObject
 {
     Q_OBJECT
@@ -42,6 +50,18 @@ public:
 
     [[nodiscard]] bool isRobotConnected() const { return robotConnected_; }
     [[nodiscard]] bool isSidecarRunning() const;
+    /// True when a hemisphere scan plan exists with at least one reachable pose.
+    [[nodiscard]] bool isScanPlanReady() const;
+    [[nodiscard]] bool isScanExecuting() const { return scanExecuting_; }
+
+    /// Start hemisphere execute. Returns false if rejected (busy / no plan / already running).
+    bool startHemisphereScanExecute(const HemisphereScanExecuteOptions &options = {});
+    void requestStopMotion();
+
+signals:
+    void hemisphereScanExecuteFinished(bool ok,
+                                       const QString &detail,
+                                       int capturedFrameCount);
 
 public slots:
     void onSidecarStateChanged(Ur3eServerManager::State state, const QString &detail);
@@ -131,7 +151,9 @@ private slots:
     void scanExecuteFinish(bool ok,
                            const QString &errorMessage,
                            int executedCount,
-                           bool stopped);
+                           bool stopped,
+                           int capturedFrameCount = 0,
+                           qint64 elapsedMs = 0);
     void applyPolledJoints(const QVariantList &positionsRad, const QStringList &names);
     void syncHomeJointTargetSliders();
 
@@ -141,7 +163,14 @@ private:
     void finishMove(bool ok, const QString &detail);
     void finishStop(bool ok, const QString &detail);
     void finishScanPlan(const Ur3eHemisphereScanPlan &plan, const QString &errorMessage);
-    void finishScanExecute(bool ok, const QString &detail);
+    void finishScanExecute(bool ok,
+                           const QString &detail,
+                           int capturedFrameCount,
+                           int successfulPins = 0,
+                           qint64 elapsedMs = 0,
+                           bool stopped = false);
+    void tryLoadCachedScanPlan();
+    void saveCachedScanPlan() const;
 
     void dismissConnectWaitDialog();
     void applyConnectAsyncStatus(const Ur3eConnectAsyncStatus &status);
@@ -158,7 +187,7 @@ private:
     static constexpr int kConnectPollIntervalMs = 1500;
     static constexpr int kDriverReadyPollIntervalMs = 2000;
     static constexpr int kBoundarySyncIntervalMs = 5000;
-    static constexpr int kScanExecuteDwellMs = 2000;
+    static constexpr int kScanCaptureStabilizeMs = 500;
 
     MainWindow *host_ = nullptr;
     std::unique_ptr<Ur3eServerManager> serverManager_;

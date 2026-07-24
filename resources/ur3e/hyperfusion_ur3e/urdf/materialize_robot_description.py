@@ -10,6 +10,7 @@ from hyperfusion_ur3e.urdf.mount_config import MountConfig
 from hyperfusion_ur3e.urdf.tool_payload_config import (
     TOOL_PAYLOAD_LINK,
     ToolPayloadConfig,
+    ToolTcpConfig,
     robot_description_has_tool_payload,
 )
 
@@ -81,6 +82,7 @@ def materialize_runtime_robot_description(
     """Run xacro once and write the URDF file the driver will publish."""
     if cfg is None:
         cfg = ToolPayloadConfig.from_env()
+    tcp = ToolTcpConfig.from_env()
 
     pkg_root = pkg_root.resolve()
     out_path = pkg_root / "config" / RUNTIME_URDF_NAME
@@ -130,8 +132,12 @@ def materialize_runtime_robot_description(
         f"tool_payload_enabled:={payload_enabled} "
         f"tool_payload_shape:={cfg.shape} "
         f"tool_payload_radius_m:={cfg.radius_m:.6f} "
+        f"tool_payload_mesh_file:={cfg.mesh_file} "
         f"tool_payload_collision_gap_m:={cfg.collision_gap_m:.6f} "
-        f"tool_payload_mesh_dir:='{mesh_dir}'"
+        f"tool_payload_mesh_dir:='{mesh_dir}' "
+        f"tool_tcp_x_m:={tcp.x_m:.6f} "
+        f"tool_tcp_y_m:={tcp.y_m:.6f} "
+        f"tool_tcp_z_m:={tcp.z_m:.6f}"
     )
     proc = subprocess.run(
         ["bash", "-lc", cmd],
@@ -148,14 +154,19 @@ def materialize_runtime_robot_description(
 
     urdf_text = _abs_mesh_uris_to_file_urls(proc.stdout)
     out_path.write_text(urdf_text, encoding="utf-8")
-    if cfg.enabled and not robot_description_has_tool_payload(urdf_text, expect_shape=cfg.shape):
+    if cfg.enabled and not robot_description_has_tool_payload(
+        urdf_text, expect_shape=cfg.shape, mesh_file=cfg.mesh_file
+    ):
         raise RuntimeError(
             f"Materialized URDF at {out_path} is missing '{TOOL_PAYLOAD_LINK}'."
         )
 
     os.environ["HYPERFUSION_GENERATED_URDF"] = out_path.as_posix()
+    tcp.apply_to_environ()
     sys.stderr.write(
         "UR3e driver: materialized robot_description "
-        f"({cfg.shape}, {cfg.radius_m * 1000.0:.0f} mm) -> {out_path.as_posix()}\n"
+        f"({cfg.shape}, {cfg.radius_m * 1000.0:.0f} mm, "
+        f"tcp=({tcp.x_m * 1000.0:.3f},{tcp.y_m * 1000.0:.3f},{tcp.z_m * 1000.0:.3f}) mm) "
+        f"-> {out_path.as_posix()}\n"
     )
     return out_path

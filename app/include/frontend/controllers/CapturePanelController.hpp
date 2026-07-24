@@ -72,6 +72,8 @@ public:
         SampleScan,
         /// Single stage pass: white ref then sample windows per camera (dual or single).
         CombinedRecordScan,
+        /// Absolute move to sample_3d_scanning_position_mm before hemisphere BFS capture.
+        MoveTo3dScanningPosition,
     };
 
     enum class CaptureRecorderMode
@@ -104,6 +106,9 @@ public:
     void updateDualCameraSyncControls();
     void updateScanningSpeedControls();
     void updateCaptureStreamLayout();
+    /// @param source Checkbox that changed (BFS or 3D RGB), or nullptr for availability refresh.
+    void syncBfsAnd3dRgbCaptureControls(QObject *source = nullptr);
+    [[nodiscard]] bool isBfsCaptureSelected() const;
     [[nodiscard]] bool isCaptureStreamWaterfallVisible(std::size_t cameraIndex) const;
     [[nodiscard]] bool dualCameraScanSyncActive() const;
     [[nodiscard]] bool shouldLockSwir3ForDualSync() const;
@@ -187,6 +192,14 @@ private:
                                   CaptureScanPhase capturePhaseOnMoveStart = CaptureScanPhase::Idle);
     void onCaptureRelativeScanComplete();
     void completeCaptureSequence();
+    void begin3dScanningCapturePhase();
+    void on3dScanningCaptureFinished(bool ok, const QString &detail, int capturedFrameCount);
+    void finishCaptureSequenceAfterOptional3d();
+    [[nodiscard]] bool is3dRgbCaptureSelected() const;
+    [[nodiscard]] bool canRun3dRgbCapture() const;
+    [[nodiscard]] bool hasHsiCaptureSelection() const;
+    [[nodiscard]] QString capture3dScanningOutputDir() const;
+    bool begin3dOnlyDatasetSession(QString &errorMessage);
     void runCapturePostProcessingIfEnabled();
     void failCaptureSequence(const QString &message);
     void setSelectedCameraShutters(bool open);
@@ -288,6 +301,11 @@ private:
     std::array<int, 2> lastPreviewCompleteSampleFrames_ = {0, 0};
     std::vector<std::size_t> lastPreviewCompleteCameraIndices_;
     bool applyingDualCameraScanSync_ = false;
+    bool syncingBfs3dSelection_ = false;
+    bool capture3dPending_ = false;
+    bool capture3dOnlySession_ = false;
+    bool capture3dInProgress_ = false;
+    QString capture3dSessionDirectory_;
     bool dualCameraScanSyncHardwareApplied_ = false;
     bool dualCameraSyncHardwareApplyPending_ = false;
     double lastAppliedSwir3SyncFrameRateHz_ = -1.0;

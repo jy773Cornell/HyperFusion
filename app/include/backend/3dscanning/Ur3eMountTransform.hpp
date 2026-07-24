@@ -27,4 +27,12 @@ struct Ur3eMountTransform
     void transformTcpPose(Ur3eScanTcpPose &tcp) const;
 };
 
+/// Fill toolZ* and rotvec on *tcp* from look-at axis (tool +Z).
+/// When *lockCameraUpWorldZ*, image-up ≈ *up* projected ⊥ look-at (OpenCV Y-down).
+void orientScanTcpFromToolZ(Ur3eScanTcpPose &tcp,
+                            bool lockCameraUpWorldZ,
+                            double upX = 0.0,
+                            double upY = 0.0,
+                            double upZ = 1.0);
+
 } // namespace hf::ur3e

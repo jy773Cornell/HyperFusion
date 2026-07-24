@@ -53,19 +53,24 @@
   <xacro:arg name="mount_y_m" default="0"/>
   <!-- Tool payload placeholder (camera / sensor envelope for MoveIt collision). -->
   <xacro:arg name="tool_payload_enabled" default="true"/>
-  <xacro:arg name="tool_payload_shape" default="hemisphere"/>
-  <xacro:arg name="tool_payload_radius_m" default="0.10"/>
+  <xacro:arg name="tool_payload_shape" default="mesh"/>
+  <xacro:arg name="tool_payload_radius_m" default="0.077"/>
   <xacro:arg name="tool_payload_box_x_m" default="0.08"/>
   <xacro:arg name="tool_payload_box_y_m" default="0.06"/>
   <xacro:arg name="tool_payload_box_z_m" default="0.06"/>
   <xacro:arg name="tool_payload_x_m" default="0"/>
   <xacro:arg name="tool_payload_y_m" default="0"/>
   <xacro:arg name="tool_payload_z_m" default="0"/>
-  <xacro:arg name="tool_payload_collision_gap_m" default="0.002"/>
+  <xacro:arg name="tool_payload_collision_gap_m" default="0.0"/>
   <xacro:arg name="tool_payload_mesh_dir" default="meshes/"/>
+  <xacro:arg name="tool_payload_mesh_file" default="ur_bfs_tool_payload.stl"/>
   <xacro:arg name="tool_payload_roll_rad" default="0"/>
   <xacro:arg name="tool_payload_pitch_rad" default="0"/>
   <xacro:arg name="tool_payload_yaw_rad" default="0"/>
+  <!-- Optical TCP (BFS sensor face centroid) in tool0 metres. -->
+  <xacro:arg name="tool_tcp_x_m" default="0"/>
+  <xacro:arg name="tool_tcp_y_m" default="-0.056035"/>
+  <xacro:arg name="tool_tcp_z_m" default="0.020"/>
   <xacro:property name="hf_pi" value="3.14159265358979323846"/>
 
   <xacro:property name="initial_positions_file" default="$(arg initial_positions_file)"/>
@@ -130,6 +135,7 @@
       shape="$(arg tool_payload_shape)"
       radius_m="$(arg tool_payload_radius_m)"
       mesh_dir="$(arg tool_payload_mesh_dir)"
+      mesh_file="$(arg tool_payload_mesh_file)"
       collision_gap_m="$(arg tool_payload_collision_gap_m)"
       box_x_m="$(arg tool_payload_box_x_m)"
       box_y_m="$(arg tool_payload_box_y_m)"
@@ -142,5 +148,23 @@
       origin_yaw_rad="$(arg tool_payload_yaw_rad)"
     />
   </xacro:if>
+
+  <!-- Scan / MoveIt tip: BFS sensor-face centroid (same +Z as tool0). -->
+  <link name="$(arg tf_prefix)hyperfusion_tcp">
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
+      <geometry>
+        <sphere radius="0.004"/>
+      </geometry>
+      <material name="hyperfusion_tcp_marker">
+        <color rgba="1.0 0.25 0.1 0.95"/>
+      </material>
+    </visual>
+  </link>
+  <joint name="$(arg tf_prefix)tool0-hyperfusion_tcp" type="fixed">
+    <parent link="$(arg tf_prefix)tool0"/>
+    <child link="$(arg tf_prefix)hyperfusion_tcp"/>
+    <origin xyz="$(arg tool_tcp_x_m) $(arg tool_tcp_y_m) $(arg tool_tcp_z_m)" rpy="0 0 0"/>
+  </joint>
 
 </robot>

@@ -53,6 +53,8 @@ struct PersistedUr3eHemisphereScanSettings
     int verticalPoints = 5;
     double thetaMinDeg = 30.0;
     double thetaMaxDeg = 90.0;
+    /// Persist last MoveIt plan beside app.exe and reload on start if cfg fingerprint matches.
+    bool rememberLastPlan = true;
 };
 
 struct PersistedBfsCameraSettings

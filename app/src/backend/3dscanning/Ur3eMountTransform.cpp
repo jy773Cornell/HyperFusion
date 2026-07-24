@@ -132,35 +132,85 @@ void Ur3eMountTransform::transformTcpPose(Ur3eScanTcpPose &tcp) const
     transformPoint(tcp.xM, tcp.yM, tcp.zM);
     transformVector(tcp.toolZMx, tcp.toolZMy, tcp.toolZMz);
 
-    double toolZX = tcp.toolZMx;
-    double toolZY = tcp.toolZMy;
-    double toolZZ = tcp.toolZMz;
-    if (!normalizeVector(toolZX, toolZY, toolZZ))
+    double upX = 0.0;
+    double upY = 0.0;
+    double upZ = 1.0;
+    transformVector(upX, upY, upZ);
+    orientScanTcpFromToolZ(tcp,
+                           hf::hardwareConfig().ur3e.scanCameraUpWorldZ,
+                           upX,
+                           upY,
+                           upZ);
+}
+
+void orientScanTcpFromToolZ(Ur3eScanTcpPose &tcp,
+                            const bool lockCameraUpWorldZ,
+                            double upX,
+                            double upY,
+                            double upZ)
+{
+    double zx = tcp.toolZMx;
+    double zy = tcp.toolZMy;
+    double zz = tcp.toolZMz;
+    if (!normalizeVector(zx, zy, zz))
     {
-        toolZX = 0.0;
-        toolZY = 0.0;
-        toolZZ = -1.0;
+        zx = 0.0;
+        zy = 0.0;
+        zz = -1.0;
+    }
+    tcp.toolZMx = zx;
+    tcp.toolZMy = zy;
+    tcp.toolZMz = zz;
+
+    double yX = 0.0;
+    double yY = 0.0;
+    double yZ = 0.0;
+
+    if (lockCameraUpWorldZ)
+    {
+        if (!normalizeVector(upX, upY, upZ))
+        {
+            upX = 0.0;
+            upY = 0.0;
+            upZ = 1.0;
+        }
+        // Project tray/world up onto plane ⊥ look-at; OpenCV image-up = −tool Y.
+        const double upDotZ = upX * zx + upY * zy + upZ * zz;
+        double px = upX - upDotZ * zx;
+        double py = upY - upDotZ * zy;
+        double pz = upZ - upDotZ * zz;
+        if (!normalizeVector(px, py, pz))
+        {
+            // Look-at ≈ ±up: fall back to world X/Y heuristic.
+            const double refX = std::abs(zx) < 0.9 ? 1.0 : 0.0;
+            const double refY = std::abs(zx) < 0.9 ? 0.0 : 1.0;
+            yX = zy * 0.0 - zz * refY;
+            yY = zz * refX - zx * 0.0;
+            yZ = zx * refY - zy * refX;
+            normalizeVector(yX, yY, yZ);
+        }
+        else
+        {
+            yX = -px;
+            yY = -py;
+            yZ = -pz;
+        }
+    }
+    else
+    {
+        const double refX = std::abs(zx) < 0.9 ? 1.0 : 0.0;
+        const double refY = std::abs(zx) < 0.9 ? 0.0 : 1.0;
+        yX = zy * 0.0 - zz * refY;
+        yY = zz * refX - zx * 0.0;
+        yZ = zx * refY - zy * refX;
+        normalizeVector(yX, yY, yZ);
     }
 
-    tcp.toolZMx = toolZX;
-    tcp.toolZMy = toolZY;
-    tcp.toolZMz = toolZZ;
+    const double xX = yY * zz - yZ * zy;
+    const double xY = yZ * zx - yX * zz;
+    const double xZ = yX * zy - yY * zx;
 
-    double refX = std::abs(toolZX) < 0.9 ? 1.0 : 0.0;
-    double refY = std::abs(toolZX) < 0.9 ? 0.0 : 1.0;
-    const double refZ = 0.0;
-
-    double yX = toolZY * refZ - toolZZ * refY;
-    double yY = toolZZ * refX - toolZX * refZ;
-    double yZ = toolZX * refY - toolZY * refX;
-    normalizeVector(yX, yY, yZ);
-
-    const double xX = yY * toolZZ - yZ * toolZY;
-    const double xY = yZ * toolZX - yX * toolZZ;
-    const double xZ = yX * toolZY - yY * toolZX;
-
-    rotationMatrixToRotVec(xX, yX, toolZX, xY, yY, toolZY, xZ, yZ, toolZZ, tcp.rxRad, tcp.ryRad,
-                           tcp.rzRad);
+    rotationMatrixToRotVec(xX, yX, zx, xY, yY, zy, xZ, yZ, zz, tcp.rxRad, tcp.ryRad, tcp.rzRad);
 }
 
 } // namespace hf::ur3e

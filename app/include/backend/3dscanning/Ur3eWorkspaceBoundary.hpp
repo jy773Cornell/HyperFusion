@@ -22,16 +22,19 @@ struct Ur3eWorkspaceBoundary
     double lengthMm = 1200.0;
     /// Y extent (mm), tray centered at origin.
     double widthMm = 1200.0;
-    /// Vertical extent (mm) below the mount plane (MoveIt collision box depth).
+    /// Vertical extent (mm) below the mount plane (MoveIt collision box depth to floor).
     double heightMm = 1000.0;
     /// Robot mount plane height in world frame (mm). Tray/sample stage stays at Z=0.
     double mountHeightMm = 1000.0;
+    /// Collision box top inset below mount plane (mm). Base stays at mountHeightMm.
+    double ceilingClearanceMm = 40.0;
 
     void normalize();
     [[nodiscard]] double lengthM() const;
     [[nodiscard]] double widthM() const;
     [[nodiscard]] double heightM() const;
     [[nodiscard]] double mountHeightM() const;
+    [[nodiscard]] double ceilingClearanceM() const;
     [[nodiscard]] double floorZM() const;
     [[nodiscard]] double topZM() const;
     [[nodiscard]] double halfLengthM() const;

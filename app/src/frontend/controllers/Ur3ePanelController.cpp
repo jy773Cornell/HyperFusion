@@ -11,12 +11,20 @@
 #include "backend/3dscanning/Ur3eRvizManager.hpp"
 #include "backend/3dscanning/Ur3eServerManager.hpp"
 #include "backend/3dscanning/Ur3eWslSetup.hpp"
+#include "backend/3dscanning/Ur3eCameraTransforms.hpp"
+#include "backend/3dscanning/Ur3eScanPlanCache.hpp"
+#include "backend/3dscanning/BfsTiffIo.hpp"
+#include "frontend/controllers/BfsPanelController.hpp"
 #include "frontend/widgets/MainWindow.hpp"
 #include "frontend/widgets/Ur3eExternalControlWaitDialog.hpp"
 #include "frontend/widgets/Ur3eHemisphereScanSettingsWidget.hpp"
 #include "frontend/widgets/Ur3eJointBarWidget.hpp"
 #include "frontend/widgets/Ur3eScanRoutePlanWidget.hpp"
 
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QFileDialog>
 #include <QLineEdit>
 #include <QDateTime>
 #include <QMessageBox>
@@ -50,6 +58,33 @@ constexpr const char *kUr3eJointNames[kUr3eJointCount] = {
     "wrist_2_joint",
     "wrist_3_joint",
 };
+
+/// Wrist_2 / wrist_3 offsets in radians: −N…−1, +1…+N × step (center is separate).
+std::vector<double> wristSweepOffsetsRad(const int stepsEachWay, const double stepDeg)
+{
+    std::vector<double> offsets;
+    if (stepsEachWay <= 0 || !(stepDeg > 0.0))
+        return offsets;
+    const double stepRad = stepDeg * (3.14159265358979323846 / 180.0);
+    offsets.reserve(static_cast<std::size_t>(2 * stepsEachWay));
+    for (int i = stepsEachWay; i >= 1; --i)
+        offsets.push_back(-static_cast<double>(i) * stepRad);
+    for (int i = 1; i <= stepsEachWay; ++i)
+        offsets.push_back(static_cast<double>(i) * stepRad);
+    return offsets;
+}
+
+Ur3eScanTcpPose scanTcpFromLivePose(const Ur3eTcpPose &live, const Ur3eScanTcpPose &fallback)
+{
+    Ur3eScanTcpPose tcp = fallback;
+    tcp.xM = live.x;
+    tcp.yM = live.y;
+    tcp.zM = live.z;
+    tcp.rxRad = live.rx;
+    tcp.ryRad = live.ry;
+    tcp.rzRad = live.rz;
+    return tcp;
+}
 
 void appendScanPlanFailureReport(MainWindow *host, const Ur3eHemisphereScanPlan &plan)
 {
@@ -187,6 +222,11 @@ Ur3ePanelController::~Ur3ePanelController()
 bool Ur3ePanelController::isSidecarRunning() const
 {
     return serverManager_ != nullptr && serverManager_->isServerConnected();
+}
+
+bool Ur3ePanelController::isScanPlanReady() const
+{
+    return scanPlanReady_ && plannedScanPlan_.reachableCount > 0;
 }
 
 void Ur3ePanelController::applyHardwareConfigToUi()
@@ -384,6 +424,8 @@ void Ur3ePanelController::wireSettingsTabConnections()
                     }
                     scheduleManualTargetPreview();
                     updateRobotUi();
+                    if (host_->capturePanel() != nullptr)
+                        host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
                 });
     }
 
@@ -391,6 +433,8 @@ void Ur3ePanelController::wireSettingsTabConnections()
     {
         connect(host_->ur3ePosePollTimer_, &QTimer::timeout, this, [this]() { pollJoints(); });
     }
+
+    tryLoadCachedScanPlan();
 }
 
 void Ur3ePanelController::onSidecarStateChanged(const Ur3eServerManager::State state,
@@ -1047,6 +1091,8 @@ void Ur3ePanelController::finishScanPlan(const Ur3eHemisphereScanPlan &plan,
         host_->appendLog(QStringLiteral("UR3e scan plan failed: %1").arg(errorMessage));
         scanPlanReady_ = false;
         updateRobotUi();
+        if (host_->capturePanel() != nullptr)
+            host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
         return;
     }
 
@@ -1065,6 +1111,8 @@ void Ur3ePanelController::finishScanPlan(const Ur3eHemisphereScanPlan &plan,
     if (plan.points.empty())
     {
         updateRobotUi();
+        if (host_->capturePanel() != nullptr)
+            host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
         return;
     }
 
@@ -1086,33 +1134,180 @@ void Ur3ePanelController::finishScanPlan(const Ur3eHemisphereScanPlan &plan,
         host_->ur3eScanRoutePlanWidget_->setScanPlan(plan);
     }
 
+    saveCachedScanPlan();
+
     updateRobotUi();
+    if (host_->capturePanel() != nullptr)
+        host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
+}
+
+void Ur3ePanelController::saveCachedScanPlan() const
+{
+    if (host_ == nullptr || host_->ur3eHemisphereScanSettings_ == nullptr)
+        return;
+    if (!host_->ur3eHemisphereScanSettings_->rememberLastPlan())
+        return;
+    if (plannedScanPlan_.points.empty())
+        return;
+
+    const QString fingerprint = ur3eScanPlanFingerprint(hf::hardwareConfig().ur3e,
+                                                        host_->ur3eHemisphereScanSettings_->params());
+    QString error;
+    if (!saveUr3eScanPlanCache(defaultUr3eScanPlanCachePath(), fingerprint, plannedScanPlan_,
+                               &error))
+    {
+        host_->appendLog(QStringLiteral("UR3e scan plan cache: save failed — %1").arg(error));
+        return;
+    }
+    host_->appendLog(QStringLiteral("UR3e scan plan cache: saved (%1 points).")
+                         .arg(plannedScanPlan_.points.size()));
+}
+
+void Ur3ePanelController::tryLoadCachedScanPlan()
+{
+    if (host_ == nullptr || host_->ur3eHemisphereScanSettings_ == nullptr)
+        return;
+    if (!host_->ur3eHemisphereScanSettings_->rememberLastPlan())
+        return;
+
+    const QString fingerprint = ur3eScanPlanFingerprint(hf::hardwareConfig().ur3e,
+                                                        host_->ur3eHemisphereScanSettings_->params());
+    Ur3eHemisphereScanPlan plan;
+    QString error;
+    if (!loadUr3eScanPlanCache(defaultUr3eScanPlanCachePath(), fingerprint, plan, &error))
+    {
+        if (QFile::exists(defaultUr3eScanPlanCachePath()))
+            host_->appendLog(QStringLiteral("UR3e scan plan cache: not loaded — %1").arg(error));
+        return;
+    }
+
+    plannedScanPlan_ = plan;
+    scanPlanReady_ = plan.reachableCount > 0;
+
+    host_->appendLog(
+        QStringLiteral("UR3e scan plan cache: loaded %1 points (%2 reachable, %3 unreachable).")
+            .arg(plan.points.size())
+            .arg(plan.reachableCount)
+            .arg(plan.unreachableCount));
+
+    if (host_->ur3eScanRoutePlanWidget_ != nullptr)
+    {
+        host_->ur3eScanRoutePlanWidget_->setScanParams(
+            host_->ur3eHemisphereScanSettings_->params());
+        host_->ur3eScanRoutePlanWidget_->setScanPlan(plan);
+    }
+
+    updateRobotUi();
+    if (host_->capturePanel() != nullptr)
+        host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
 }
 
 void Ur3ePanelController::onExecuteHemisphereScanRequested()
 {
-    if (host_->ur3eHemisphereScanSettings_ == nullptr || busy_ || !robotConnected_
-        || serverManager_ == nullptr)
+    const bool bfsConnected =
+        host_ != nullptr && host_->bfsPanel() != nullptr
+        && host_->bfsPanel()->isCameraConnected();
+
+    if (!bfsConnected)
+    {
+        startHemisphereScanExecute({});
         return;
+    }
+
+    const QString parentDir = QFileDialog::getExistingDirectory(
+        host_,
+        QStringLiteral("Save 3D scanning images"),
+        QString(),
+        QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+    if (parentDir.isEmpty())
+    {
+        host_->appendLog(QStringLiteral("UR3e scan execute: cancelled (no save folder)."));
+        return;
+    }
+
+    const QString stamp =
+        QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
+    const QString captureDir =
+        QDir(parentDir).filePath(QStringLiteral("3d_scanning_%1").arg(stamp));
+    if (!QDir().mkpath(captureDir))
+    {
+        host_->appendLog(
+            QStringLiteral("UR3e scan execute rejected: could not create %1").arg(captureDir));
+        QMessageBox::warning(host_,
+                             QStringLiteral("UR3e Scan Execute"),
+                             QStringLiteral("Could not create folder:\n%1").arg(captureDir));
+        return;
+    }
+
+    HemisphereScanExecuteOptions opts;
+    opts.captureOutputDir = captureDir;
+    opts.stabilizeMs = hf::hardwareConfig().ur3e.scanCaptureStabilizeMs;
+    if (!startHemisphereScanExecute(opts))
+    {
+        host_->appendLog(QStringLiteral("UR3e scan execute: capture start rejected."));
+    }
+}
+
+bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecuteOptions &options)
+{
+    if (host_ == nullptr || host_->ur3eHemisphereScanSettings_ == nullptr || busy_
+        || !robotConnected_ || serverManager_ == nullptr || scanExecuting_)
+        return false;
 
     if (!scanPlanReady_ || plannedScanPlan_.reachableCount == 0)
     {
         host_->appendLog(
             QStringLiteral("UR3e scan execute rejected: plan a route with reachable points first."));
-        return;
+        return false;
     }
 
     const std::vector<int> order = buildHemisphereScanExecutionOrder(plannedScanPlan_);
     if (order.empty())
     {
         host_->appendLog(QStringLiteral("UR3e scan execute rejected: no stored joint solutions."));
-        return;
+        return false;
+    }
+
+    const QString captureDir = options.captureOutputDir.trimmed();
+    const bool captureStills = !captureDir.isEmpty();
+    const hf::HardwareConfig::Ur3eConfig &ur3eCfg = hf::hardwareConfig().ur3e;
+    const int stabilizeMs =
+        options.stabilizeMs > 0 ? options.stabilizeMs
+                                : (ur3eCfg.scanCaptureStabilizeMs >= 0 ? ur3eCfg.scanCaptureStabilizeMs
+                                                                      : kScanCaptureStabilizeMs);
+    const bool wristSweepEnabled = ur3eCfg.scanWristSweepEnabled;
+    const double wristSweepStepDeg = ur3eCfg.scanWristSweepStepDeg;
+    const int wristSweepStepsEachWay = ur3eCfg.scanWristSweepStepsEachWay;
+    const int wristPosesPerPin =
+        wristSweepEnabled
+            ? (1 + (2 * wristSweepStepsEachWay) * (2 * wristSweepStepsEachWay))
+            : 1;
+
+    if (captureStills)
+    {
+        if (host_->bfsPanel() == nullptr || !host_->bfsPanel()->isCameraConnected())
+        {
+            host_->appendLog(QStringLiteral(
+                "UR3e scan execute rejected: BFS camera must be connected for 3D capture."));
+            return false;
+        }
+        QDir().mkpath(captureDir);
     }
 
     const QString serverUrl = serverManager_->serverUrl();
     host_->appendLog(
-        QStringLiteral("UR3e scan execute: %1 reachable point(s), top-ring-first sweep (2 s dwell each)…")
-            .arg(order.size()));
+        QStringLiteral("UR3e scan execute: %1 reachable point(s), top-ring-first sweep "
+                       "(%2 ms settle%3%4)…")
+            .arg(order.size())
+            .arg(stabilizeMs)
+            .arg(captureStills ? QStringLiteral(", BFS stills → ") + captureDir
+                               : QStringLiteral(", motion-only"))
+            .arg(wristSweepEnabled
+                     ? QStringLiteral(", wrist_2/3 grid %1×%2° → %3 pose(s)/pin")
+                           .arg(2 * wristSweepStepsEachWay)
+                           .arg(wristSweepStepDeg, 0, 'f', 0)
+                           .arg(wristPosesPerPin)
+                     : QString()));
     stopRequested_.store(false, std::memory_order_release);
     scanExecuting_ = true;
     if (host_->ur3eScanRoutePlanWidget_ != nullptr)
@@ -1128,16 +1323,164 @@ void Ur3ePanelController::onExecuteHemisphereScanRequested()
         if (scanExecuteThread_.joinable())
             scanExecuteThread_.join();
 
-        scanExecuteThread_ = std::thread([this, serverUrl, order, planCopy, sessionId]() {
+        scanExecuteThread_ = std::thread([this,
+                                          serverUrl,
+                                          order,
+                                          planCopy,
+                                          sessionId,
+                                          captureDir,
+                                          captureStills,
+                                          stabilizeMs,
+                                          wristSweepEnabled,
+                                          wristSweepStepDeg,
+                                          wristSweepStepsEachWay]() {
             int executed = 0;
             int skipped = 0;
+            int captured = 0;
+            int wristSkipped = 0;
             QString errorMessage;
             bool ok = true;
             const int total = static_cast<int>(order.size());
+            TransformsJsonDocument transformsDoc;
+            const std::vector<double> wristOffsets =
+                wristSweepOffsetsRad(wristSweepStepsEachWay, wristSweepStepDeg);
 
             const auto sessionActive = [this, sessionId]() {
                 return !shutdownRequested_.load(std::memory_order_acquire)
                        && sessionId == scanExecuteSessionId_.load(std::memory_order_acquire);
+            };
+
+            const auto finishWithCapture = [this, &transformsDoc, captureStills, captureDir](
+                                               bool finishOk,
+                                               const QString &finishError,
+                                               int executedCount,
+                                               bool stopped,
+                                               int capturedCount,
+                                               qint64 elapsedMs) {
+                if (captureStills && !transformsDoc.frames.empty())
+                {
+                    QString writeError;
+                    if (!writeTransformsJson(captureDir, transformsDoc, &writeError))
+                    {
+                        QMetaObject::invokeMethod(
+                            this,
+                            [this, writeError]() {
+                                host_->appendLog(
+                                    QStringLiteral("UR3e scan capture: transforms.json failed — %1")
+                                        .arg(writeError));
+                            },
+                            Qt::QueuedConnection);
+                    }
+                    else
+                    {
+                        QMetaObject::invokeMethod(
+                            this,
+                            [this, captureDir, capturedCount]() {
+                                host_->appendLog(
+                                    QStringLiteral(
+                                        "UR3e scan capture: wrote %1 frame(s) + transforms.json → %2")
+                                        .arg(capturedCount)
+                                        .arg(captureDir));
+                            },
+                            Qt::QueuedConnection);
+                    }
+                }
+                QMetaObject::invokeMethod(
+                    this,
+                    "scanExecuteFinish",
+                    Qt::QueuedConnection,
+                    Q_ARG(bool, finishOk),
+                    Q_ARG(QString, finishError),
+                    Q_ARG(int, executedCount),
+                    Q_ARG(bool, stopped),
+                    Q_ARG(int, capturedCount),
+                    Q_ARG(qint64, elapsedMs));
+            };
+
+            const auto captureStillAtPose = [&](const Ur3eScanTcpPose &plannedTcp,
+                                                const int pointIndex) -> bool {
+                if (!captureStills)
+                    return true;
+
+                hf::bfs::BfsRgbFrame frame;
+                bool gotFrame = false;
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, &frame, &gotFrame]() {
+                        if (host_->bfsPanel() != nullptr)
+                            gotFrame = host_->bfsPanel()->tryCopyLastFrame(frame);
+                    },
+                    Qt::BlockingQueuedConnection);
+
+                if (!gotFrame)
+                {
+                    QMetaObject::invokeMethod(
+                        this,
+                        [this, pointIndex]() {
+                            host_->appendLog(
+                                QStringLiteral(
+                                    "UR3e scan capture: no BFS frame at pin %1 — skipping still.")
+                                    .arg(pointIndex));
+                        },
+                        Qt::QueuedConnection);
+                    return true;
+                }
+
+                Ur3eScanTcpPose tcpForPose = plannedTcp;
+                const Ur3ePoseResult livePose = ur3eGetTcpPose(serverUrl);
+                if (livePose.ok)
+                    tcpForPose = scanTcpFromLivePose(livePose.pose, plannedTcp);
+
+                const QString stem =
+                    QStringLiteral("%1").arg(captured, 5, 10, QLatin1Char('0'));
+                const QString tiffPath =
+                    QDir(captureDir).filePath(stem + QStringLiteral(".tif"));
+                const std::string saveError =
+                    hf::bfs::saveRgb8AsTiff(tiffPath,
+                                           frame.width,
+                                           frame.height,
+                                           frame.rgb.data(),
+                                           frame.rgb.size());
+                if (!saveError.empty())
+                {
+                    ok = false;
+                    errorMessage =
+                        QStringLiteral("Failed to save BFS TIFF %1: %2")
+                            .arg(tiffPath, QString::fromStdString(saveError));
+                    return false;
+                }
+
+                const Mat4 c2w = cameraToWorldOpenGlFromTcp(tcpForPose);
+                const QString imageName = stem + QStringLiteral(".tif");
+                const QString poseJsonPath =
+                    QDir(captureDir).filePath(stem + QStringLiteral(".json"));
+                QString poseError;
+                if (!writeCameraPoseJson(poseJsonPath,
+                                         tcpForPose,
+                                         c2w,
+                                         imageName,
+                                         frame.width,
+                                         frame.height,
+                                         &poseError))
+                {
+                    ok = false;
+                    errorMessage =
+                        QStringLiteral("Failed to save pose JSON %1: %2")
+                            .arg(poseJsonPath, poseError);
+                    return false;
+                }
+
+                if (transformsDoc.width <= 0)
+                {
+                    transformsDoc.width = frame.width;
+                    transformsDoc.height = frame.height;
+                }
+                TransformsJsonFrame entry;
+                entry.filePathStem = stem;
+                entry.transformMatrix = c2w;
+                transformsDoc.frames.push_back(std::move(entry));
+                ++captured;
+                return true;
             };
 
             QMetaObject::invokeMethod(
@@ -1153,14 +1496,12 @@ void Ur3ePanelController::onExecuteHemisphereScanRequested()
                 ensureRobotAtHomeSync(HomeEnsureContext::BeforeScanExecute);
             if (preHomeOutcome.cancelled)
             {
-                QMetaObject::invokeMethod(
-                    this,
-                    "scanExecuteFinish",
-                    Qt::QueuedConnection,
-                    Q_ARG(bool, false),
-                    Q_ARG(QString, QStringLiteral("Scan aborted — homing cancelled.")),
-                    Q_ARG(int, 0),
-                    Q_ARG(bool, false));
+                finishWithCapture(false,
+                                  QStringLiteral("Scan aborted — homing cancelled."),
+                                  0,
+                                  false,
+                                  0,
+                                  0);
                 return;
             }
 
@@ -1168,6 +1509,7 @@ void Ur3ePanelController::onExecuteHemisphereScanRequested()
                 this, &Ur3ePanelController::syncHomeJointTargetSliders, Qt::QueuedConnection);
 
             bool returnHomeAfterScan = true;
+            const auto scanStartedAt = std::chrono::steady_clock::now();
 
             for (int step = 0; step < total; ++step)
             {
@@ -1214,8 +1556,13 @@ void Ur3ePanelController::onExecuteHemisphereScanRequested()
                     Q_ARG(QString, targetSummary),
                     Q_ARG(QVariantList, targetPositionsVariant));
 
-                const Ur3eScanWaypointMoveResult moveResult =
-                    ur3eExecuteScanWaypoint(serverUrl, point.jointPositionsRad, &point.tcp);
+                const Ur3eScanWaypointMoveResult moveResult = ur3eExecuteScanWaypoint(
+                    serverUrl,
+                    point.jointPositionsRad,
+                    &point.tcp,
+                    nullptr,
+                    false,
+                    false);
                 if (moveResult.stopped)
                 {
                     if (stopRequested_.load(std::memory_order_acquire))
@@ -1295,12 +1642,134 @@ void Ur3ePanelController::onExecuteHemisphereScanRequested()
                     Q_ARG(QVariantList, positionsVariant),
                     Q_ARG(QStringList, joints.names));
 
-                std::this_thread::sleep_for(std::chrono::milliseconds(kScanExecuteDwellMs));
+                std::this_thread::sleep_for(std::chrono::milliseconds(stabilizeMs));
 
                 if (!sessionActive() || stopRequested_.load(std::memory_order_acquire))
                 {
                     ur3eStopMotion(serverUrl);
                     break;
+                }
+
+                if (!captureStillAtPose(point.tcp, pointIndex))
+                {
+                    returnHomeAfterScan = true;
+                    break;
+                }
+
+                if (wristSweepEnabled && !wristOffsets.empty()
+                    && point.jointPositionsRad.size() >= 6)
+                {
+                    for (const double dWrist2 : wristOffsets)
+                    {
+                        for (const double dWrist3 : wristOffsets)
+                        {
+                            if (!sessionActive()
+                                || stopRequested_.load(std::memory_order_acquire))
+                            {
+                                ur3eStopMotion(serverUrl);
+                                goto scan_execute_loop_done;
+                            }
+
+                            std::vector<double> wristJoints = point.jointPositionsRad;
+                            wristJoints[4] += dWrist2;
+                            wristJoints[5] += dWrist3;
+
+                            const Ur3eScanWaypointMoveResult wristMove =
+                                ur3eExecuteScanWaypoint(serverUrl,
+                                                        wristJoints,
+                                                        nullptr,
+                                                        nullptr,
+                                                        false,
+                                                        true);
+                            if (wristMove.stopped)
+                            {
+                                if (stopRequested_.load(std::memory_order_acquire))
+                                    ur3eStopMotion(serverUrl);
+                                else
+                                {
+                                    ok = false;
+                                    errorMessage = wristMove.errorMessage.isEmpty()
+                                                       ? QStringLiteral(
+                                                             "Wrist sweep stopped before motion.")
+                                                       : wristMove.errorMessage;
+                                }
+                                goto scan_execute_loop_done;
+                            }
+                            if (!wristMove.ok)
+                            {
+                                ++wristSkipped;
+                                const QString reason = wristMove.errorMessage.isEmpty()
+                                                           ? QStringLiteral("collision / no path")
+                                                           : wristMove.errorMessage;
+                                const double w2Deg = dWrist2 * (180.0 / 3.14159265358979323846);
+                                const double w3Deg = dWrist3 * (180.0 / 3.14159265358979323846);
+                                QMetaObject::invokeMethod(
+                                    this,
+                                    [this, pointIndex, w2Deg, w3Deg, reason]() {
+                                        host_->appendLog(
+                                            QStringLiteral(
+                                                "UR3e scan wrist sweep pin %1: skip Δw2=%2° "
+                                                "Δw3=%3° — %4")
+                                                .arg(pointIndex)
+                                                .arg(w2Deg, 0, 'f', 1)
+                                                .arg(w3Deg, 0, 'f', 1)
+                                                .arg(reason));
+                                    },
+                                    Qt::QueuedConnection);
+                                continue;
+                            }
+
+                            std::this_thread::sleep_for(std::chrono::milliseconds(stabilizeMs));
+
+                            if (!sessionActive()
+                                || stopRequested_.load(std::memory_order_acquire))
+                            {
+                                ur3eStopMotion(serverUrl);
+                                goto scan_execute_loop_done;
+                            }
+
+                            if (!captureStillAtPose(point.tcp, pointIndex))
+                            {
+                                returnHomeAfterScan = true;
+                                goto scan_execute_loop_done;
+                            }
+                        }
+                    }
+
+                    // Return to nominal pin joints before the next pin.
+                    if (sessionActive() && !stopRequested_.load(std::memory_order_acquire))
+                    {
+                        const Ur3eScanWaypointMoveResult returnPin =
+                            ur3eExecuteScanWaypoint(serverUrl,
+                                                    point.jointPositionsRad,
+                                                    nullptr,
+                                                    nullptr,
+                                                    false,
+                                                    true);
+                        if (returnPin.stopped)
+                        {
+                            if (stopRequested_.load(std::memory_order_acquire))
+                                ur3eStopMotion(serverUrl);
+                            goto scan_execute_loop_done;
+                        }
+                        if (!returnPin.ok)
+                        {
+                            const QString reason = returnPin.errorMessage.isEmpty()
+                                                       ? QStringLiteral("could not return to pin")
+                                                       : returnPin.errorMessage;
+                            QMetaObject::invokeMethod(
+                                this,
+                                [this, pointIndex, reason]() {
+                                    host_->appendLog(
+                                        QStringLiteral(
+                                            "UR3e scan wrist sweep pin %1: return-to-pin "
+                                            "warning — %2")
+                                            .arg(pointIndex)
+                                            .arg(reason));
+                                },
+                                Qt::QueuedConnection);
+                        }
+                    }
                 }
 
                 QMetaObject::invokeMethod(
@@ -1312,20 +1781,31 @@ void Ur3ePanelController::onExecuteHemisphereScanRequested()
                 ++executed;
             }
 
+        scan_execute_loop_done:
             if (!sessionActive())
                 return;
+
+            // User Stop must always retreat to home after cancelling the current motion.
+            const bool userStopped = stopRequested_.load(std::memory_order_acquire);
+            if (userStopped)
+                returnHomeAfterScan = true;
 
             if (returnHomeAfterScan)
             {
                 QMetaObject::invokeMethod(
                     this,
-                    [this]() {
+                    [this, userStopped]() {
                         host_->appendLog(
-                            QStringLiteral("UR3e scan execute: returning to home pose…"));
+                            userStopped
+                                ? QStringLiteral(
+                                      "UR3e scan execute: stop — returning to home pose…")
+                                : QStringLiteral(
+                                      "UR3e scan execute: returning to home pose…"));
                         syncHomeJointTargetSliders();
                     },
                     Qt::BlockingQueuedConnection);
 
+                // /execute_move_home clears the sidecar stop latch so MoveIt can run again.
                 const Ur3eScanWaypointMoveResult postHomeResult = ur3eExecuteMoveHome(serverUrl);
                 if (postHomeResult.ok)
                 {
@@ -1362,18 +1842,30 @@ void Ur3ePanelController::onExecuteHemisphereScanRequested()
                     },
                     Qt::QueuedConnection);
             }
+            if (wristSkipped > 0)
+            {
+                const int wristSkippedCount = wristSkipped;
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, wristSkippedCount]() {
+                        host_->appendLog(
+                            QStringLiteral(
+                                "UR3e scan execute: %1 wrist pose(s) skipped (collision / no path).")
+                                .arg(wristSkippedCount));
+                    },
+                    Qt::QueuedConnection);
+            }
 
             const bool stopped = stopRequested_.load(std::memory_order_acquire);
-            QMetaObject::invokeMethod(
-                this,
-                "scanExecuteFinish",
-                Qt::QueuedConnection,
-                Q_ARG(bool, ok),
-                Q_ARG(QString, errorMessage),
-                Q_ARG(int, executed),
-                Q_ARG(bool, stopped));
+            const qint64 elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        std::chrono::steady_clock::now() - scanStartedAt)
+                                        .count();
+            finishWithCapture(ok, errorMessage, executed, stopped || userStopped, captured,
+                              elapsedMs);
         });
     }
+
+    return true;
 }
 
 void Ur3ePanelController::scanExecuteSetActivePoint(const int pointIndex)
@@ -1465,7 +1957,9 @@ void Ur3ePanelController::scanExecuteLogArrived(const int step,
 void Ur3ePanelController::scanExecuteFinish(const bool ok,
                                             const QString &errorMessage,
                                             const int executedCount,
-                                            const bool stopped)
+                                            const bool stopped,
+                                            const int capturedFrameCount,
+                                            const qint64 elapsedMs)
 {
     if (!scanExecuting_)
         return;
@@ -1477,6 +1971,7 @@ void Ur3ePanelController::scanExecuteFinish(const bool ok,
     }
 
     scanExecuting_ = false;
+    stopRequested_.store(false, std::memory_order_release);
     if (host_->ur3eScanRoutePlanWidget_ != nullptr)
         host_->ur3eScanRoutePlanWidget_->endScanExecution();
 
@@ -1497,19 +1992,63 @@ void Ur3ePanelController::scanExecuteFinish(const bool ok,
     else
         detail = QStringLiteral("scan complete — %1 waypoint(s).").arg(executedCount);
 
-    finishScanExecute(ok, detail);
+    if (capturedFrameCount > 0)
+        detail += QStringLiteral(" Captured %1 BFS frame(s).").arg(capturedFrameCount);
+    if (elapsedMs > 0)
+    {
+        const qint64 totalSec = elapsedMs / 1000;
+        const qint64 minutes = totalSec / 60;
+        const qint64 seconds = totalSec % 60;
+        detail += QStringLiteral(" Time %1:%2.")
+                      .arg(minutes)
+                      .arg(seconds, 2, 10, QLatin1Char('0'));
+    }
+
+    finishScanExecute(ok, detail, capturedFrameCount, executedCount, elapsedMs, stopped);
 }
 
-void Ur3ePanelController::finishScanExecute(const bool ok, const QString &detail)
+void Ur3ePanelController::finishScanExecute(const bool ok,
+                                            const QString &detail,
+                                            const int capturedFrameCount,
+                                            const int successfulPins,
+                                            const qint64 elapsedMs,
+                                            const bool stopped)
 {
     setBusy(false);
     setJointPollIntervalMs(kPosePollIntervalMs);
     host_->appendLog(QStringLiteral("UR3e scan execute: %1").arg(detail));
+
+    const qint64 totalSec = (elapsedMs > 0 ? elapsedMs : qint64{0}) / 1000;
+    const qint64 minutes = totalSec / 60;
+    const qint64 seconds = totalSec % 60;
+    const QString durationText =
+        QStringLiteral("%1:%2").arg(minutes).arg(seconds, 2, 10, QLatin1Char('0'));
+
+    QString summaryTitle;
     if (!ok)
-        QMessageBox::warning(host_, QStringLiteral("UR3e Scan Execute Failed"), detail);
+        summaryTitle = QStringLiteral("UR3e Scan Failed");
+    else if (stopped)
+        summaryTitle = QStringLiteral("UR3e Scan Stopped");
+    else
+        summaryTitle = QStringLiteral("UR3e Scan Complete");
+
+    const QString summaryBody =
+        QStringLiteral("Successful pins: %1\n"
+                       "Multiview images recorded: %2\n"
+                       "Scanning time: %3")
+            .arg(successfulPins)
+            .arg(capturedFrameCount)
+            .arg(durationText);
+
+    if (!ok)
+        QMessageBox::warning(host_, summaryTitle, summaryBody + QStringLiteral("\n\n") + detail);
+    else
+        QMessageBox::information(host_, summaryTitle, summaryBody);
+
     if (ok)
         pollJoints();
     updateRobotUi();
+    emit hemisphereScanExecuteFinished(ok, detail, capturedFrameCount);
 }
 
 void Ur3ePanelController::onMoveItStateChanged(const bool running, const QString &detail)
@@ -2011,6 +2550,11 @@ void Ur3ePanelController::onDisconnectRequested()
 
 void Ur3ePanelController::onStopMotionRequested()
 {
+    requestStopMotion();
+}
+
+void Ur3ePanelController::requestStopMotion()
+{
     if (serverManager_ == nullptr || !robotConnected_)
         return;
 
@@ -2321,9 +2865,20 @@ void Ur3ePanelController::finishMove(const bool ok, const QString &detail)
 void Ur3ePanelController::finishStop(const bool ok, const QString &detail)
 {
     motionInProgress_ = false;
+    if (scanExecuting_)
+    {
+        // Keep stopRequested_ set and stay busy so the scan thread exits the pin loop
+        // and returns to home. Clearing the flag here used to resume the scan in place.
+        if (ok)
+            host_->appendLog(QStringLiteral("UR3e: %1 — scan will return to home").arg(detail));
+        else
+            host_->appendLog(QStringLiteral("UR3e stop failed: %1").arg(detail));
+        updateRobotUi();
+        return;
+    }
+
     setBusy(false);
-    if (!scanExecuting_)
-        setJointPollIntervalMs(kPosePollIntervalMs);
+    setJointPollIntervalMs(kPosePollIntervalMs);
     stopRequested_.store(false, std::memory_order_release);
     if (ok)
         host_->appendLog(QStringLiteral("UR3e: %1").arg(detail));

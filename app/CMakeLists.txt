@@ -185,6 +185,8 @@ qt_add_executable(app WIN32
     src/backend/3dscanning/BfsSpinnakerCamera.cpp
     src/backend/3dscanning/BfsCameraWorker.cpp
     src/backend/3dscanning/BfsTiffIo.cpp
+    src/backend/3dscanning/Ur3eCameraTransforms.cpp
+    src/backend/3dscanning/Ur3eScanPlanCache.cpp
     src/backend/camera/processing/IlluminantTables.cpp
     src/backend/camera/processing/ReferenceBuilder.cpp
     src/backend/camera/processing/EnviBilWriter.cpp
@@ -230,6 +232,8 @@ qt_add_executable(app WIN32
     include/backend/3dscanning/BfsSpinnakerCamera.hpp
     include/backend/3dscanning/BfsCameraWorker.hpp
     include/backend/3dscanning/BfsTiffIo.hpp
+    include/backend/3dscanning/Ur3eCameraTransforms.hpp
+    include/backend/3dscanning/Ur3eScanPlanCache.hpp
     include/backend/camera/processing/CapturePostProcessor.hpp
     include/backend/camera/processing/HfFusionRunner.hpp
     include/backend/camera/processing/HfFusionWorker.hpp

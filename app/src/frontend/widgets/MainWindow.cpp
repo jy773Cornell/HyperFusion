@@ -78,12 +78,14 @@
 #include <QImage>
 #include <QAbstractButton>
 #include <QMessageBox>
+#include <QMetaObject>
 #include <QPainter>
 #include <QPixmap>
 #include <QPolygon>
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QStyle>
+#include <QThread>
 #include <QTimer>
 #include <QToolButton>
 #include <QWidget>
@@ -290,6 +292,7 @@ void MainWindow::onSettingsTabChanged(const int index)
 
 hf::stage::StagePanelController *MainWindow::stagePanel() const { return stagePanel_.get(); }
 hf::ur3e::Ur3ePanelController *MainWindow::ur3ePanel() const { return ur3ePanel_.get(); }
+hf::bfs::BfsPanelController *MainWindow::bfsPanel() const { return bfsPanel_.get(); }
 hf::light::LightPanelController *MainWindow::lightPanel() const { return lightPanel_.get(); }
 hf::camera::CameraPanelController *MainWindow::cameraPanel() const { return cameraPanel_.get(); }
 hf::settings::UiSettingsController *MainWindow::settingsPanel() const { return settingsPanel_.get(); }
@@ -507,6 +510,16 @@ void MainWindow::appendLog(const QString &message)
 
 void MainWindow::appendLog(const hf::log::Channel channel, const QString &message)
 {
+    // Worker threads (UR3e home / MoveIt / sidecar logs) must not touch QPlainTextEdit.
+    if (QThread::currentThread() != thread())
+    {
+        QMetaObject::invokeMethod(
+            this,
+            [this, channel, message]() { appendLog(channel, message); },
+            Qt::QueuedConnection);
+        return;
+    }
+
     const std::size_t index = static_cast<std::size_t>(channel);
     if (index >= logOutputs_.size() || logOutputs_[index] == nullptr)
         return;

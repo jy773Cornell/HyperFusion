@@ -128,6 +128,8 @@ PersistedUr3eHemisphereScanSettings AppSettingsStore::loadUr3eHemisphereScan()
         settings.value(QStringLiteral("ur3e/hemisphereScan/thetaMinDeg"), 30.0).toDouble();
     scan.thetaMaxDeg =
         settings.value(QStringLiteral("ur3e/hemisphereScan/thetaMaxDeg"), 90.0).toDouble();
+    scan.rememberLastPlan =
+        settings.value(QStringLiteral("ur3e/hemisphereScan/rememberLastPlan"), true).toBool();
     return scan;
 }
 
@@ -139,6 +141,7 @@ void AppSettingsStore::saveUr3eHemisphereScan(const PersistedUr3eHemisphereScanS
     settings.setValue(QStringLiteral("ur3e/hemisphereScan/verticalPoints"), scan.verticalPoints);
     settings.setValue(QStringLiteral("ur3e/hemisphereScan/thetaMinDeg"), scan.thetaMinDeg);
     settings.setValue(QStringLiteral("ur3e/hemisphereScan/thetaMaxDeg"), scan.thetaMaxDeg);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/rememberLastPlan"), scan.rememberLastPlan);
 }
 
 PersistedBfsCameraSettings AppSettingsStore::loadBfsCameraSettings()

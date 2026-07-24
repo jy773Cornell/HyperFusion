@@ -101,16 +101,22 @@ def generate_launch_description():
     _mount_x_m = os.environ.get("HYPERFUSION_MOUNT_OFFSET_X_M", "0")
     _mount_y_m = os.environ.get("HYPERFUSION_MOUNT_OFFSET_Y_M", "0")
     _tool_payload_enabled = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_ENABLED", "true").lower()
-    _tool_payload_shape = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_SHAPE", "hemisphere").lower()
-    _tool_payload_radius_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_RADIUS_M", "0.10")
+    _tool_payload_shape = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_SHAPE", "mesh").lower()
+    _tool_payload_radius_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_RADIUS_M", "0.077")
     _tool_payload_box_x_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_BOX_X_M", "0.08")
     _tool_payload_box_y_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_BOX_Y_M", "0.06")
     _tool_payload_box_z_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_BOX_Z_M", "0.06")
     _tool_payload_x_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_X_M", "0")
     _tool_payload_y_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_Y_M", "0")
     _tool_payload_z_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_Z_M", "0")
-    _tool_payload_collision_gap_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_COLLISION_GAP_M", "0.002")
+    _tool_payload_collision_gap_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_COLLISION_GAP_M", "0.0")
     _tool_payload_mesh_dir = str(_pkg_root / "urdf" / "meshes").replace("\\", "/") + "/"
+    _tool_payload_mesh_file = os.environ.get(
+        "HYPERFUSION_TOOL_PAYLOAD_MESH_FILE", "ur_bfs_tool_payload.stl"
+    )
+    _tool_tcp_x_m = os.environ.get("HYPERFUSION_TOOL_TCP_X_M", "0")
+    _tool_tcp_y_m = os.environ.get("HYPERFUSION_TOOL_TCP_Y_M", "-0.056035")
+    _tool_tcp_z_m = os.environ.get("HYPERFUSION_TOOL_TCP_Z_M", "0.020")
 
     def _truthy_env(name: str, default: str = "true") -> bool:
         return os.environ.get(name, default).strip().lower() in ("1", "true", "yes", "on")
@@ -198,6 +204,18 @@ def generate_launch_description():
                 " ",
                 "tool_payload_mesh_dir:=",
                 _tool_payload_mesh_dir,
+                " ",
+                "tool_payload_mesh_file:=",
+                _tool_payload_mesh_file,
+                " ",
+                "tool_tcp_x_m:=",
+                _tool_tcp_x_m,
+                " ",
+                "tool_tcp_y_m:=",
+                _tool_tcp_y_m,
+                " ",
+                "tool_tcp_z_m:=",
+                _tool_tcp_z_m,
                 " ",
             ]
         ),

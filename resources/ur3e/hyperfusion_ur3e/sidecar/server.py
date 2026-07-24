@@ -65,6 +65,7 @@ def get_bridge(args: argparse.Namespace) -> Ur3eRosBridge:
                 workspace_length_m=args.workspace_length_mm / 1000.0,
                 workspace_width_m=args.workspace_width_mm / 1000.0,
                 workspace_height_m=args.workspace_height_mm / 1000.0,
+                workspace_ceiling_clearance_m=args.workspace_ceiling_clearance_mm / 1000.0,
             )
             try:
                 _bridge.start_workspace_boundary_sync()
@@ -110,8 +111,36 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--tool-payload-radius-mm",
         type=float,
-        default=float(cfg.get("tool_payload_radius_mm", 100.0)),
-        help="Tool payload collision dome radius on tool0 (mm).",
+        default=float(cfg.get("tool_payload_radius_mm", 77.0)),
+        help="UR pinch-guard bounding sphere at tool0 (mm). MoveIt uses the CAD mesh.",
+    )
+    parser.add_argument(
+        "--tool-payload-shape",
+        default=str(cfg.get("tool_payload_shape", "mesh")),
+        help="Tool payload URDF shape: mesh (default), hemisphere, box, sphere.",
+    )
+    parser.add_argument(
+        "--tool-payload-mesh-file",
+        default=str(cfg.get("tool_payload_mesh", "ur_bfs_tool_payload.stl")),
+        help="STL filename under urdf/meshes/ when shape=mesh.",
+    )
+    parser.add_argument(
+        "--tool-tcp-x-mm",
+        type=float,
+        default=float(cfg.get("tool_tcp_x_mm", 0.0)),
+        help="BFS optical TCP X offset in tool0 (mm).",
+    )
+    parser.add_argument(
+        "--tool-tcp-y-mm",
+        type=float,
+        default=float(cfg.get("tool_tcp_y_mm", -56.035)),
+        help="BFS optical TCP Y offset in tool0 (mm).",
+    )
+    parser.add_argument(
+        "--tool-tcp-z-mm",
+        type=float,
+        default=float(cfg.get("tool_tcp_z_mm", 20.0)),
+        help="BFS optical TCP Z offset in tool0 (mm).",
     )
     parser.add_argument("--ros-distro", default=str(cfg.get("ros_distro", "jazzy")))
     parser.add_argument("--ur-type", default=str(cfg.get("ur_type", "ur3e")))
@@ -197,6 +226,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=650.0,
         help="Workspace collision box depth in mm (extends downward from mount plane).",
     )
+    parser.add_argument(
+        "--workspace-ceiling-clearance-mm",
+        type=float,
+        default=40.0,
+        help="Gap (mm) between ceiling mount plane and collision-box top; robot base stays at mount Z.",
+    )
     return parser
 
 
@@ -235,9 +270,16 @@ def main() -> None:
         "true" if args.use_mock_hardware else "false"
     )
     os.environ["HYPERFUSION_MAX_JOINT_VELOCITY_DEG_S"] = str(args.max_joint_velocity_deg)
-    from hyperfusion_ur3e.urdf.tool_payload_config import ToolPayloadConfig
+    from hyperfusion_ur3e.urdf.tool_payload_config import ToolPayloadConfig, ToolTcpConfig
 
-    ToolPayloadConfig.from_radius_mm(args.tool_payload_radius_mm).apply_to_environ()
+    ToolPayloadConfig.from_radius_mm(
+        args.tool_payload_radius_mm,
+        shape=str(args.tool_payload_shape).strip().lower() or "mesh",
+        mesh_file=str(args.tool_payload_mesh_file).strip() or "ur_bfs_tool_payload.stl",
+    ).apply_to_environ()
+    ToolTcpConfig.from_mm(
+        args.tool_tcp_x_mm, args.tool_tcp_y_mm, args.tool_tcp_z_mm
+    ).apply_to_environ()
     args.initial_joint_deg = _parse_initial_joint_deg(args.initial_joint_deg)
 
     from hyperfusion_ur3e.urdf.mount_config import MountConfig

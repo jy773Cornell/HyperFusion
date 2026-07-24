@@ -6,7 +6,7 @@
 
 ## 1. Purpose
 
-The hemisphere scan moves the UR3e TCP to a grid of poses on a dome above the sample tray. Each pose aims the tool inward (toward the sphere center) for multi-angle imaging.
+The hemisphere scan moves the UR3e **optical TCP** (BFS sensor face, `hyperfusion_tcp`) to a grid of poses on a dome above the sample tray. Each pose aims the tool **+Z** inward (toward the sphere center) for multi-angle imaging.
 
 The system must:
 
@@ -42,6 +42,7 @@ The system must:
                            ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  scan_planner.py (MoveIt)                                   │
+│  • direct → home → approach                                 │
 │  • /compute_ik, /check_state_validity, /move_action         │
 │  • Headless move_group (launch_moveit_headless.sh)          │
 └──────────────────────────┬──────────────────────────────────┘
@@ -106,16 +107,31 @@ At **θ = 90°** (the flat opening of the hemisphere): `tip Z = 20 mm` — the r
 
 **Tray footprint (preview / clamp):** 540 × 490 mm centered at the origin (`kSampleTrayLengthM` × `kSampleTrayWidthM`).
 
-### 3.3 Tool payload vs scan sphere
+### 3.3 Tool payload vs scan sphere vs optical TCP
 
-Two different hemispheres appear in the system:
+Three different “tool” concepts:
 
 | Object | Source | Role |
 | ------ | ------ | ---- |
 | **Scan sphere** | UI sphere radius + grid | Virtual dome; pin poses for planning |
-| **Tool payload dome** | `tool_payload_radius_mm` in cfg | Collision mesh on `tool0` (camera stand-in) |
+| **Tool payload mesh** | `tool_payload_mesh` STL on `tool0` | MoveIt collision/visual (BFS mount CAD) |
+| **Pinch sphere** | `tool_payload_radius_mm` | C403A0 flange↔forearm guard only (not mesh size) |
+| **Optical TCP** | `tool_tcp_*_mm` → link `hyperfusion_tcp` | MoveIt scan IK tip (sensor-face centroid) |
 
-Scan pins are placed on the **scan sphere** surface at `tool0` in the current milestone (grid point + tray offset). The payload mesh radius (e.g. 50 mm) is for MoveIt self-collision only, not for shifting pin positions on the scan dome.
+Scan pins target **`hyperfusion_tcp`**, not the flange (`tool0`). The CAD mesh may use a **180° pan about Z** so Fusion XY matches `tool0`; TCP offsets in cfg are in **tool0** after that pan (Fusion CAD `(x,y,z)` → tool0 `(−x,−y,z)`).
+
+Example (`hyperfusion.cfg` `[3d scanning]`):
+
+```ini
+tool_payload_shape = mesh
+tool_payload_mesh = ur_bfs_tool_payload.stl
+tool_payload_radius_mm = 50          # pinch sphere only
+tool_tcp_x_mm = 0                    # optical TCP in tool0 (mm)
+tool_tcp_y_mm = -56.035              # Fusion +56.035 after pan-180
+tool_tcp_z_mm = 20
+```
+
+Restart the UR3e sidecar after changing mesh/TCP so `runtime_robot_description.urdf` rematerializes. In RViz, `hyperfusion_tcp` is a small orange sphere on the sensor face.
 
 ### 3.4 TCP orientation
 
@@ -124,11 +140,12 @@ For each grid point, `tcpPoseForHemispherePoint` sets:
 - **Position:** pin on the scan dome, offset by tray height (20 mm), then mount transform (yaw/pitch/offset)
 - **Tool +Z:** unit vector **inward** toward the dome center `(0, 0, tray_height)` after mount transform
 - **Rotation:** UR rotation vector (axis-angle) from that frame
-- **IK filter:** MoveIt solutions whose tool0 +Z dot product with the desired inward axis is below 0.95 are rejected (prevents 180° “facing outward” wrist flips)
+- **IK tip link:** `hyperfusion_tcp` (same orientation as `tool0`, translated by `tool_tcp_*_mm`)
+- **IK filter:** MoveIt solutions whose tip +Z dot product with the desired inward axis is below 0.95 are rejected (prevents 180° “facing outward” wrist flips)
 
 ### 3.5 Workspace boundary and robot mount
 
-Robot mount height and the MoveIt workspace box are **separate** settings in `hyperfusion.cfg` `[ur3e]`:
+Robot mount height and the MoveIt workspace box are **separate** settings in `hyperfusion.cfg` `[3d scanning]` (alias `[ur3e]`):
 
 ```ini
 # World Z of robot base / ceiling mount. Tray + hemisphere stay at Z=0 / 20 mm.
@@ -145,13 +162,15 @@ workspace_height_mm = 600
 | --- | ------- |
 | **`ceiling_mount_height_mm`** | World Z of `base_link` (URDF, RViz, sidecar). Does **not** move the tray or scan pins. |
 | **`workspace_height_mm`** | Vertical **depth** of the collision box **below** the mount plane (relative to robot), not mount height. |
+| **`workspace_ceiling_clearance_mm`** | Gap between mount plane and collision-box **top** (default 40 mm). |
 | **`workspace_length_mm` / `workspace_width_mm`** | Horizontal extent centered on the tray origin. |
 
 **Workspace box in world Z:**
 
-- Top face: `Z = ceiling_mount_height_mm`
+- Mount plane (robot base): `Z = ceiling_mount_height_mm`
+- Top face (collision): `Z = ceiling_mount_height_mm − workspace_ceiling_clearance_mm`
 - Bottom face: `Z = max(0, ceiling_mount_height_mm − workspace_height_mm)`
-- Example: mount 600 mm, depth 600 mm → box from Z = 0 to Z = 600 mm
+- Example: mount 600 mm, clearance 40 mm, depth 560 mm → box from Z = 40 mm to Z = 560 mm
 
 MoveIt adds thin collision slabs on **all six faces** (floor, ceiling, four walls) during plan/execute. The ceiling face is at the mount plane (`Z = ceiling_mount_height_mm`); the robot base bolts at/above that plane.
 
@@ -161,7 +180,7 @@ MoveIt adds thin collision slabs on **all six faces** (floor, ceiling, four wall
 
 ### 3.6 Mount orientation (align RViz with real robot)
 
-The robot base is placed in the URDF via a **world → base_link** transform at `Z = ceiling_mount_height_mm`. Defaults match a ceiling mount (roll = 180°). If RViz/simulation looks rotated or mirrored vs your real install, tune these keys in `hyperfusion.cfg` `[ur3e]`:
+The robot base is placed in the URDF via a **world → base_link** transform at `Z = ceiling_mount_height_mm`. Defaults match a ceiling mount (roll = 180°). If RViz/simulation looks rotated or mirrored vs your real install, tune these keys in `hyperfusion.cfg` `[3d scanning]`:
 
 ```ini
 mount_roll_deg = 180
@@ -183,7 +202,7 @@ Restart the UR3e sidecar and reopen MoveIt/RViz after changing mount height or o
 
 ### 3.7 Scan home pose
 
-From `hyperfusion.cfg` `[ur3e]`:
+From `hyperfusion.cfg` `[3d scanning]`:
 
 ```ini
 home_joints_deg = 160, 0, -90, 0, 90, 180
@@ -200,16 +219,38 @@ Used for:
 
 **Important:** Home must pass MoveIt **static collision** checks inside the workspace box, not just match joint numbers. Joint tolerance alone is not enough — see §6.6 and §11.
 
-### 3.8 IK seeds (home + current, 45° permutations)
+### 3.7.1 Per-pin wrist photo grid
+
+```ini
+scan_wrist_sweep_enabled = true
+scan_wrist_sweep_step_deg = 3
+scan_wrist_sweep_steps_each_way = 4
+scan_capture_stabilize_ms = 500
+scan_camera_up_world_z = true
+```
+
+At each reachable pin: capture/dwell at the nominal pose, then permute `wrist_2` and `wrist_3` by ±N×step (default ±4×3° → 8×8+1 = **65** poses). Each wrist move uses MoveIt `direct_only`; collisions / no path are **skipped**. Settle time applies to every pose (with or without BFS).
+
+`scan_camera_up_world_z = true` (default): pin-center TCP roll locks image-up to tray/world +Z (projected ⊥ look-at). Wrist-sweep angled poses are unchanged.
+
+### 3.8 IK seeds (multi-IK closest-to-home)
 
 IK seeds are generated automatically — there are **no cfg-defined midpoints**. For each pin, the seed set is built from two base poses:
 
 1. **`home_joints_deg`**
 2. **Current pin position** — robot joints at plan start; after the first reachable pin, the last reachable pin's solution
 
-For each base pose, every joint is also offset individually by **45°, 90°, 135°, 180°, 225°, 270°, and 315°** (one joint at a time). Duplicate seeds are removed.
+For each base pose, every joint is offset individually, **coarse first then fine**:
 
-This replaces the old `ik_seed_midpoints_deg` cfg key (removed) and the earlier 90°/180°/270°-only permutations.
+1. **90°, 180°, 270°**
+2. **45°, 135°, 225°, 315°**
+
+Up to **8** unique valid IK solutions are collected, ranked by **joint distance to home**. A candidate is kept if **either**:
+
+1. **home → pin** path + unwrap succeeds, or  
+2. **previous reachable pin → pin** path + unwrap succeeds (after the first green)
+
+Path check tries RRTConnect, then Pilz (~5 s).
 
 ---
 
@@ -225,11 +266,14 @@ This replaces the old `ik_seed_midpoints_deg` cfg key (removed) and the earlier 
 | θ range             | UI                | Which part of hemisphere                  |
 | `ceiling_mount_height_mm` | `hyperfusion.cfg` | Robot mount Z in world (URDF)       |
 | Workspace box       | `hyperfusion.cfg` | MoveIt collision limits (depth below mount) |
-| `tool_payload_radius_mm` | `hyperfusion.cfg` | Collision dome on tool0 (not pin R) |
+| `tool_payload_shape` / `tool_payload_mesh` | `hyperfusion.cfg` | CAD collision mesh on `tool0` |
+| `tool_payload_radius_mm` | `hyperfusion.cfg` | Pinch-guard sphere only (C403A0) |
+| `tool_tcp_*_mm`     | `hyperfusion.cfg` | Optical TCP offset in tool0 → `hyperfusion_tcp` |
 | Mount RPY / offset  | `hyperfusion.cfg` | URDF base pose (RViz vs real alignment)   |
 | Home joints         | `hyperfusion.cfg` | Primary IK seed + retreat pose            |
 | IK seeds            | auto              | home + current pose, 45° joint permutations |
 | `use_mock_hardware` | `hyperfusion.cfg` | Mock vs real robot                        |
+| `max_joint_velocity_deg_s` | `hyperfusion.cfg` | Execute trajectory peak joint speed cap |
 
 **Separate from UR3e scan:** `[sample_stage_position]` — linear spectrometer stage (mm along rail), not tray Z or dome geometry.
 
@@ -240,7 +284,7 @@ This replaces the old `ik_seed_midpoints_deg` cfg key (removed) and the earlier 
 
 ## 5. Plan phase
 
-**Trigger:** User presses **Plan** in the Scanning route panel.
+**Trigger:** User presses **Plan** in the Scanning panel.
 
 ### 5.1 App (C++)
 
@@ -303,6 +347,8 @@ UR joints have multiple valid representations (e.g. 209° vs −151°). The plan
 | **Unreachable** | Blue        | No IK, collision, or invalid joints               |
 | **Plan joints** | —             | 6 stored joint angles (rad) per reachable pin     |
 
+**Remember last plan** (Scanning checkbox, default on): after a successful Plan, results are written to `ur3e_last_scan_plan.json` beside the app. On the next startup the plan is reloaded automatically only if the current scan UI params and robot geometry keys in `hyperfusion.cfg` `[3d scanning]` match the fingerprint stored with the cache (TCP, payload, mount, workspace, home, `ur_type`, mock flag). Changing grid/radius/θ or those cfg keys invalidates the cache until you Plan again.
+
 
 ---
 
@@ -338,8 +384,9 @@ Execute pressed
     │     success → use refreshed joints
     │     fail    → fall back to Plan joints
     │
-    ├─ Validate start state + goal state
-    │     start invalid → skip pin (common if home pose collides)
+    ├─ Validate start state
+    │
+    ├─ Validate full goal state
     │
     ├─ Try DIRECT: current → pin (MoveIt)
     │     plan with OMPL + Pilz (plan-only), reject pinch-unsafe paths
@@ -363,8 +410,6 @@ Execute pressed
 Scan complete (summary: executed / skipped)
 ```
 
-
-
 ### 6.3 Bookend homing
 
 
@@ -372,11 +417,42 @@ Scan complete (summary: executed / skipped)
 | -------------------- | ---------------------------------------------------------------- |
 | **Before first pin** | MoveIt verify/move to home; dialog on failure                   |
 | **After last pin**   | Always return to home (unless fatal mid-scan error)              |
-| **Mid-scan retreat** | Only when direct path fails                                      |
+| **Mid-scan retreat** | Only when direct path fails                                     |
 | **After connect**    | MoveIt verify/move to home; dialog on failure                    |
 | **Before disconnect**| MoveIt verify/move to home; dialog on failure                    |
 | **Before app close** | MoveIt verify/move to home if robot connected; Cancel keeps app open |
 
+
+### 6.4 Per-pin timing
+
+- **Settle** at each pose from `scan_capture_stabilize_ms` in `[3d scanning]` (default **500 ms**), for both motion-only Execute and BFS still capture
+- **Wrist sweep** (default on): after the nominal pin, permute `wrist_2` and `wrist_3` by ±`scan_wrist_sweep_steps_each_way` × `scan_wrist_sweep_step_deg` (default ±4×3°) → **8×8+1 = 65** poses per pin; collision / no-path poses are skipped
+- **UR3e Execute + BFS connected:** folder dialog → `3d_scanning_yyyyMMdd_HHmmss/` → settle + BFS TIFF + `transforms.json` (same still pipeline as Capture Record 3D); works motion-only when no capture folder
+- Joint poll ~**100 ms** during motion (async, non-blocking UI)
+- MoveIt motion timeout up to **120 s** per leg
+
+### 6.4.1 Capture tab — 3D RGB record
+
+When **3D RGB** is enabled on the Capture tab (BFS + UR3e connected + plan ready + stage connected):
+
+| Button | Behavior |
+| ------ | -------- |
+| **Preview** | Same as UR3e **Execute** (motion only; no photos; wrist sweep still runs) |
+| **Record** | If HSI modes/cameras selected → existing HSI Record first; then stage → `sample_3d_scanning_position_mm` (default **1600**), hemisphere scan with cfg settle + wrist grid + BFS TIFF per pose |
+
+Stills land in `{dataset}/3d_scanning/00000.tif` + matching `00000.json` (per-image optical TCP pose) plus aggregate `transforms.json` (OpenGL `camera_to_world`). 3D-only Record (no HSI) creates the dataset folder and writes only `3d_scanning/`.
+
+
+
+### 6.5 Skip behavior
+
+If a pin cannot be reached (no path even via home):
+
+- Log: `skipped — <reason>`
+- **Continue** to next pin
+- Summary at end: `N pin(s) skipped`
+
+Scan is **best-effort**, not all-or-nothing.
 
 ### 6.6 Homing verification and dialog
 
@@ -402,26 +478,6 @@ Context-specific buttons:
 | Before disconnect | ✓   | Disconnect anyway       | Cancel        |
 | Before close    | ✓     | Close anyway            | Cancel (stay open) |
 
-
-
-
-### 6.4 Per-pin timing
-
-- **2 s dwell** at each successful pin (`kScanExecuteDwellMs`)
-- Joint poll ~**100 ms** during motion (async, non-blocking UI)
-- MoveIt motion timeout up to **120 s** per leg
-
-
-
-### 6.5 Skip behavior
-
-If a pin cannot be reached (no path even via home):
-
-- Log: `skipped — <reason>`
-- **Continue** to next pin
-- Summary at end: `N pin(s) skipped`
-
-Scan is **best-effort**, not all-or-nothing.
 
 ---
 
@@ -468,6 +524,8 @@ Scan is **best-effort**, not all-or-nothing.
 2. OMPL **RRTstar**
 3. Pilz **PTP**
 
+**First valid trajectory wins** (no collect-all / “easiest path” pick). Direct hops use a short planning budget (~5 s × 5 attempts); via-home recovery uses a larger budget (~12 s). Live multi-seed IK is skipped when planned joints are still valid; one via-home attempt then skip.
+
 MoveIt only — no direct `joint_trajectory_controller` fallback.
 
 ### 8.2 Speed scaling
@@ -476,9 +534,10 @@ MoveIt `max_velocity_scaling_factor` from joint travel (before planning):
 
 | Travel (rad sum) | Scale |
 | ---------------- | ----- |
-| > 5.0            | 0.05  |
-| > 3.0            | 0.08  |
-| else             | 0.15  |
+| > 5.0            | 0.10  |
+| > 3.0            | 0.18  |
+| > 1.5            | 0.28  |
+| else             | 0.40  |
 
 After planning, each candidate trajectory is checked against the **UR3e external-control joint velocity limit of 190 deg/s** (peak across all joints). If a path exceeds that, HyperFusion **slows the trajectory timing** before execute. ±π wrist unwrap runs first so velocity is measured on continuous joint motion.
 
@@ -497,10 +556,8 @@ After planning, each candidate trajectory is checked against the **UR3e external
 The **Move** button calls `/execute_scan_waypoint` with **`direct_only: true`**:
 
 - **One leg:** current pose → slider target (MoveIt, seeded from live joints)
-- Same trajectory prep as scan execute (multi-planner, ±π unwrap, 190 deg/s cap)
-- **No home fallback** if planning fails — the MoveIt error is shown in the log
-
-**Base-only** moves (only `shoulder_pan` changes) and pinch-escape moves to a safer goal still apply for manual jogging — see §11.2.
+- Same trajectory prep as scan execute (multi-planner, ±π unwrap, joint velocity cap)
+- **No** home fallback — MoveIt error is shown in the log
 
 
 ---
@@ -511,7 +568,7 @@ The **Move** button calls `/execute_scan_waypoint` with **`direct_only: true`**:
 
 
 
-### 9.1 Settings panel
+### 9.1 Settings panel (3D Scanning)
 
 - Sphere radius, grid (H × V), θ range
 - **Plan** / **Execute** buttons
@@ -560,9 +617,10 @@ Joint polling during execute uses **async** `wsl.exe curl` on a background threa
 
 | Decision                         | Rationale                                                             |
 | -------------------------------- | --------------------------------------------------------------------- |
+| **Optical TCP at sensor**        | Scan poses aim BFS face (`hyperfusion_tcp`), not flange               |
 | **Home-centric plan**            | Every pin judged on same branch as retreat; fixes chained-branch bugs |
 | **No route chaining at plan**    | Avoids −304° pan drift from pin-to-pin seeds                          |
-| **Direct first, home fallback**  | Fast direct path; retreat via home is the only fallback              |
+| **Direct first, home fallback**  | Fast direct path; retreat via home if direct fails                   |
 | **Easiest trajectory wins**      | Plan-only all pipelines; pick shortest joint travel + pinch-safe path |
 | **Skip on failure**              | Partial scans better than aborting entire route                       |
 | **Static plan, dynamic execute** | Plan is fast; execute re-validates paths                              |
@@ -624,16 +682,16 @@ If the pendant shows **External Control speed limit** on **joint 5** (wrist_3) o
 
 ## 12. Operational checklist
 
-1. Start sidecar / connect UR3e
-2. Set `ceiling_mount_height_mm` (robot mount) and workspace box separately in `hyperfusion.cfg`
+1. Start sidecar / connect UR3e (3D Scanning tab)
+2. Set `ceiling_mount_height_mm`, workspace box, `tool_tcp_*_mm`, and payload mesh in `hyperfusion.cfg`
 3. Set `home_joints_deg` to match robot (6 values; must be collision-free and pinch-safe in workspace)
 4. **Connect** — confirm homing succeeds (or fix pose via dialog)
-4. **Plan** — review green/blue pins
-5. **Execute** — home → pins → home (top ring first, home-nearest entry on top ring)
-6. After **Python** changes → restart sidecar
-7. After **C++** changes → rebuild app
-8. Avoid running two `move_group` instances without restart
-9. Avoid RViz **Plan & Execute** while HyperFusion scan plan is running (shared `move_group`)
+5. **Plan** — review green/blue pins
+6. **Execute** — home → pins (direct / home fallback) → home
+7. After **Python** changes → restart sidecar
+8. After **C++** changes → rebuild app
+9. Avoid running two `move_group` instances without restart
+10. Avoid RViz **Plan & Execute** while HyperFusion scan plan is running (shared `move_group`)
 
 ---
 
@@ -648,8 +706,10 @@ If the pendant shows **External Control speed limit** on **joint 5** (wrist_3) o
 | **Tray**         | Sample surface plane at Z = 20 mm; bottom at Z = 0             |
 | **Flat rim**     | Scan hemisphere equator (θ = 90°); coplanar with tray top      |
 | **Scan sphere**  | Virtual dome for pin placement (UI radius R)                   |
-| **Payload dome** | Collision mesh on tool0 (`tool_payload_radius_mm`)             |
-| **Ring**         | All pins at the same θ (elevation)                             |
+| **Payload mesh** | CAD collision on `tool0` (`tool_payload_mesh`)                 |
+| **Pinch sphere** | C403A0 guard radius (`tool_payload_radius_mm`)                 |
+| **Optical TCP**  | Sensor-face tip `hyperfusion_tcp` (`tool_tcp_*_mm`)            |
+| **Ring**         | All pins at the same θ (elevation / height layer)              |
 | **Plan joints**  | Joint angles stored at Plan for a pin                          |
 | **Home**         | Configured safe reference pose; retreat and bookends               |
 | **IK seed**      | home or current pose (+ 45° per-joint permutations) used for IK    |
@@ -670,13 +730,15 @@ If the pendant shows **External Control speed limit** on **joint 5** (wrist_3) o
 
 | Layer          | Main files                                                                          |
 | -------------- | ----------------------------------------------------------------------------------- |
-| Config         | `app/hyperfusion.cfg`, `HyperFusionConfig.cpp`                                      |
+| Config         | `app/hyperfusion.cfg` `[3d scanning]`, `HyperFusionConfig.cpp`                      |
 | Grid / TCP     | `Ur3eHemisphereScan.cpp`, `Ur3eHemisphereScanReachability.cpp`                      |
 | UI             | `Ur3eHemisphereScanSettingsWidget.cpp`, `Ur3eHemisphereScanPreviewWidget.cpp`       |
-| Orchestration  | `Ur3ePanelController.cpp`                                                           |
+| Orchestration  | `Ur3ePanelController.cpp` (execute loop)                                    |
 | HTTP client    | `Ur3eClient.cpp`                                                                    |
 | Sidecar        | `hyperfusion_ur3e/bridge/ros_bridge.py`, `hyperfusion_ur3e/sidecar/http_handler.py` |
-| MoveIt planner | `hyperfusion_ur3e/moveit/scan_planner.py`                                           |
+| MoveIt planner | `hyperfusion_ur3e/moveit/scan_planner.py`                                   |
+| URDF / TCP     | `urdf/hyperfusion_ur3e.urdf.xacro`, `urdf/hyperfusion_tool_payload.xacro`           |
+| Tool/TCP env   | `hyperfusion_ur3e/urdf/tool_payload_config.py`, `materialize_robot_description.py`  |
 
 
 ---
@@ -694,3 +756,12 @@ If the pendant shows **External Control speed limit** on **joint 5** (wrist_3) o
 
 
 Request bodies include `workspace` (`length_m`, `width_m`, `height_m`, `mount_height_m`) and `home_joints_deg` from `hyperfusion.cfg`.
+
+`/execute_scan_waypoint` flags:
+
+| Field | Meaning |
+| ----- | ------- |
+| `direct_only` | Manual Move: no home retreat |
+| `require_home_first` | Skip direct; home then approach (reserved) |
+| `tcp` | Pin TCP target (for live IK refresh) |
+| `joints` | 6 plan (or refreshed) joint angles (rad) |

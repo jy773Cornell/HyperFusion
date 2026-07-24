@@ -43,6 +43,7 @@ private:
     void saveToSettings() const;
     void onParameterChanged();
     void setComboText(QComboBox *combo, const QString &text) const;
+    void setParameterControlsEnabled(bool enabled);
 
     QComboBox *cameraCombo_ = nullptr;
     QPushButton *refreshCamerasBtn_ = nullptr;

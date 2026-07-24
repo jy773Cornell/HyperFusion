@@ -11,11 +11,13 @@
 #include "backend/light/LighthouseTypes.hpp"
 #include "backend/light/LighthouseWorker.hpp"
 #include "backend/stage/StageWorker.hpp"
+#include "backend/stage/StageTypes.hpp"
 #include "backend/camera/processing/CapturePostProcessor.hpp"
 #include "backend/camera/processing/CapturePostProcessorWorker.hpp"
 #include "backend/camera/processing/Gsam2ServerManager.hpp"
 #include "backend/camera/processing/HfFusionRunner.hpp"
 #include "backend/camera/processing/HfFusionWorker.hpp"
+#include "frontend/controllers/BfsPanelController.hpp"
 #include "frontend/controllers/CameraPanelController.hpp"
 #include "frontend/controllers/LightPanelController.hpp"
 #include "frontend/controllers/StagePanelController.hpp"
@@ -408,6 +410,16 @@ QWidget *hf::capture::CapturePanelController::createStreamTab() {
 
   layout->addWidget(host_->captureStreamEmptyLabel_);
   layout->addWidget(gridHost, 1);
+
+  QLabel *bfsLabel = nullptr;
+  host_->captureBfsPreviewPane_ =
+      ui::createPreviewPane(gridHost, QStringLiteral("BFS"), bfsLabel);
+  host_->captureBfsPreviewLabel_ = bfsLabel;
+  ui::setPreviewDisconnectedText(host_->captureBfsPreviewLabel_,
+                                 QStringLiteral("stream"),
+                                 QStringLiteral("BFS"));
+  host_->captureBfsPreviewPane_->hide();
+
   updateCaptureStreamLayout();
   return host_->captureStreamPage_;
 }
@@ -943,6 +955,15 @@ void hf::capture::CapturePanelController::
             : tr("Enable \"Use HyperFusion Stage for recording\" to select "
                  "modes"));
   }
+
+  // 3D RGB is independent of stage illumination modes; refresh enablement last.
+  syncBfsAnd3dRgbCaptureControls();
+  if (host_->captureModesBox_ != nullptr) {
+    const bool threeDEnabled = host_->capture3dRgbCheck_ != nullptr &&
+                               host_->capture3dRgbCheck_->isEnabled();
+    host_->captureModesBox_->setEnabled((modesBoxEnabled || threeDEnabled) &&
+                                        !scanActive);
+  }
 }
 
 void hf::capture::CapturePanelController::updateRecorderControls() {
@@ -1091,8 +1112,14 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
   updateGsamServerUi();
 
   if (host_->captureRecorderPreviewBtn_ != nullptr) {
-    host_->captureRecorderPreviewBtn_->setEnabled(useStage && !scanActive);
-    if (!stageConnected) {
+    const bool preview3d =
+        is3dRgbCaptureSelected() && canRun3dRgbCapture() && !scanActive;
+    host_->captureRecorderPreviewBtn_->setEnabled(
+        (useStage && !scanActive) || preview3d);
+    if (preview3d) {
+      host_->captureRecorderPreviewBtn_->setToolTip(
+          tr("3D RGB: same as UR3e Execute (motion only, no photos)"));
+    } else if (!stageConnected) {
       host_->captureRecorderPreviewBtn_->setToolTip(
           tr("Connect the stage on the Stage tab to enable preview"));
     } else if (!useStage) {
@@ -1107,9 +1134,16 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
   }
 
   if (host_->captureRecorderRecordBtn_ != nullptr) {
+    const bool record3d =
+        is3dRgbCaptureSelected() && canRun3dRgbCapture() && !scanActive
+        && !backgroundJobActive;
     host_->captureRecorderRecordBtn_->setEnabled(
-        anyCameraConnected && !scanActive && !backgroundJobActive);
-    if (!anyCameraConnected) {
+        ((anyCameraConnected || record3d) && !scanActive && !backgroundJobActive));
+    if (record3d && !anyCameraConnected) {
+      host_->captureRecorderRecordBtn_->setToolTip(
+          tr("3D RGB: move stage to 3D pose, run hemisphere scan, save BFS "
+             "stills under dataset/3d_scanning/"));
+    } else if (!anyCameraConnected) {
       host_->captureRecorderRecordBtn_->setToolTip(tr(
           "Connect at least one camera on the Camera tab to enable recording"));
     } else if (backgroundJobActive) {
@@ -1128,7 +1162,7 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
   }
 
   if (host_->captureRecorderStopBtn_ != nullptr)
-    host_->captureRecorderStopBtn_->setEnabled(scanActive);
+    host_->captureRecorderStopBtn_->setEnabled(scanActive || capture3dInProgress_);
 
   if (captureRecorderStatusTimer_ != nullptr) {
     if (scanActive)
@@ -1423,6 +1457,9 @@ void hf::capture::CapturePanelController::updateRecorderStatus() {
     } else {
       phaseDetail = tr("sample scan\u2026");
     }
+    break;
+  case CaptureScanPhase::MoveTo3dScanningPosition:
+    phaseDetail = tr("moving to 3D scanning stage pose\u2026");
     break;
   }
 
@@ -2175,6 +2212,45 @@ void hf::capture::CapturePanelController::onCaptureAbsoluteMoveComplete(
     verifySampleScanOriginAndStartScan();
     return;
   }
+
+  if (completedPhase == CaptureScanPhase::MoveTo3dScanningPosition) {
+    if (host_->ur3ePanel() == nullptr) {
+      failCaptureSequence(QStringLiteral("%1: UR3e panel unavailable for 3D scan.")
+                              .arg(captureSequenceLogPrefix()));
+      return;
+    }
+
+    const QString outDir = capture3dScanningOutputDir();
+    if (outDir.isEmpty()) {
+      failCaptureSequence(QStringLiteral("%1: 3D scanning output directory is empty.")
+                              .arg(captureSequenceLogPrefix()));
+      return;
+    }
+    QDir().mkpath(outDir);
+
+    hf::ur3e::HemisphereScanExecuteOptions opts;
+    opts.captureOutputDir = outDir;
+    opts.stabilizeMs = hf::hardwareConfig().ur3e.scanCaptureStabilizeMs;
+    capture3dInProgress_ = true;
+    host_->appendLog(
+        QStringLiteral("%1: hemisphere 3D capture → %2 (%3 ms settle per pose; wrist sweep if enabled)…")
+            .arg(captureSequenceLogPrefix(), outDir)
+            .arg(opts.stabilizeMs));
+
+    connect(host_->ur3ePanel(),
+            &hf::ur3e::Ur3ePanelController::hemisphereScanExecuteFinished,
+            this,
+            &CapturePanelController::on3dScanningCaptureFinished,
+            Qt::UniqueConnection);
+
+    if (!host_->ur3ePanel()->startHemisphereScanExecute(opts)) {
+      capture3dInProgress_ = false;
+      failCaptureSequence(
+          QStringLiteral("%1: could not start UR3e 3D scan execute.")
+              .arg(captureSequenceLogPrefix()));
+    }
+    return;
+  }
 }
 
 void hf::capture::CapturePanelController::beginCaptureBlackReference() {
@@ -2915,16 +2991,26 @@ void hf::capture::CapturePanelController::completeCaptureSequence() {
   capturePendingIlluminationModes_.clear();
   captureCurrentModeIndex_ = 0;
 
+  if (wasRecord && capture3dPending_ && canRun3dRgbCapture()) {
+    host_->appendLog(QStringLiteral(
+        "Capture record: HSI finished — starting 3D scanning capture…"));
+    begin3dScanningCapturePhase();
+    return;
+  }
+
   if (isStageRecordingEnabledInUi() && host_->stageWorker() != nullptr)
     host_->stageWorker()->requestStopMotion();
 
   captureRecorderMode_ = CaptureRecorderMode::Idle;
+  capture3dPending_ = false;
+  capture3dOnlySession_ = false;
   updateRecorderControls();
   host_->lightPanel()->updateConnectionDisplay();
   host_->lightPanel()->updateControlsEnabled();
 
   if (wasRecord) {
-    endCaptureRawDumpSession();
+    if (!capture3dOnlySession_)
+      endCaptureRawDumpSession();
     runCapturePostProcessingIfEnabled();
     host_->appendLog(QStringLiteral("Capture record: scan sequence finished."));
     homeStageAfterCapture();
@@ -2935,6 +3021,36 @@ void hf::capture::CapturePanelController::completeCaptureSequence() {
     lastPreviewCompleteModeFolders_ = std::move(completedPreviewModeFolders);
     homeStageAfterCapture();
     beginPreviewCompleteNotify();
+  }
+}
+
+void hf::capture::CapturePanelController::finishCaptureSequenceAfterOptional3d() {
+  const bool wasRecord = captureRecorderMode_ == CaptureRecorderMode::Record;
+  const bool threeDOnly = capture3dOnlySession_;
+  const QString threeDSessionDir = capture3dSessionDirectory_;
+  capture3dInProgress_ = false;
+  capture3dPending_ = false;
+  capture3dOnlySession_ = false;
+  capture3dSessionDirectory_.clear();
+
+  if (isStageRecordingEnabledInUi() && host_->stageWorker() != nullptr)
+    host_->stageWorker()->requestStopMotion();
+
+  captureRecorderMode_ = CaptureRecorderMode::Idle;
+  resetCaptureSequenceState();
+  updateRecorderControls();
+  host_->lightPanel()->updateConnectionDisplay();
+  host_->lightPanel()->updateControlsEnabled();
+
+  if (wasRecord) {
+    if (!threeDOnly)
+      endCaptureRawDumpSession();
+    else if (!threeDSessionDir.isEmpty())
+      lastEndedCaptureSessionSummary_.sessionDirectory = threeDSessionDir;
+    runCapturePostProcessingIfEnabled();
+    host_->appendLog(QStringLiteral("Capture record: scan sequence finished."));
+    homeStageAfterCapture();
+    beginRecordCompleteNotify();
   }
 }
 
@@ -3301,6 +3417,16 @@ void hf::capture::CapturePanelController::startCaptureSequence() {
 void hf::capture::CapturePanelController::startPreview() {
   if (captureRecorderMode_ != CaptureRecorderMode::Idle)
     return;
+
+  if (is3dRgbCaptureSelected() && canRun3dRgbCapture()) {
+    if (host_->ur3ePanel() == nullptr)
+      return;
+    host_->appendLog(QStringLiteral(
+        "Capture preview: 3D RGB enabled — running UR3e scan execute (motion only)…"));
+    if (!host_->ur3ePanel()->startHemisphereScanExecute({}))
+      host_->appendLog(QStringLiteral("Capture preview: UR3e scan execute rejected."));
+    return;
+  }
 
   applyDualCameraScanSync();
 
@@ -4173,15 +4299,40 @@ void hf::capture::CapturePanelController::startRecord() {
     return;
   }
 
-  std::vector<CaptureIlluminationMode> illuminationModes;
-  if (!effectiveCaptureIlluminationModes(illuminationModes)) {
+  const bool want3d = is3dRgbCaptureSelected() && canRun3dRgbCapture();
+  const bool wantHsi = hasHsiCaptureSelection();
+
+  if (!want3d && !wantHsi) {
     notifyRecordBlocked(
-        tr("Select reflectance and/or transmittance mode in Position."));
+        tr("Select reflectance/transmittance with a connected HSI camera, "
+           "and/or enable 3D RGB with a planned UR3e route."));
     return;
   }
 
   if (!validateCaptureRecordMetadata(errorMessage)) {
     notifyRecordBlocked(errorMessage);
+    return;
+  }
+
+  capture3dPending_ = want3d;
+  capture3dOnlySession_ = want3d && !wantHsi;
+  capture3dSessionDirectory_.clear();
+
+  if (!wantHsi) {
+    if (!begin3dOnlyDatasetSession(errorMessage)) {
+      capture3dPending_ = false;
+      capture3dOnlySession_ = false;
+      notifyRecordBlocked(errorMessage);
+      return;
+    }
+
+    resetCaptureSequenceState();
+    captureRecorderMode_ = CaptureRecorderMode::Record;
+    updateRecorderControls();
+    host_->appendLog(
+        QStringLiteral("Capture record: 3D-only session %1")
+            .arg(capture3dSessionDirectory_));
+    begin3dScanningCapturePhase();
     return;
   }
 
@@ -4194,6 +4345,13 @@ void hf::capture::CapturePanelController::startRecord() {
 
   if (!selectedCaptureCameraStreaming(errorMessage)) {
     notifyRecordBlocked(errorMessage);
+    return;
+  }
+
+  std::vector<CaptureIlluminationMode> illuminationModes;
+  if (!effectiveCaptureIlluminationModes(illuminationModes)) {
+    notifyRecordBlocked(
+        tr("Select reflectance and/or transmittance mode in Position."));
     return;
   }
 
@@ -4215,6 +4373,9 @@ void hf::capture::CapturePanelController::startRecord() {
     notifyRecordBlocked(errorMessage);
     return;
   }
+
+  if (want3d && captureWriterWorker_ != nullptr)
+    capture3dSessionDirectory_ = captureWriterWorker_->sessionDirectory();
 
   resetCaptureSequenceState();
   captureRecorderMode_ = CaptureRecorderMode::Record;
@@ -4241,6 +4402,11 @@ void hf::capture::CapturePanelController::startRecord() {
                                   "%1 (reflectance first, then "
                                   "transmittance when both selected)")
                        .arg(modeFolders.join(QStringLiteral(", "))));
+
+  if (want3d)
+    host_->appendLog(QStringLiteral(
+        "Capture record: 3D RGB will run after HSI (stage → %1 mm).")
+                         .arg(hf::hardwareConfig().sample3dScanningPositionMm, 0, 'f', 0));
 
   host_->appendLog(QStringLiteral("Capture record: session %1 \u2014 "
                                   "per-camera white/bright ref from cfg, "
@@ -4269,8 +4435,11 @@ void hf::capture::CapturePanelController::homeStageBeforeCapture() {
 }
 
 void hf::capture::CapturePanelController::stopRecorder() {
-  if (captureRecorderMode_ == CaptureRecorderMode::Idle)
+  if (captureRecorderMode_ == CaptureRecorderMode::Idle && !capture3dInProgress_)
     return;
+
+  if (capture3dInProgress_ && host_->ur3ePanel() != nullptr)
+    host_->ur3ePanel()->requestStopMotion();
 
   if (captureScanTimer_ != nullptr)
     captureScanTimer_->stop();
@@ -4289,8 +4458,13 @@ void hf::capture::CapturePanelController::stopRecorder() {
 
   const bool wasRecord = captureRecorderMode_ == CaptureRecorderMode::Record;
   const bool wasPreview = captureRecorderMode_ == CaptureRecorderMode::Preview;
+  const bool threeDOnly = capture3dOnlySession_;
   captureRecorderMode_ = CaptureRecorderMode::Idle;
   captureStageSequenceActive_ = false;
+  capture3dInProgress_ = false;
+  capture3dPending_ = false;
+  capture3dOnlySession_ = false;
+  capture3dSessionDirectory_.clear();
   resetCaptureSequenceState();
   capturePendingIlluminationModes_.clear();
   captureCurrentModeIndex_ = 0;
@@ -4299,7 +4473,8 @@ void hf::capture::CapturePanelController::stopRecorder() {
   host_->lightPanel()->updateControlsEnabled();
 
   if (wasRecord) {
-    endCaptureRawDumpSession();
+    if (!threeDOnly)
+      endCaptureRawDumpSession();
     host_->appendLog(QStringLiteral("Capture record: stopped."));
     homeStageAfterCapture();
   } else if (wasPreview) {
@@ -4353,15 +4528,201 @@ void hf::capture::CapturePanelController::updateCamerasList() {
   updateCheckbox(host_->camera1Ui_, host_->captureCamera1Check_);
   updateCheckbox(host_->camera2Ui_, host_->captureCamera2Check_);
 
+  const bool bfsConnected =
+      host_->bfsPanel() != nullptr && host_->bfsPanel()->isCameraConnected();
+  if (host_->captureBfsCheck_ != nullptr) {
+    if (!bfsConnected) {
+      const QSignalBlocker blocker(host_->captureBfsCheck_);
+      host_->captureBfsCheck_->setChecked(false);
+      host_->captureBfsCheck_->hide();
+    } else {
+      const bool firstShow = host_->captureBfsCheck_->isHidden();
+      host_->captureBfsCheck_->setText(QStringLiteral("BFS"));
+      if (firstShow) {
+        const QSignalBlocker blocker(host_->captureBfsCheck_);
+        host_->captureBfsCheck_->setChecked(true);
+      }
+      host_->captureBfsCheck_->show();
+    }
+  }
+
   updateDualCameraSyncControls();
+  syncBfsAnd3dRgbCaptureControls();
 
   if (host_->captureCamerasEmptyLabel_ != nullptr) {
-    const bool anyConnected =
-        isConnected(host_->camera1Ui_) || isConnected(host_->camera2Ui_);
+    const bool anyConnected = isConnected(host_->camera1Ui_) ||
+                              isConnected(host_->camera2Ui_) || bfsConnected;
     host_->captureCamerasEmptyLabel_->setHidden(anyConnected);
   }
 
   updateCaptureStreamLayout();
+}
+
+bool hf::capture::CapturePanelController::isBfsCaptureSelected() const {
+  return host_->captureBfsCheck_ != nullptr &&
+         !host_->captureBfsCheck_->isHidden() &&
+         host_->captureBfsCheck_->isChecked();
+}
+
+bool hf::capture::CapturePanelController::is3dRgbCaptureSelected() const {
+  return host_->capture3dRgbCheck_ != nullptr &&
+         host_->capture3dRgbCheck_->isEnabled() &&
+         host_->capture3dRgbCheck_->isChecked();
+}
+
+bool hf::capture::CapturePanelController::canRun3dRgbCapture() const {
+  return host_->ur3ePanel() != nullptr && host_->ur3ePanel()->isRobotConnected()
+         && host_->ur3ePanel()->isScanPlanReady() && isCaptureStageConnected()
+         && host_->bfsPanel() != nullptr && host_->bfsPanel()->isCameraConnected();
+}
+
+bool hf::capture::CapturePanelController::hasHsiCaptureSelection() const {
+  std::vector<std::size_t> cameras;
+  if (!selectedCaptureCameraIndices(cameras))
+    return false;
+  std::vector<CaptureIlluminationMode> modes;
+  return selectedCaptureIlluminationModes(modes) && !modes.empty();
+}
+
+QString hf::capture::CapturePanelController::capture3dScanningOutputDir() const {
+  QString sessionDir = capture3dSessionDirectory_;
+  if (sessionDir.isEmpty() && captureWriterWorker_ != nullptr)
+    sessionDir = captureWriterWorker_->sessionDirectory();
+  if (sessionDir.isEmpty())
+    return {};
+  return QDir(sessionDir).filePath(QStringLiteral("3d_scanning"));
+}
+
+bool hf::capture::CapturePanelController::begin3dOnlyDatasetSession(
+    QString &errorMessage) {
+  if (!validateCaptureRecordMetadata(errorMessage))
+    return false;
+
+  const QString saveFolder = host_->captureSaveFolderEdit_->text().trimmed();
+  const QString dataset = host_->captureDatasetEdit_->text().trimmed();
+  const QString sessionDir = QDir(saveFolder).filePath(dataset);
+  if (!QDir().mkpath(sessionDir)) {
+    errorMessage =
+        QStringLiteral("Could not create dataset folder:\n%1").arg(sessionDir);
+    return false;
+  }
+  const QString threeDDir = QDir(sessionDir).filePath(QStringLiteral("3d_scanning"));
+  if (!QDir().mkpath(threeDDir)) {
+    errorMessage =
+        QStringLiteral("Could not create 3d_scanning folder:\n%1").arg(threeDDir);
+    return false;
+  }
+
+  capture3dSessionDirectory_ = sessionDir;
+  lastEndedCaptureSessionSummary_ = {};
+  lastEndedCaptureSessionSummary_.sessionDirectory = sessionDir;
+  return true;
+}
+
+void hf::capture::CapturePanelController::begin3dScanningCapturePhase() {
+  if (host_->stageWorker() == nullptr
+      || host_->stageWorker()->currentState() != StageState::Connected) {
+    failCaptureSequence(QStringLiteral("%1: stage is not connected for 3D scan.")
+                            .arg(captureSequenceLogPrefix()));
+    return;
+  }
+
+  if (capture3dSessionDirectory_.isEmpty() && captureWriterWorker_ != nullptr)
+    capture3dSessionDirectory_ = captureWriterWorker_->sessionDirectory();
+
+  const double targetMm = hf::hardwareConfig().sample3dScanningPositionMm;
+  captureScanPhase_ = CaptureScanPhase::MoveTo3dScanningPosition;
+  host_->appendLog(
+      QStringLiteral("%1: moving stage to 3D scanning pose %2 mm…")
+          .arg(captureSequenceLogPrefix())
+          .arg(targetMm, 0, 'f', 2));
+  requestCaptureAbsoluteMove(targetMm, CaptureScanPhase::MoveTo3dScanningPosition);
+  updateRecorderStatus();
+}
+
+void hf::capture::CapturePanelController::on3dScanningCaptureFinished(
+    const bool ok, const QString &detail, const int capturedFrameCount) {
+  if (!capture3dInProgress_)
+    return;
+
+  host_->appendLog(
+      QStringLiteral("%1: 3D scanning %2 (%3 frame(s)) — %4")
+          .arg(captureSequenceLogPrefix())
+          .arg(ok ? QStringLiteral("finished") : QStringLiteral("failed"))
+          .arg(capturedFrameCount)
+          .arg(detail));
+
+  if (!ok && captureRecorderMode_ == CaptureRecorderMode::Record) {
+    capture3dInProgress_ = false;
+    failCaptureSequence(
+        QStringLiteral("%1: 3D scanning failed — %2")
+            .arg(captureSequenceLogPrefix(), detail));
+    return;
+  }
+
+  finishCaptureSequenceAfterOptional3d();
+}
+
+void hf::capture::CapturePanelController::syncBfsAnd3dRgbCaptureControls(
+    QObject *source) {
+  if (host_ == nullptr || syncingBfs3dSelection_)
+    return;
+
+  const bool planReady =
+      host_->ur3ePanel() != nullptr && host_->ur3ePanel()->isScanPlanReady();
+  const bool robotConnected =
+      host_->ur3ePanel() != nullptr && host_->ur3ePanel()->isRobotConnected();
+  const bool stageConnected = isCaptureStageConnected();
+  const bool bfsVisible = host_->captureBfsCheck_ != nullptr &&
+                          !host_->captureBfsCheck_->isHidden();
+  const bool threeDReady =
+      planReady && robotConnected && stageConnected && bfsVisible;
+
+  if (host_->capture3dRgbCheck_ != nullptr) {
+    host_->capture3dRgbCheck_->setEnabled(threeDReady);
+    if (!threeDReady) {
+      const QSignalBlocker blocker(host_->capture3dRgbCheck_);
+      host_->capture3dRgbCheck_->setChecked(false);
+      if (!bfsVisible) {
+        host_->capture3dRgbCheck_->setToolTip(
+            tr("Connect the BFS camera to enable 3D RGB capture."));
+      } else if (!robotConnected) {
+        host_->capture3dRgbCheck_->setToolTip(
+            tr("Connect the UR3e robot to enable 3D RGB capture."));
+      } else if (!stageConnected) {
+        host_->capture3dRgbCheck_->setToolTip(
+            tr("Connect the stage to enable 3D RGB capture."));
+      } else {
+        host_->capture3dRgbCheck_->setToolTip(
+            tr("BFS RGB for 3D scanning. Plan a UR3e scan route with reachable "
+               "poses first."));
+      }
+    } else {
+      host_->capture3dRgbCheck_->setToolTip(
+          tr("BFS RGB for 3D scanning (synced with the BFS camera checkbox). "
+             "Preview = UR3e Execute; Record = stage → 3D pose then stills."));
+    }
+  }
+
+  syncingBfs3dSelection_ = true;
+
+  if (source == host_->captureBfsCheck_ && host_->capture3dRgbCheck_ != nullptr) {
+    if (isBfsCaptureSelected() && threeDReady)
+      host_->capture3dRgbCheck_->setChecked(true);
+    else
+      host_->capture3dRgbCheck_->setChecked(false);
+  } else if (source == host_->capture3dRgbCheck_ &&
+             host_->captureBfsCheck_ != nullptr && bfsVisible) {
+    host_->captureBfsCheck_->setChecked(
+        host_->capture3dRgbCheck_ != nullptr &&
+        host_->capture3dRgbCheck_->isChecked());
+  } else if (threeDReady && isBfsCaptureSelected() &&
+             host_->capture3dRgbCheck_ != nullptr &&
+             !host_->capture3dRgbCheck_->isChecked()) {
+    host_->capture3dRgbCheck_->setChecked(true);
+  }
+
+  syncingBfs3dSelection_ = false;
 }
 
 LumoCameraUi *hf::capture::CapturePanelController::cameraUiForIndex(
@@ -4397,9 +4758,14 @@ void hf::capture::CapturePanelController::updateCaptureStreamLayout() {
     if (pane != nullptr)
       pane->hide();
   }
+  if (host_->captureBfsPreviewPane_ != nullptr)
+    host_->captureBfsPreviewPane_->hide();
 
-  std::vector<std::size_t> selected;
-  if (!selectedCaptureCameraIndices(selected)) {
+  std::vector<std::size_t> selectedHsi;
+  const bool hasHsi = selectedCaptureCameraIndices(selectedHsi);
+  const bool showBfs = isBfsCaptureSelected();
+
+  if (!hasHsi && !showBfs) {
     if (host_->captureStreamEmptyLabel_ != nullptr)
       host_->captureStreamEmptyLabel_->show();
     if (host_->cameraPanel() != nullptr)
@@ -4410,7 +4776,10 @@ void hf::capture::CapturePanelController::updateCaptureStreamLayout() {
   if (host_->captureStreamEmptyLabel_ != nullptr)
     host_->captureStreamEmptyLabel_->hide();
 
-  for (const std::size_t cameraIndex : selected) {
+  std::vector<QGroupBox *> visiblePanes;
+  visiblePanes.reserve(3);
+
+  for (const std::size_t cameraIndex : selectedHsi) {
     if (cameraIndex >= 2 ||
         host_->captureWaterfallPanes_[cameraIndex] == nullptr)
       continue;
@@ -4422,42 +4791,32 @@ void hf::capture::CapturePanelController::updateCaptureStreamLayout() {
           QStringLiteral(" waterfall"));
     }
     host_->captureWaterfallPanes_[cameraIndex]->show();
+    visiblePanes.push_back(host_->captureWaterfallPanes_[cameraIndex]);
   }
 
-  const int count = static_cast<int>(selected.size());
-  if (count == 1) {
-    const std::size_t cameraIndex = selected.front();
-    if (cameraIndex < 2 &&
-        host_->captureWaterfallPanes_[cameraIndex] != nullptr)
-      host_->captureStreamGrid_->addWidget(
-          host_->captureWaterfallPanes_[cameraIndex], 0, 0, 2, 2);
-  } else if (count == 2) {
-    const std::size_t left = selected[0];
-    const std::size_t right = selected[1];
-    if (left < 2 && host_->captureWaterfallPanes_[left] != nullptr)
-      host_->captureStreamGrid_->addWidget(host_->captureWaterfallPanes_[left],
-                                           0, 0, 2, 1);
-    if (right < 2 && host_->captureWaterfallPanes_[right] != nullptr)
-      host_->captureStreamGrid_->addWidget(host_->captureWaterfallPanes_[right],
-                                           0, 1, 2, 1);
-  } else if (count >= 3) {
-    for (int slot = 0; slot < count && slot < 3; ++slot) {
-      const std::size_t cameraIndex = selected[static_cast<std::size_t>(slot)];
-      if (cameraIndex >= 2 ||
-          host_->captureWaterfallPanes_[cameraIndex] == nullptr)
-        continue;
+  if (showBfs && host_->captureBfsPreviewPane_ != nullptr) {
+    host_->captureBfsPreviewPane_->setTitle(QStringLiteral("BFS"));
+    host_->captureBfsPreviewPane_->show();
+    visiblePanes.push_back(host_->captureBfsPreviewPane_);
+  }
 
-      const int row = slot < 2 ? 0 : 1;
-      const int col = slot < 2 ? slot : 0;
-      host_->captureStreamGrid_->addWidget(
-          host_->captureWaterfallPanes_[cameraIndex], row, col);
-    }
+  const int count = static_cast<int>(visiblePanes.size());
+  if (count == 1) {
+    host_->captureStreamGrid_->addWidget(visiblePanes[0], 0, 0, 1, 1);
+  } else if (count == 2) {
+    host_->captureStreamGrid_->addWidget(visiblePanes[0], 0, 0);
+    host_->captureStreamGrid_->addWidget(visiblePanes[1], 0, 1);
+  } else if (count >= 3) {
+    host_->captureStreamGrid_->addWidget(visiblePanes[0], 0, 0);
+    host_->captureStreamGrid_->addWidget(visiblePanes[1], 0, 1);
+    host_->captureStreamGrid_->addWidget(visiblePanes[2], 0, 2);
   }
 
   host_->captureStreamGrid_->setColumnStretch(0, 1);
-  host_->captureStreamGrid_->setColumnStretch(1, 1);
+  host_->captureStreamGrid_->setColumnStretch(1, count >= 2 ? 1 : 0);
+  host_->captureStreamGrid_->setColumnStretch(2, count >= 3 ? 1 : 0);
   host_->captureStreamGrid_->setRowStretch(0, 1);
-  host_->captureStreamGrid_->setRowStretch(1, 1);
+  host_->captureStreamGrid_->setRowStretch(1, 0);
 
   if (host_->cameraPanel() != nullptr)
     host_->cameraPanel()->refreshWaterfallDisplayTargets();

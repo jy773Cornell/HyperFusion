@@ -2,6 +2,7 @@
 #pragma once
 
 #include "backend/3dscanning/BfsCameraTypes.hpp"
+#include "frontend/streaming/StreamFpsTracker.hpp"
 
 #include <QObject>
 
@@ -26,6 +27,10 @@ public:
     void initializeWorker();
     void shutdownSync();
     void wireSettingsTabConnections();
+    [[nodiscard]] bool isCameraConnected() const;
+
+    /// Thread-safe copy of the latest streamed RGB frame (for Capture 3D stills).
+    [[nodiscard]] bool tryCopyLastFrame(BfsRgbFrame &out) const;
 
 private:
     void onRefreshClicked();
@@ -41,7 +46,6 @@ private:
     void showFrameOnPreview(const BfsRgbFrame &frame);
     [[nodiscard]] BfsCameraSettings settingsFromUi() const;
     void updatePreviewDisconnected();
-    void focusBfsStreamTab();
 
     MainWindow *host_ = nullptr;
     std::unique_ptr<BfsCameraWorker> worker_;
@@ -50,6 +54,8 @@ private:
     std::mutex pendingFrameMutex_;
     std::optional<BfsRgbFrame> pendingFrame_;
     bool frameFlushQueued_ = false;
+    mutable std::mutex lastFrameMutex_;
     std::optional<BfsRgbFrame> lastFrame_;
+    ui::StreamFpsTracker streamFps_;
 };
 } // namespace hf::bfs

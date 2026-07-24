@@ -410,8 +410,37 @@ void BfsCameraSettingsWidget::setConnectedUi(const bool connected)
         connectBtn_->setEnabled(!connected);
     if (disconnectBtn_ != nullptr)
         disconnectBtn_->setEnabled(connected);
+    setParameterControlsEnabled(connected);
     if (!connected)
         setCaptureEnabled(false);
+}
+
+void BfsCameraSettingsWidget::setParameterControlsEnabled(const bool enabled)
+{
+    const auto setEnabled = [enabled](QWidget *w) {
+        if (w != nullptr)
+            w->setEnabled(enabled);
+    };
+
+    setEnabled(acquisitionModeCombo_);
+    setEnabled(acquisitionFrameRateEnableCheck_);
+    setEnabled(acquisitionFrameRateSpin_);
+    setEnabled(deviceLinkThroughputLimitSpin_);
+    setEnabled(evCompensationSpin_);
+    setEnabled(exposureModeCombo_);
+    setEnabled(exposureAutoCombo_);
+    setEnabled(exposureTimeSpin_);
+    setEnabled(exposureTimeLowerLimitMinSpin_);
+    setEnabled(exposureTimeLowerLimitMaxSpin_);
+    setEnabled(gainAutoCombo_);
+    setEnabled(gainSpin_);
+    setEnabled(gammaEnableCheck_);
+    setEnabled(gammaSpin_);
+    setEnabled(blackLevelSelectorCombo_);
+    setEnabled(blackLevelSpin_);
+    setEnabled(balanceRatioSelectorCombo_);
+    setEnabled(balanceRatioSpin_);
+    setEnabled(balanceWhiteAutoCombo_);
 }
 
 void BfsCameraSettingsWidget::setCaptureEnabled(const bool enabled)

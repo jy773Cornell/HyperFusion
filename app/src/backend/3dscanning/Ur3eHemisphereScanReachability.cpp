@@ -29,137 +29,6 @@ namespace hf::ur3e
 
 {
 
-namespace
-
-{
-
-constexpr double kEpsilon = 1.0e-9;
-
-
-
-double vectorLength(const double x, const double y, const double z)
-
-{
-
-    return std::sqrt(x * x + y * y + z * z);
-
-}
-
-
-
-bool normalizeVector(double &x, double &y, double &z)
-
-{
-
-    const double length = vectorLength(x, y, z);
-
-    if (length <= kEpsilon)
-
-        return false;
-
-    x /= length;
-
-    y /= length;
-
-    z /= length;
-
-    return true;
-
-}
-
-
-
-void rotationMatrixToRotVec(const double m00,
-
-                            const double m01,
-
-                            const double m02,
-
-                            const double m10,
-
-                            const double m11,
-
-                            const double m12,
-
-                            const double m20,
-
-                            const double m21,
-
-                            const double m22,
-
-                            double &rx,
-
-                            double &ry,
-
-                            double &rz)
-
-{
-
-    const double trace = m00 + m11 + m22;
-
-    const double angle = std::acos(std::clamp((trace - 1.0) * 0.5, -1.0, 1.0));
-
-    if (angle <= kEpsilon)
-
-    {
-
-        rx = ry = rz = 0.0;
-
-        return;
-
-    }
-
-
-
-    const double sinAngle = std::sin(angle);
-
-    rx = (m21 - m12) / (2.0 * sinAngle) * angle;
-
-    ry = (m02 - m20) / (2.0 * sinAngle) * angle;
-
-    rz = (m10 - m01) / (2.0 * sinAngle) * angle;
-
-}
-
-void buildTcpOrientationFromToolZ(const double toolZX,
-                                  const double toolZY,
-                                  const double toolZZ,
-                                  Ur3eScanTcpPose &tcp)
-{
-    double zx = toolZX;
-    double zy = toolZY;
-    double zz = toolZZ;
-    if (!normalizeVector(zx, zy, zz))
-    {
-        zx = 0.0;
-        zy = 0.0;
-        zz = -1.0;
-    }
-
-    tcp.toolZMx = zx;
-    tcp.toolZMy = zy;
-    tcp.toolZMz = zz;
-
-    double refX = std::abs(zx) < 0.9 ? 1.0 : 0.0;
-    double refY = std::abs(zx) < 0.9 ? 0.0 : 1.0;
-    const double refZ = 0.0;
-
-    double yX = zy * refZ - zz * refY;
-    double yY = zz * refX - zx * refZ;
-    double yZ = zx * refY - zy * refX;
-    normalizeVector(yX, yY, yZ);
-
-    const double xX = yY * zz - yZ * zy;
-    const double xY = yZ * zx - yX * zz;
-    const double xZ = yX * zy - yY * zx;
-
-    rotationMatrixToRotVec(xX, yX, zx, xY, yY, zy, xZ, yZ, zz, tcp.rxRad, tcp.ryRad, tcp.rzRad);
-}
-
-} // namespace
-
-
-
 Ur3eScanTcpPose tcpPoseForHemispherePoint(const Ur3eHemisphereScanPoint &gridPoint)
 
 {
@@ -184,11 +53,19 @@ Ur3eScanTcpPose tcpPoseForHemispherePoint(const Ur3eHemisphereScanPoint &gridPoi
     double centerZM = kSampleTrayHeightM;
     mount.transformPoint(centerXM, centerYM, centerZM);
 
-    const double toolZX = centerXM - tcp.xM;
-    const double toolZY = centerYM - tcp.yM;
-    const double toolZZ = centerZM - tcp.zM;
+    tcp.toolZMx = centerXM - tcp.xM;
+    tcp.toolZMy = centerYM - tcp.yM;
+    tcp.toolZMz = centerZM - tcp.zM;
 
-    buildTcpOrientationFromToolZ(toolZX, toolZY, toolZZ, tcp);
+    double upX = 0.0;
+    double upY = 0.0;
+    double upZ = 1.0;
+    mount.transformVector(upX, upY, upZ);
+    orientScanTcpFromToolZ(tcp,
+                           hf::hardwareConfig().ur3e.scanCameraUpWorldZ,
+                           upX,
+                           upY,
+                           upZ);
 
     return tcp;
 
@@ -288,6 +165,8 @@ Ur3eHemisphereScanPlan evaluateHemisphereScanPlanMoveIt(const QString &serverUrl
 
     workspace.insert(QStringLiteral("mount_height_m"), boundary.mountHeightM());
 
+    workspace.insert(QStringLiteral("ceiling_clearance_m"), boundary.ceilingClearanceM());
+
     QJsonObject body;
 
     body.insert(QStringLiteral("poses"), poses);
@@ -298,9 +177,11 @@ Ur3eHemisphereScanPlan evaluateHemisphereScanPlanMoveIt(const QString &serverUrl
 
 
 
+    // Large grids + home→pin path checks can exceed 5 min; keep curl alive until MoveIt finishes.
+    constexpr int kPlanHemisphereScanTimeoutMs = 900000; // 15 min
     const QJsonObject response =
-
-        ur3ePostJsonRequest(serverUrl, QStringLiteral("/plan_hemisphere_scan"), body, 300000, errorMessage);
+        ur3ePostJsonRequest(serverUrl, QStringLiteral("/plan_hemisphere_scan"), body,
+                            kPlanHemisphereScanTimeoutMs, errorMessage);
 
     if (response.isEmpty() || !response.value(QStringLiteral("ok")).toBool(false))
 

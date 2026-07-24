@@ -1,57 +1,80 @@
 <?xml version="1.0"?>
-<!-- Camera / sensor collision dome on tool0.
-     hemisphere: bowl on flange — apex at flange, flat rim opens outward (+tool0 Z).
-     sphere: full sphere centered on tool0. -->
+<!-- Camera / sensor collision payload on tool0.
+     mesh: real CAD STL (metres), flange-aligned — preferred.
+     hemisphere: legacy unit bowl scaled by radius_m.
+     sphere / box: simple primitives. -->
 <robot xmlns:xacro="http://wiki.ros.org/xacro">
 
   <xacro:macro name="hyperfusion_tool_payload"
-               params="tf_prefix shape radius_m box_x_m box_y_m box_z_m mesh_dir collision_gap_m origin_x_m origin_y_m origin_z_m origin_roll_rad origin_pitch_rad origin_yaw_rad">
+               params="tf_prefix shape radius_m box_x_m box_y_m box_z_m mesh_dir mesh_file collision_gap_m origin_x_m origin_y_m origin_z_m origin_roll_rad origin_pitch_rad origin_yaw_rad">
 
     <link name="${tf_prefix}hyperfusion_tool_payload">
       <visual name="hyperfusion_tool_payload_visual">
-        <!-- Hemisphere flipped 180° about X: apex at flange, flat rim faces outward (+tool0 Z). -->
-        <origin xyz="0 0 ${radius_m}" rpy="${pi} 0 0"/>
-        <geometry>
-          <xacro:if value="${shape == 'box'}">
-            <box size="${box_x_m} ${box_y_m} ${box_z_m}"/>
-          </xacro:if>
-          <xacro:if value="${shape == 'hemisphere'}">
+        <xacro:if value="${shape == 'mesh'}">
+          <!-- CAD was pan-180° off in tool0 XY → rotate about Z by π. -->
+          <origin xyz="0 0 0" rpy="0 0 ${pi}"/>
+          <geometry>
+            <mesh filename="file://${mesh_dir}${mesh_file}" scale="1 1 1"/>
+          </geometry>
+        </xacro:if>
+        <xacro:if value="${shape == 'hemisphere'}">
+          <!-- Unit bowl: apex at flange, flat rim opens +tool0 Z. -->
+          <origin xyz="0 0 ${radius_m}" rpy="${pi} 0 0"/>
+          <geometry>
             <mesh filename="file://${mesh_dir}tool_payload_hemisphere.stl"
                   scale="${radius_m} ${radius_m} ${radius_m}"/>
-          </xacro:if>
-          <xacro:if value="${shape == 'sphere'}">
+          </geometry>
+        </xacro:if>
+        <xacro:if value="${shape == 'box'}">
+          <origin xyz="0 0 0" rpy="0 0 0"/>
+          <geometry>
+            <box size="${box_x_m} ${box_y_m} ${box_z_m}"/>
+          </geometry>
+        </xacro:if>
+        <xacro:if value="${shape == 'sphere'}">
+          <origin xyz="0 0 0" rpy="0 0 0"/>
+          <geometry>
             <sphere radius="${radius_m}"/>
-          </xacro:if>
-        </geometry>
+          </geometry>
+        </xacro:if>
         <material name="hyperfusion_tool_payload_visual">
-          <color rgba="0.15 0.85 1.0 0.75"/>
+          <color rgba="0.15 0.85 1.0 0.55"/>
         </material>
       </visual>
+
       <collision>
-        <!-- Same flip; small +Z offset so MoveIt does not flag flange/wrist rim contact. -->
-        <origin xyz="0 0 ${radius_m + collision_gap_m}" rpy="${pi} 0 0"/>
-        <geometry>
-          <xacro:if value="${shape == 'box'}">
-            <box size="${box_x_m} ${box_y_m} ${box_z_m}"/>
-          </xacro:if>
-          <xacro:if value="${shape == 'hemisphere'}">
+        <xacro:if value="${shape == 'mesh'}">
+          <!-- CAD was pan-180° off in tool0 XY → rotate about Z by π. -->
+          <origin xyz="0 0 0" rpy="0 0 ${pi}"/>
+          <geometry>
+            <mesh filename="file://${mesh_dir}${mesh_file}" scale="1 1 1"/>
+          </geometry>
+        </xacro:if>
+        <xacro:if value="${shape == 'hemisphere'}">
+          <origin xyz="0 0 ${radius_m + collision_gap_m}" rpy="${pi} 0 0"/>
+          <geometry>
             <mesh filename="file://${mesh_dir}tool_payload_hemisphere.stl"
                   scale="${radius_m} ${radius_m} ${radius_m}"/>
-          </xacro:if>
-          <xacro:if value="${shape == 'sphere'}">
-            <sphere radius="${radius_m}"/>
-          </xacro:if>
-        </geometry>
-      </collision>
-      <inertial>
-        <xacro:if value="${shape == 'hemisphere'}">
-          <origin xyz="0 0 ${radius_m * 0.375}" rpy="0 0 0"/>
+          </geometry>
         </xacro:if>
-        <xacro:unless value="${shape == 'hemisphere'}">
+        <xacro:if value="${shape == 'box'}">
           <origin xyz="0 0 0" rpy="0 0 0"/>
-        </xacro:unless>
-        <mass value="0.25"/>
-        <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+          <geometry>
+            <box size="${box_x_m} ${box_y_m} ${box_z_m}"/>
+          </geometry>
+        </xacro:if>
+        <xacro:if value="${shape == 'sphere'}">
+          <origin xyz="0 0 0" rpy="0 0 0"/>
+          <geometry>
+            <sphere radius="${radius_m}"/>
+          </geometry>
+        </xacro:if>
+      </collision>
+
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="0.35"/>
+        <inertia ixx="0.0002" ixy="0" ixz="0" iyy="0.0002" iyz="0" izz="0.0002"/>
       </inertial>
     </link>
 

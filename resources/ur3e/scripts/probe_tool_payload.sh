@@ -21,6 +21,7 @@ echo "=== xacro preflight ==="
 REPO="${HYPERFUSION_UR3E_REPO:-/mnt/d/Pototypy/HyperFusion/resources/ur3e}"
 xacro "${REPO}/urdf/hyperfusion_ur3e.urdf.xacro" \
   ur_type:=ur3e name:=ur3e use_mock_hardware:=false ceiling_mount:=true \
-  tool_payload_enabled:=true tool_payload_shape:=hemisphere tool_payload_radius_m:=0.10 \
+  tool_payload_enabled:=true tool_payload_shape:=mesh \
+  tool_payload_mesh_file:=ur_bfs_tool_payload.stl \
   "tool_payload_mesh_dir:=${REPO}/urdf/meshes/" 2>/dev/null \
   | grep -c hyperfusion_tool_payload || echo 0

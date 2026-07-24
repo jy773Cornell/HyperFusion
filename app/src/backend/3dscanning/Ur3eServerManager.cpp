@@ -183,6 +183,19 @@ QString Ur3eServerManager::buildLaunchCommand() const
     serverArgs += QStringLiteral(" --max-linear-accel %1").arg(cfg.maxLinearAccelMPerS2, 0, 'g', 6);
     serverArgs += QStringLiteral(" --max-joint-velocity-deg %1").arg(cfg.maxJointVelocityDegS, 0, 'g', 6);
     serverArgs += QStringLiteral(" --tool-payload-radius-mm %1").arg(cfg.toolPayloadRadiusMm, 0, 'f', 1);
+    {
+        const QString shape =
+            cfg.toolPayloadShape.trimmed().isEmpty() ? QStringLiteral("mesh")
+                                                     : cfg.toolPayloadShape.trimmed();
+        const QString mesh =
+            cfg.toolPayloadMesh.trimmed().isEmpty() ? QStringLiteral("ur_bfs_tool_payload.stl")
+                                                    : cfg.toolPayloadMesh.trimmed();
+        serverArgs += QStringLiteral(" --tool-payload-shape %1").arg(shape);
+        serverArgs += QStringLiteral(" --tool-payload-mesh-file %1").arg(mesh);
+    }
+    serverArgs += QStringLiteral(" --tool-tcp-x-mm %1").arg(cfg.toolTcpXMm, 0, 'f', 3);
+    serverArgs += QStringLiteral(" --tool-tcp-y-mm %1").arg(cfg.toolTcpYMm, 0, 'f', 3);
+    serverArgs += QStringLiteral(" --tool-tcp-z-mm %1").arg(cfg.toolTcpZMm, 0, 'f', 3);
     if (cfg.useMockHardware)
         serverArgs += QStringLiteral(" --use-mock-hardware");
     else
@@ -211,6 +224,8 @@ QString Ur3eServerManager::buildLaunchCommand() const
     serverArgs += QStringLiteral(" --workspace-length-mm %1").arg(cfg.workspaceLengthMm, 0, 'f', 1);
     serverArgs += QStringLiteral(" --workspace-width-mm %1").arg(cfg.workspaceWidthMm, 0, 'f', 1);
     serverArgs += QStringLiteral(" --workspace-height-mm %1").arg(cfg.workspaceHeightMm, 0, 'f', 1);
+    serverArgs += QStringLiteral(" --workspace-ceiling-clearance-mm %1")
+                      .arg(cfg.workspaceCeilingClearanceMm, 0, 'f', 1);
 
     const QString extraShell = cfg.wslBashCommand.trimmed();
     const QString rosDistro = cfg.rosDistro.trimmed().isEmpty() ? QStringLiteral("jazzy")

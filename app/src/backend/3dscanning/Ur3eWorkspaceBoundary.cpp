@@ -13,17 +13,25 @@ void Ur3eWorkspaceBoundary::normalize()
     widthMm = std::max(100.0, widthMm);
     heightMm = std::max(100.0, heightMm);
     mountHeightMm = std::max(100.0, mountHeightMm);
+    ceilingClearanceMm = std::max(0.0, ceilingClearanceMm);
+    // Keep a usable vertical span between floor and inset top.
+    if (ceilingClearanceMm >= heightMm)
+        ceilingClearanceMm = std::max(0.0, heightMm - 10.0);
 }
 
 double Ur3eWorkspaceBoundary::lengthM() const { return lengthMm * 0.001; }
 double Ur3eWorkspaceBoundary::widthM() const { return widthMm * 0.001; }
 double Ur3eWorkspaceBoundary::heightM() const { return heightMm * 0.001; }
 double Ur3eWorkspaceBoundary::mountHeightM() const { return mountHeightMm * 0.001; }
+double Ur3eWorkspaceBoundary::ceilingClearanceM() const { return ceilingClearanceMm * 0.001; }
 double Ur3eWorkspaceBoundary::floorZM() const
 {
     return std::max(0.0, mountHeightM() - heightM());
 }
-double Ur3eWorkspaceBoundary::topZM() const { return mountHeightM(); }
+double Ur3eWorkspaceBoundary::topZM() const
+{
+    return std::max(floorZM(), mountHeightM() - ceilingClearanceM());
+}
 double Ur3eWorkspaceBoundary::halfLengthM() const { return lengthM() * 0.5; }
 double Ur3eWorkspaceBoundary::halfWidthM() const { return widthM() * 0.5; }
 
@@ -43,6 +51,7 @@ Ur3eWorkspaceBoundary workspaceBoundaryFromConfig(const HardwareConfig::Ur3eConf
     boundary.widthMm = config.workspaceWidthMm;
     boundary.heightMm = config.workspaceHeightMm;
     boundary.mountHeightMm = config.ceilingMountHeightMm;
+    boundary.ceilingClearanceMm = config.workspaceCeilingClearanceMm;
     boundary.normalize();
     return boundary;
 }

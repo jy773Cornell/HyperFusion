@@ -9,6 +9,7 @@
 class QDoubleSpinBox;
 class QPushButton;
 class QSpinBox;
+class QCheckBox;
 
 namespace ui
 {
@@ -20,6 +21,7 @@ public:
     explicit Ur3eHemisphereScanSettingsWidget(QWidget *parent = nullptr);
 
     [[nodiscard]] hf::ur3e::Ur3eHemisphereScanParams params() const;
+    [[nodiscard]] bool rememberLastPlan() const;
     void applyBoundaryLimits(const hf::ur3e::Ur3eWorkspaceBoundary &boundary);
     void setPlanEnabled(bool enabled);
     void setExecuteEnabled(bool enabled);
@@ -41,6 +43,7 @@ private:
     QSpinBox *verticalPointsSpin_ = nullptr;
     QDoubleSpinBox *thetaMinSpin_ = nullptr;
     QDoubleSpinBox *thetaMaxSpin_ = nullptr;
+    QCheckBox *rememberLastPlanCheck_ = nullptr;
     QPushButton *planBtn_ = nullptr;
     QPushButton *executeBtn_ = nullptr;
 };

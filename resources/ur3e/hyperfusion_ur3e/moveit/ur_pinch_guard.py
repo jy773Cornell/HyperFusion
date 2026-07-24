@@ -4,9 +4,9 @@ The robot controller triggers protective stop C403A0 when a sphere around the to
 flange and a cylinder around the forearm come within ~28 mm. MoveIt SRDF does not
 model this by default — we approximate it at plan/validity time.
 
-When a tool-flange payload dome is enabled, also treat the camera envelope as a
-full sphere at tool0 for forearm clearance (conservative vs C403A0 during wrist fold).
-MoveIt URDF collision still uses the hemisphere mesh to avoid false wrist overlap.
+When a tool payload is enabled, also treat a bounding sphere at tool0 (radius from
+HYPERFUSION_TOOL_PAYLOAD_RADIUS_M) for forearm clearance. MoveIt uses the real CAD
+mesh for FCL; this sphere is only the conservative C403A0 stand-in.
 
 See Universal Robots forum / UR ROS description issue #112.
 """
@@ -31,7 +31,7 @@ PINCH_GUARD_LINKS = (FOREARM_LINK, WRIST1_LINK, TOOL_LINK)
 
 
 def tool_payload_radius_m() -> float:
-    return float(os.environ.get("HYPERFUSION_TOOL_PAYLOAD_RADIUS_M", "0.10"))
+    return float(os.environ.get("HYPERFUSION_TOOL_PAYLOAD_RADIUS_M", "0.077"))
 
 
 def tool_payload_guard_enabled() -> bool:
@@ -160,10 +160,10 @@ def ur_pinch_violation(
             and gap_m < flange_gap_m
         ):
             return (
-                "tool payload dome within "
+                "tool payload within "
                 f"{gap_m * 1000.0:.1f} mm surface gap of forearm "
                 f"(need ≥ {min_surface_gap_m * 1000.0:.1f} mm, "
-                f"radius={payload_radius_m * 1000.0:.0f} mm)"
+                f"pinch_radius={payload_radius_m * 1000.0:.0f} mm)"
             )
         return (
             "UR pinch guard (C403A0): tool flange within "

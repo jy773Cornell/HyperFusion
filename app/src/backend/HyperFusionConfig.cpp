@@ -147,6 +147,10 @@ bool resolveSampleStagePositions(const SampleStagePositionDraft &draft,
     ok = require(QStringLiteral("temp_stop_position_mm"), config.tempStopPositionMm,
                  QStringLiteral("temp_stop_position_mm"))
          && ok;
+    ok = require(QStringLiteral("sample_3d_scanning_position_mm"),
+                 config.sample3dScanningPositionMm,
+                 QStringLiteral("sample_3d_scanning_position_mm"))
+         && ok;
 
     config.cameraPositionMm[0] = config.whiteRefMm[0];
     config.cameraPositionMm[1] = config.whiteRefMm[1];
@@ -985,12 +989,38 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 else
                     config.ur3e.maxJointVelocityDegS = qMin(numericValue, 190.0);
             }
-            else if (key == QStringLiteral("tool_payload_radius_mm"))
+            else if (key == QStringLiteral("tool_payload_radius_mm")
+                     || key == QStringLiteral("tool_payload_pinch_radius_mm"))
             {
                 if (!hasNumber || numericValue <= 0.0)
                     warnings.push_back(QStringLiteral("Invalid ur3e tool_payload_radius_mm: %1").arg(value));
                 else
                     config.ur3e.toolPayloadRadiusMm = numericValue;
+            }
+            else if (key == QStringLiteral("tool_payload_shape"))
+                config.ur3e.toolPayloadShape = value.trimmed().toLower();
+            else if (key == QStringLiteral("tool_payload_mesh"))
+                config.ur3e.toolPayloadMesh = value.trimmed();
+            else if (key == QStringLiteral("tool_tcp_x_mm"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid ur3e tool_tcp_x_mm: %1").arg(value));
+                else
+                    config.ur3e.toolTcpXMm = numericValue;
+            }
+            else if (key == QStringLiteral("tool_tcp_y_mm"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid ur3e tool_tcp_y_mm: %1").arg(value));
+                else
+                    config.ur3e.toolTcpYMm = numericValue;
+            }
+            else if (key == QStringLiteral("tool_tcp_z_mm"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid ur3e tool_tcp_z_mm: %1").arg(value));
+                else
+                    config.ur3e.toolTcpZMm = numericValue;
             }
             else if (key == QStringLiteral("workspace_boundary_enabled"))
             {
@@ -1027,6 +1057,14 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                     warnings.push_back(QStringLiteral("Invalid ur3e workspace_height_mm: %1").arg(value));
                 else
                     config.ur3e.workspaceHeightMm = numericValue;
+            }
+            else if (key == QStringLiteral("workspace_ceiling_clearance_mm"))
+            {
+                if (!hasNumber || numericValue < 0.0)
+                    warnings.push_back(QStringLiteral(
+                        "Invalid ur3e workspace_ceiling_clearance_mm: %1").arg(value));
+                else
+                    config.ur3e.workspaceCeilingClearanceMm = numericValue;
             }
             else if (key == QStringLiteral("mount_roll_deg"))
             {
@@ -1094,6 +1132,44 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                             QStringLiteral("Invalid ur3e home_joints_deg (non-numeric value): %1")
                                 .arg(value));
                 }
+            }
+            else if (key == QStringLiteral("scan_wrist_sweep_enabled"))
+            {
+                const QString lower = value.trimmed().toLower();
+                config.ur3e.scanWristSweepEnabled =
+                    lower.isEmpty() || lower == QStringLiteral("true") || lower == QStringLiteral("1")
+                    || lower == QStringLiteral("yes");
+            }
+            else if (key == QStringLiteral("scan_wrist_sweep_step_deg"))
+            {
+                if (!hasNumber || numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral(
+                        "Invalid ur3e scan_wrist_sweep_step_deg: %1").arg(value));
+                else
+                    config.ur3e.scanWristSweepStepDeg = numericValue;
+            }
+            else if (key == QStringLiteral("scan_wrist_sweep_steps_each_way"))
+            {
+                if (!hasNumber || numericValue < 1.0)
+                    warnings.push_back(QStringLiteral(
+                        "Invalid ur3e scan_wrist_sweep_steps_each_way: %1").arg(value));
+                else
+                    config.ur3e.scanWristSweepStepsEachWay = static_cast<int>(numericValue);
+            }
+            else if (key == QStringLiteral("scan_capture_stabilize_ms"))
+            {
+                if (!hasNumber || numericValue < 0.0)
+                    warnings.push_back(QStringLiteral(
+                        "Invalid ur3e scan_capture_stabilize_ms: %1").arg(value));
+                else
+                    config.ur3e.scanCaptureStabilizeMs = static_cast<int>(numericValue);
+            }
+            else if (key == QStringLiteral("scan_camera_up_world_z"))
+            {
+                const QString lower = value.trimmed().toLower();
+                config.ur3e.scanCameraUpWorldZ =
+                    lower.isEmpty() || lower == QStringLiteral("true") || lower == QStringLiteral("1")
+                    || lower == QStringLiteral("yes");
             }
             else
                 warnings.push_back(QStringLiteral("Unknown key in [3d scanning]: %1").arg(key));
@@ -1175,6 +1251,7 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "sample_scanning_starting_position_fx10e_mm = 840\n"
         << "sample_scanning_starting_position_swir3_mm = sample_scanning_starting_position_fx10e_mm - distance_dual_camera_mm\n"
         << "temp_stop_position_mm = 500\n"
+        << "sample_3d_scanning_position_mm = 1600\n"
         << "\n"
         << "[scanning_settings]\n"
         << "operation_scanning_speed_mm_per_sec = 80\n"
@@ -1251,7 +1328,14 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "max_linear_speed_m_per_s = 0.05\n"
         << "max_linear_accel_m_per_s2 = 0.3\n"
         << "max_joint_velocity_deg_s = 60\n"
-        << "tool_payload_radius_mm = 100\n"
+        << "# Real BFS tool collision mesh on tool0 (urdf/meshes/). Pinch radius is C403A0 only.\n"
+        << "tool_payload_shape = mesh\n"
+        << "tool_payload_mesh = ur_bfs_tool_payload.stl\n"
+        << "tool_payload_radius_mm = 77\n"
+        << "# Optical TCP in tool0 (mm). Fusion CAD (0, 56.035, 20) after mesh pan-180 → (0, -56.035, 20).\n"
+        << "tool_tcp_x_mm = 0\n"
+        << "tool_tcp_y_mm = -56.035\n"
+        << "tool_tcp_z_mm = 20\n"
         << "# Robot mount height (mm): world Z of base_link / ceiling plane. Tray/sample stage stays at Z=0.\n"
         << "ceiling_mount_height_mm = 650\n"
         << "# Workspace collision box (mm): X/Y centered on tray; Z depth extends downward from mount.\n"
@@ -1259,6 +1343,7 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "workspace_length_mm = 600\n"
         << "workspace_width_mm = 600\n"
         << "workspace_height_mm = 650\n"
+        << "workspace_ceiling_clearance_mm = 40\n"
         << "# Mount transform (world -> robot base). Roll=180 = ceiling upside-down.\n"
         << "mount_roll_deg = 180\n"
         << "mount_pitch_deg = 0\n"
@@ -1266,7 +1351,13 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "mount_offset_x_mm = 0\n"
         << "mount_offset_y_mm = 0\n"
         << "# Scan home pose (degrees): pan, lift, elbow, wrist_1, wrist_2, wrist_3.\n"
-        << "home_joints_deg = 0,-150,120,0,90,0\n";
+        << "home_joints_deg = 0,-150,120,0,90,0\n"
+        << "# Per-pin wrist_2/wrist_3 grid: ±N×step_deg each → (2N)^2+1 stills (default 8×8+1=65).\n"
+        << "scan_wrist_sweep_enabled = true\n"
+        << "scan_wrist_sweep_step_deg = 3\n"
+        << "scan_wrist_sweep_steps_each_way = 4\n"
+        << "scan_capture_stabilize_ms = 500\n"
+        << "scan_camera_up_world_z = true\n";
 
     if (!file.commit())
     {

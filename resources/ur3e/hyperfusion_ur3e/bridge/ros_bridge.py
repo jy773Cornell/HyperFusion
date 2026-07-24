@@ -54,6 +54,7 @@ class Ur3eRosBridge:
       workspace_length_m: float = 0.6,
       workspace_width_m: float = 0.6,
       workspace_height_m: float = 0.65,
+      workspace_ceiling_clearance_m: float = 0.04,
   ) -> None:
     self.robot_ip = robot_ip
     self.reverse_ip = reverse_ip.strip() or "0.0.0.0"
@@ -80,6 +81,7 @@ class Ur3eRosBridge:
     self.workspace_length_m = workspace_length_m
     self.workspace_width_m = workspace_width_m
     self.workspace_height_m = workspace_height_m
+    self.workspace_ceiling_clearance_m = max(0.0, float(workspace_ceiling_clearance_m))
 
     self._lock = threading.RLock()
     self._driver_startup_lock = threading.RLock()
@@ -137,6 +139,7 @@ class Ur3eRosBridge:
         width_m=self.workspace_width_m,
         height_m=self.workspace_height_m,
         mount_height_m=self.ceiling_mount_height_m,
+        ceiling_clearance_m=self.workspace_ceiling_clearance_m,
     )
 
   def start_workspace_boundary_sync(self) -> None:
@@ -1468,7 +1471,11 @@ class Ur3eRosBridge:
 
   def plan_hemisphere_scan(self, body: Dict[str, Any]) -> Dict[str, Any]:
     """MoveIt IK + collision check for hemisphere scan TCP poses."""
-    from hyperfusion_ur3e.moveit.scan_planner import ScanPoseTarget, WorkspaceBox, get_scan_planner
+    from hyperfusion_ur3e.moveit.scan_planner import (
+        ScanPoseTarget,
+        get_scan_planner,
+        workspace_from_dict,
+    )
     from hyperfusion_ur3e.driver.driver_manager import CANONICAL_JOINT_NAMES
 
     if not self._status.connected:
@@ -1486,15 +1493,7 @@ class Ur3eRosBridge:
       raise ValueError("poses must be a non-empty list.")
 
     workspace_cfg = body.get("workspace", {})
-    workspace = WorkspaceBox(
-      enabled=bool(workspace_cfg.get("enabled", False)),
-      length_m=float(workspace_cfg.get("length_m", 0.6)),
-      width_m=float(workspace_cfg.get("width_m", 0.6)),
-      height_m=float(workspace_cfg.get("height_m", 0.65)),
-      mount_height_m=float(
-          workspace_cfg.get("mount_height_m", workspace_cfg.get("height_m", 0.65))
-      ),
-    )
+    workspace = workspace_from_dict(workspace_cfg if isinstance(workspace_cfg, dict) else None)
 
     targets: List[ScanPoseTarget] = []
     for entry in poses:

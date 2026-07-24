@@ -62,10 +62,24 @@ QString buildMountEnvExports(const hf::HardwareConfig::Ur3eConfig &cfg)
 
 QString buildToolPayloadEnvExports(const hf::HardwareConfig::Ur3eConfig &cfg)
 {
+    const QString shape =
+        cfg.toolPayloadShape.trimmed().isEmpty() ? QStringLiteral("mesh") : cfg.toolPayloadShape.trimmed();
+    const QString mesh =
+        cfg.toolPayloadMesh.trimmed().isEmpty() ? QStringLiteral("ur_bfs_tool_payload.stl")
+                                                : cfg.toolPayloadMesh.trimmed();
     return QStringLiteral("export HYPERFUSION_TOOL_PAYLOAD_ENABLED='true' && "
-                          "export HYPERFUSION_TOOL_PAYLOAD_SHAPE='hemisphere' && "
-                          "export HYPERFUSION_TOOL_PAYLOAD_RADIUS_M='%1' && ")
-        .arg(QString::number(cfg.toolPayloadRadiusMm / 1000.0, 'f', 6));
+                          "export HYPERFUSION_TOOL_PAYLOAD_SHAPE='%1' && "
+                          "export HYPERFUSION_TOOL_PAYLOAD_MESH_FILE='%2' && "
+                          "export HYPERFUSION_TOOL_PAYLOAD_RADIUS_M='%3' && "
+                          "export HYPERFUSION_TOOL_TCP_X_M='%4' && "
+                          "export HYPERFUSION_TOOL_TCP_Y_M='%5' && "
+                          "export HYPERFUSION_TOOL_TCP_Z_M='%6' && ")
+        .arg(shape,
+             mesh,
+             QString::number(cfg.toolPayloadRadiusMm / 1000.0, 'f', 6),
+             QString::number(cfg.toolTcpXMm / 1000.0, 'f', 6),
+             QString::number(cfg.toolTcpYMm / 1000.0, 'f', 6),
+             QString::number(cfg.toolTcpZMm / 1000.0, 'f', 6));
 }
 
 } // namespace hf::ur3e

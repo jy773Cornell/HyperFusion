@@ -16,6 +16,8 @@ struct HardwareConfig
     double brightRefMm[2] = {760.0, 570.0};
     double sampleScanStartMm[2] = {840.0, 650.0};
     double tempStopPositionMm = 500.0;
+    /// Stage absolute pose (mm) for Capture 3D RGB / hemisphere BFS stills.
+    double sample3dScanningPositionMm = 1600.0;
     /// Legacy UI mirror of whiteRefMm (capture position spin boxes).
     double cameraPositionMm[2] = {735.0, 545.0};
     double sampleWindowMaxLengthMm = 500.0;
@@ -123,8 +125,14 @@ struct HardwareConfig
         double maxLinearAccelMPerS2 = 0.3;
         /// MoveIt joint-space peak speed (deg/s). UR hardware allows up to 190.
         double maxJointVelocityDegS = 60.0;
-        /// Tool payload collision dome radius on tool0 (mm).
-        double toolPayloadRadiusMm = 100.0;
+        /// Pinch-guard bounding sphere at tool0 (mm). MoveIt collision uses toolPayloadMesh.
+        double toolPayloadRadiusMm = 77.0;
+        QString toolPayloadShape = QStringLiteral("mesh");
+        QString toolPayloadMesh = QStringLiteral("ur_bfs_tool_payload.stl");
+        /// Optical TCP (BFS sensor face) in tool0 frame (mm). Fusion CAD (0, 56.035, 20) after pan-180.
+        double toolTcpXMm = 0.0;
+        double toolTcpYMm = -56.035;
+        double toolTcpZMm = 20.0;
         /// Robot base mount height in world frame (mm). Z=0 is tray floor; mount plane is at this height.
         double ceilingMountHeightMm = 650.0;
         /// MoveIt workspace collision cube (mm). Extends downward from the mount plane (relative to robot).
@@ -132,6 +140,8 @@ struct HardwareConfig
         double workspaceLengthMm = 600.0;
         double workspaceWidthMm = 600.0;
         double workspaceHeightMm = 650.0;
+        /// Keep-out below ceiling mount plane before collision box top (mm).
+        double workspaceCeilingClearanceMm = 40.0;
         /// World -> base_link mount orientation (degrees). Default roll=180 = ceiling upside-down.
         double mountRollDeg = 180.0;
         double mountPitchDeg = 0.0;
@@ -141,6 +151,14 @@ struct HardwareConfig
         double mountOffsetYMm = 0.0;
         /// Scan / retreat home pose (degrees): shoulder_pan, lift, elbow, wrist_1, wrist_2, wrist_3.
         std::array<double, 6> homeJointsDeg = {0.0, -150.0, 120.0, 0.0, 90.0, 0.0};
+        /// After each scan pin: wrist_2/wrist_3 grid (±steps×stepDeg) + center → (2*steps)^2+1 stills.
+        bool scanWristSweepEnabled = true;
+        double scanWristSweepStepDeg = 3.0;
+        int scanWristSweepStepsEachWay = 4;
+        /// Settle time after each pin / wrist pose before BFS still (or motion-only dwell).
+        int scanCaptureStabilizeMs = 500;
+        /// Lock scan TCP roll so image-up ≈ tray/world +Z (projected ⊥ look-at). Pin centers only.
+        bool scanCameraUpWorldZ = true;
     };
 
     Ur3eConfig ur3e;

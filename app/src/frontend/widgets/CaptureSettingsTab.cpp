@@ -101,8 +101,10 @@ QWidget *MainWindow::createCaptureSettingsTab()
     captureCamerasEmptyLabel_->setWordWrap(true);
     captureCamera1Check_ = new QCheckBox(captureCamerasBox_);
     captureCamera2Check_ = new QCheckBox(captureCamerasBox_);
+    captureBfsCheck_ = new QCheckBox(QStringLiteral("BFS"), captureCamerasBox_);
     captureCamera1Check_->hide();
     captureCamera2Check_->hide();
+    captureBfsCheck_->hide();
     const auto refreshRecorder = [this]() {
         if (capturePanel() == nullptr)
             return;
@@ -113,9 +115,15 @@ QWidget *MainWindow::createCaptureSettingsTab()
     };
     connect(captureCamera1Check_, &QCheckBox::toggled, this, refreshRecorder);
     connect(captureCamera2Check_, &QCheckBox::toggled, this, refreshRecorder);
+    connect(captureBfsCheck_, &QCheckBox::toggled, this, [this, refreshRecorder](bool) {
+        if (capturePanel() != nullptr)
+            capturePanel()->syncBfsAnd3dRgbCaptureControls(captureBfsCheck_);
+        refreshRecorder();
+    });
     camerasLayout->addWidget(captureCamerasEmptyLabel_);
     camerasLayout->addWidget(captureCamera1Check_);
     camerasLayout->addWidget(captureCamera2Check_);
+    camerasLayout->addWidget(captureBfsCheck_);
     captureDualCameraAutoCheck_ = new QCheckBox(
         QStringLiteral("Auto-sync FX10e and SWIR3 scan rate"), captureCamerasBox_);
     captureDualCameraAutoCheck_->setChecked(true);
@@ -158,17 +166,28 @@ QWidget *MainWindow::createCaptureSettingsTab()
     modesLayout->setSpacing(16);
     captureReflectanceCheck_ = new QCheckBox(QStringLiteral("Reflectance"), captureModesBox_);
     captureTransmittanceCheck_ = new QCheckBox(QStringLiteral("Transmittance"), captureModesBox_);
+    capture3dRgbCheck_ = new QCheckBox(QStringLiteral("3D RGB"), captureModesBox_);
     captureReflectanceCheck_->setChecked(true);
     captureTransmittanceCheck_->setChecked(true);
+    capture3dRgbCheck_->setChecked(false);
+    capture3dRgbCheck_->setEnabled(false);
     captureReflectanceCheck_->setToolTip(
         tr("Include reflectance scan (requires connected camera, stage, and stage recording)"));
     captureTransmittanceCheck_->setToolTip(
         tr("Include transmittance scan (requires connected camera, stage, and stage recording)"));
+    capture3dRgbCheck_->setToolTip(
+        tr("BFS RGB for 3D scanning. Enabled after a successful UR3e scan plan with reachable poses."));
     modesLayout->addWidget(captureReflectanceCheck_);
     modesLayout->addWidget(captureTransmittanceCheck_);
+    modesLayout->addWidget(capture3dRgbCheck_);
     modesLayout->addStretch(1);
     connect(captureReflectanceCheck_, &QCheckBox::toggled, this, refreshRecorder);
     connect(captureTransmittanceCheck_, &QCheckBox::toggled, this, refreshRecorder);
+    connect(capture3dRgbCheck_, &QCheckBox::toggled, this, [this, refreshRecorder](bool) {
+        if (capturePanel() != nullptr)
+            capturePanel()->syncBfsAnd3dRgbCaptureControls(capture3dRgbCheck_);
+        refreshRecorder();
+    });
 
     auto *positionBox = new QGroupBox(QStringLiteral("Position"), page);
     capturePositionBox_ = positionBox;

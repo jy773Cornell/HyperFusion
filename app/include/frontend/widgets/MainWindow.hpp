@@ -109,6 +109,7 @@ public:
     [[nodiscard]] hf::capture::CapturePanelController *capturePanel() const;
     [[nodiscard]] hf::stage::StagePanelController *stagePanel() const;
     [[nodiscard]] hf::ur3e::Ur3ePanelController *ur3ePanel() const;
+    [[nodiscard]] hf::bfs::BfsPanelController *bfsPanel() const;
     [[nodiscard]] hf::light::LightPanelController *lightPanel() const;
     [[nodiscard]] hf::camera::CameraPanelController *cameraPanel() const;
     [[nodiscard]] hf::settings::UiSettingsController *settingsPanel() const;
@@ -180,6 +181,8 @@ private:
     QLabel *captureStreamEmptyLabel_ = nullptr;
     QGroupBox *captureWaterfallPanes_[2] = {nullptr, nullptr};
     ui::WaterfallDisplayWidget *captureWaterfallViews_[2] = {nullptr, nullptr};
+    QGroupBox *captureBfsPreviewPane_ = nullptr;
+    QLabel *captureBfsPreviewLabel_ = nullptr;
 
     // Light settings tab
     QLabel *lightDaqStatusIndicator_ = nullptr;
@@ -259,6 +262,8 @@ private:
     QLabel *captureCamerasEmptyLabel_ = nullptr;
     QCheckBox *captureCamera1Check_ = nullptr;
     QCheckBox *captureCamera2Check_ = nullptr;
+    QCheckBox *captureBfsCheck_ = nullptr;
+    QCheckBox *capture3dRgbCheck_ = nullptr;
     QCheckBox *captureDualCameraAutoCheck_ = nullptr;
     QDoubleSpinBox *captureTargetLengthSpin_ = nullptr;
     QDoubleSpinBox *captureScanningSpeedSpin_ = nullptr;
