@@ -282,6 +282,10 @@ QJsonObject buildScanMotionRequestBody()
     QJsonObject body;
     body.insert(QStringLiteral("workspace"), workspace);
     appendUr3eScanHomeJointsToJson(body);
+    body.insert(QStringLiteral("pin_pose_tolerance_deg"),
+                hf::hardwareConfig().ur3e.pinPoseToleranceDeg);
+    body.insert(QStringLiteral("scan_camera_up_world_z"),
+                hf::hardwareConfig().ur3e.scanCameraUpWorldZ);
     return body;
 }
 

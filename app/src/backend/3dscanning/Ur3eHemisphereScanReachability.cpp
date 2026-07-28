@@ -173,6 +173,11 @@ Ur3eHemisphereScanPlan evaluateHemisphereScanPlanMoveIt(const QString &serverUrl
 
     body.insert(QStringLiteral("workspace"), workspace);
 
+    body.insert(QStringLiteral("pin_pose_tolerance_deg"),
+                hf::hardwareConfig().ur3e.pinPoseToleranceDeg);
+    body.insert(QStringLiteral("scan_camera_up_world_z"),
+                hf::hardwareConfig().ur3e.scanCameraUpWorldZ);
+
     appendUr3eScanHomeJointsToJson(body);
 
 
@@ -251,7 +256,22 @@ Ur3eHemisphereScanPlan evaluateHemisphereScanPlanMoveIt(const QString &serverUrl
 
             planned.jointPositionsRad.push_back(jointValue.toDouble(0.0));
 
-
+        const QJsonObject tcpObj = entry.value(QStringLiteral("tcp")).toObject();
+        if (!tcpObj.isEmpty())
+        {
+            planned.tcp.xM = tcpObj.value(QStringLiteral("x")).toDouble(planned.tcp.xM);
+            planned.tcp.yM = tcpObj.value(QStringLiteral("y")).toDouble(planned.tcp.yM);
+            planned.tcp.zM = tcpObj.value(QStringLiteral("z")).toDouble(planned.tcp.zM);
+            planned.tcp.rxRad = tcpObj.value(QStringLiteral("rx")).toDouble(planned.tcp.rxRad);
+            planned.tcp.ryRad = tcpObj.value(QStringLiteral("ry")).toDouble(planned.tcp.ryRad);
+            planned.tcp.rzRad = tcpObj.value(QStringLiteral("rz")).toDouble(planned.tcp.rzRad);
+            planned.tcp.toolZMx =
+                tcpObj.value(QStringLiteral("tool_z_x")).toDouble(planned.tcp.toolZMx);
+            planned.tcp.toolZMy =
+                tcpObj.value(QStringLiteral("tool_z_y")).toDouble(planned.tcp.toolZMy);
+            planned.tcp.toolZMz =
+                tcpObj.value(QStringLiteral("tool_z_z")).toDouble(planned.tcp.toolZMz);
+        }
 
         if (planned.reachable)
 

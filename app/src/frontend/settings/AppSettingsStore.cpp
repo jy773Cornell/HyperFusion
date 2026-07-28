@@ -118,6 +118,7 @@ PersistedUr3eHemisphereScanSettings AppSettingsStore::loadUr3eHemisphereScan()
 {
     QSettings &settings = storage();
     PersistedUr3eHemisphereScanSettings scan;
+    const PersistedUr3eHemisphereScanSettings defaults;
     scan.sphereRadiusMm =
         settings.value(QStringLiteral("ur3e/hemisphereScan/sphereRadiusMm"), 500.0).toDouble();
     scan.horizontalPoints =
@@ -128,8 +129,31 @@ PersistedUr3eHemisphereScanSettings AppSettingsStore::loadUr3eHemisphereScan()
         settings.value(QStringLiteral("ur3e/hemisphereScan/thetaMinDeg"), 30.0).toDouble();
     scan.thetaMaxDeg =
         settings.value(QStringLiteral("ur3e/hemisphereScan/thetaMaxDeg"), 90.0).toDouble();
-    scan.rememberLastPlan =
-        settings.value(QStringLiteral("ur3e/hemisphereScan/rememberLastPlan"), true).toBool();
+    scan.wristSweepEnabled = settings
+                                 .value(QStringLiteral("ur3e/hemisphereScan/wristSweepEnabled"),
+                                        defaults.wristSweepEnabled)
+                                 .toBool();
+    scan.wristSweepStepDeg = settings
+                                 .value(QStringLiteral("ur3e/hemisphereScan/wristSweepStepDeg"),
+                                        defaults.wristSweepStepDeg)
+                                 .toDouble();
+    scan.wristSweepStepsEachWay =
+        settings
+            .value(QStringLiteral("ur3e/hemisphereScan/wristSweepStepsEachWay"),
+                   defaults.wristSweepStepsEachWay)
+            .toInt();
+    scan.wristSweepWrist1 = settings
+                                .value(QStringLiteral("ur3e/hemisphereScan/wristSweepWrist1"),
+                                       defaults.wristSweepWrist1)
+                                .toBool();
+    scan.wristSweepWrist2 = settings
+                                .value(QStringLiteral("ur3e/hemisphereScan/wristSweepWrist2"),
+                                       defaults.wristSweepWrist2)
+                                .toBool();
+    scan.wristSweepWrist3 = settings
+                                .value(QStringLiteral("ur3e/hemisphereScan/wristSweepWrist3"),
+                                       defaults.wristSweepWrist3)
+                                .toBool();
     return scan;
 }
 
@@ -141,7 +165,13 @@ void AppSettingsStore::saveUr3eHemisphereScan(const PersistedUr3eHemisphereScanS
     settings.setValue(QStringLiteral("ur3e/hemisphereScan/verticalPoints"), scan.verticalPoints);
     settings.setValue(QStringLiteral("ur3e/hemisphereScan/thetaMinDeg"), scan.thetaMinDeg);
     settings.setValue(QStringLiteral("ur3e/hemisphereScan/thetaMaxDeg"), scan.thetaMaxDeg);
-    settings.setValue(QStringLiteral("ur3e/hemisphereScan/rememberLastPlan"), scan.rememberLastPlan);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/wristSweepEnabled"), scan.wristSweepEnabled);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/wristSweepStepDeg"), scan.wristSweepStepDeg);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/wristSweepStepsEachWay"),
+                      scan.wristSweepStepsEachWay);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/wristSweepWrist1"), scan.wristSweepWrist1);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/wristSweepWrist2"), scan.wristSweepWrist2);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/wristSweepWrist3"), scan.wristSweepWrist3);
 }
 
 PersistedBfsCameraSettings AppSettingsStore::loadBfsCameraSettings()

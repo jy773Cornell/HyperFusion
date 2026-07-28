@@ -87,6 +87,7 @@ QString ur3eScanPlanFingerprint(const hf::HardwareConfig::Ur3eConfig &ur3e,
         home.append(deg);
     fp.insert(QStringLiteral("home_joints_deg"), home);
     fp.insert(QStringLiteral("scan_camera_up_world_z"), ur3e.scanCameraUpWorldZ);
+    fp.insert(QStringLiteral("pin_pose_tolerance_deg"), ur3e.pinPoseToleranceDeg);
 
     return QString::fromUtf8(
         QJsonDocument(fp).toJson(QJsonDocument::Compact));

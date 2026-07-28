@@ -221,17 +221,15 @@ Used for:
 
 ### 3.7.1 Per-pin wrist photo grid
 
-```ini
-scan_wrist_sweep_enabled = true
-scan_wrist_sweep_step_deg = 3
-scan_wrist_sweep_steps_each_way = 4
-scan_capture_stabilize_ms = 500
-scan_camera_up_world_z = true
-```
+Configured in the **Scanning** GUI (persisted in app settings), not `hyperfusion.cfg`:
 
-At each reachable pin: capture/dwell at the nominal pose, then permute `wrist_2` and `wrist_3` by ±N×step (default ±4×3° → 8×8+1 = **65** poses). Each wrist move uses MoveIt `direct_only`; collisions / no path are **skipped**. Settle time applies to every pose (with or without BFS).
+- Enable / step / steps each way  
+- Which of `wrist_1` / `wrist_2` / `wrist_3` to permute  
+- Live image-count estimate (per pin × pins)
 
-`scan_camera_up_world_z = true` (default): pin-center TCP roll locks image-up to tray/world +Z (projected ⊥ look-at). Wrist-sweep angled poses are unchanged.
+At each reachable pin: capture/dwell at the nominal pose, then permute enabled wrists by ±N×step (default w2+w3 ±4×3° → 8×8+1 = **65** poses). Each wrist move uses MoveIt `direct_only`; collisions / no path are **skipped**.
+
+`scan_capture_stabilize_ms` and `scan_camera_up_world_z` remain in `hyperfusion.cfg`.
 
 ### 3.8 IK seeds (multi-IK closest-to-home)
 
@@ -347,7 +345,7 @@ UR joints have multiple valid representations (e.g. 209° vs −151°). The plan
 | **Unreachable** | Blue        | No IK, collision, or invalid joints               |
 | **Plan joints** | —             | 6 stored joint angles (rad) per reachable pin     |
 
-**Remember last plan** (Scanning checkbox, default on): after a successful Plan, results are written to `ur3e_last_scan_plan.json` beside the app. On the next startup the plan is reloaded automatically only if the current scan UI params and robot geometry keys in `hyperfusion.cfg` `[3d scanning]` match the fingerprint stored with the cache (TCP, payload, mount, workspace, home, `ur_type`, mock flag). Changing grid/radius/θ or those cfg keys invalidates the cache until you Plan again.
+**Remember last plan** (`remember_last_scan_plan` in `hyperfusion.cfg`, default on): after a successful Plan, results are written to `ur3e_last_scan_plan.json` beside the app. On the next startup the plan is reloaded automatically only if the current scan UI params and robot geometry keys in `hyperfusion.cfg` `[3d scanning]` match the fingerprint stored with the cache (TCP, payload, mount, workspace, home, `ur_type`, mock flag). Changing grid/radius/θ or those cfg keys invalidates the cache until you Plan again.
 
 
 ---
@@ -426,7 +424,7 @@ Scan complete (summary: executed / skipped)
 ### 6.4 Per-pin timing
 
 - **Settle** at each pose from `scan_capture_stabilize_ms` in `[3d scanning]` (default **500 ms**), for both motion-only Execute and BFS still capture
-- **Wrist sweep** (default on): after the nominal pin, permute `wrist_2` and `wrist_3` by ±`scan_wrist_sweep_steps_each_way` × `scan_wrist_sweep_step_deg` (default ±4×3°) → **8×8+1 = 65** poses per pin; collision / no-path poses are skipped
+- **Wrist sweep** (Scanning GUI): after the nominal pin, permute selected wrists by ±steps×step → **(2N)^k+1** poses per pin; collision / no-path poses are skipped
 - **UR3e Execute + BFS connected:** folder dialog → `3d_scanning_yyyyMMdd_HHmmss/` → settle + BFS TIFF + `transforms.json` (same still pipeline as Capture Record 3D); works motion-only when no capture folder
 - Joint poll ~**100 ms** during motion (async, non-blocking UI)
 - MoveIt motion timeout up to **120 s** per leg

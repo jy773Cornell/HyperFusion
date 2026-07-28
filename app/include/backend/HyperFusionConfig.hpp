@@ -151,14 +151,22 @@ struct HardwareConfig
         double mountOffsetYMm = 0.0;
         /// Scan / retreat home pose (degrees): shoulder_pan, lift, elbow, wrist_1, wrist_2, wrist_3.
         std::array<double, 6> homeJointsDeg = {0.0, -150.0, 120.0, 0.0, 90.0, 0.0};
-        /// After each scan pin: wrist_2/wrist_3 grid (±steps×stepDeg) + center → (2*steps)^2+1 stills.
+        /// After each scan pin: wrist grid (±steps×stepDeg) on enabled wrists + center.
         bool scanWristSweepEnabled = true;
         double scanWristSweepStepDeg = 3.0;
         int scanWristSweepStepsEachWay = 4;
+        bool scanWristSweepWrist1 = false;
+        bool scanWristSweepWrist2 = true;
+        bool scanWristSweepWrist3 = true;
         /// Settle time after each pin / wrist pose before BFS still (or motion-only dwell).
         int scanCaptureStabilizeMs = 500;
         /// Lock scan TCP roll so image-up ≈ tray/world +Z (projected ⊥ look-at). Pin centers only.
         bool scanCameraUpWorldZ = true;
+        /// Half-angle (deg) approach cone around each pin look-at; 0 = nominal only.
+        /// Plan searches inside→out (≤13 samples) for the first reachable pose.
+        double pinPoseToleranceDeg = 5.0;
+        /// Persist last MoveIt plan beside app.exe; reload on start if cfg fingerprint matches.
+        bool rememberLastScanPlan = true;
     };
 
     Ur3eConfig ur3e;

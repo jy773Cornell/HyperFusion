@@ -1156,6 +1156,27 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 else
                     config.ur3e.scanWristSweepStepsEachWay = static_cast<int>(numericValue);
             }
+            else if (key == QStringLiteral("scan_wrist_sweep_wrist_1"))
+            {
+                const QString lower = value.trimmed().toLower();
+                config.ur3e.scanWristSweepWrist1 =
+                    lower.isEmpty() || lower == QStringLiteral("true") || lower == QStringLiteral("1")
+                    || lower == QStringLiteral("yes");
+            }
+            else if (key == QStringLiteral("scan_wrist_sweep_wrist_2"))
+            {
+                const QString lower = value.trimmed().toLower();
+                config.ur3e.scanWristSweepWrist2 =
+                    lower.isEmpty() || lower == QStringLiteral("true") || lower == QStringLiteral("1")
+                    || lower == QStringLiteral("yes");
+            }
+            else if (key == QStringLiteral("scan_wrist_sweep_wrist_3"))
+            {
+                const QString lower = value.trimmed().toLower();
+                config.ur3e.scanWristSweepWrist3 =
+                    lower.isEmpty() || lower == QStringLiteral("true") || lower == QStringLiteral("1")
+                    || lower == QStringLiteral("yes");
+            }
             else if (key == QStringLiteral("scan_capture_stabilize_ms"))
             {
                 if (!hasNumber || numericValue < 0.0)
@@ -1168,6 +1189,21 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
             {
                 const QString lower = value.trimmed().toLower();
                 config.ur3e.scanCameraUpWorldZ =
+                    lower.isEmpty() || lower == QStringLiteral("true") || lower == QStringLiteral("1")
+                    || lower == QStringLiteral("yes");
+            }
+            else if (key == QStringLiteral("pin_pose_tolerance_deg"))
+            {
+                if (!hasNumber || numericValue < 0.0 || numericValue > 45.0)
+                    warnings.push_back(QStringLiteral(
+                        "Invalid ur3e pin_pose_tolerance_deg: %1 (use 0…45)").arg(value));
+                else
+                    config.ur3e.pinPoseToleranceDeg = numericValue;
+            }
+            else if (key == QStringLiteral("remember_last_scan_plan"))
+            {
+                const QString lower = value.trimmed().toLower();
+                config.ur3e.rememberLastScanPlan =
                     lower.isEmpty() || lower == QStringLiteral("true") || lower == QStringLiteral("1")
                     || lower == QStringLiteral("yes");
             }
@@ -1352,12 +1388,11 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "mount_offset_y_mm = 0\n"
         << "# Scan home pose (degrees): pan, lift, elbow, wrist_1, wrist_2, wrist_3.\n"
         << "home_joints_deg = 0,-150,120,0,90,0\n"
-        << "# Per-pin wrist_2/wrist_3 grid: ±N×step_deg each → (2N)^2+1 stills (default 8×8+1=65).\n"
-        << "scan_wrist_sweep_enabled = true\n"
-        << "scan_wrist_sweep_step_deg = 3\n"
-        << "scan_wrist_sweep_steps_each_way = 4\n"
         << "scan_capture_stabilize_ms = 500\n"
-        << "scan_camera_up_world_z = true\n";
+        << "scan_camera_up_world_z = true\n"
+        << "# Half-angle cone (deg) around each pin look-at for Plan reachability (0=off).\n"
+        << "pin_pose_tolerance_deg = 5\n"
+        << "remember_last_scan_plan = true\n";
 
     if (!file.commit())
     {

@@ -20,12 +20,14 @@ from hyperfusion_ur3e.joint_angles import (
     MAX_IK_BRANCH_STEPS,
     TWO_PI,
     UR3E_JOINT_LIMITS_RAD,
+    coalesce_joints_for_execute,
     coalesce_joints_for_moveit,
     joint_delta_rad,
     joint_distance_rad,
     moveit_joint_limit_violations,
     normalize_joint_solution_to_reference,
     pick_joint_branch,
+    unwrap_joint_continuous,
     wrap_to_pi,
 )
 
@@ -101,6 +103,10 @@ RECOVERY_NUM_PLANNING_ATTEMPTS = 8
 # Reject IK solutions whose tool0 +Z faces away from the dome center (180° flip).
 TOOL_Z_ALIGNMENT_MIN_DOT = 0.95
 
+# Pin pose approach-cone search (half-angle deg). Inside→out; first reachable wins.
+PIN_POSE_CONE_MID_AZIMUTHS = 4
+PIN_POSE_CONE_OUTER_AZIMUTHS = 8
+
 # Trajectory scoring: sample pinch guard along planned paths before execute.
 TRAJECTORY_PINCH_MIN_GAP_M = 0.028
 TRAJECTORY_MAX_PINCH_SAMPLES = 48
@@ -113,7 +119,6 @@ UR3E_JOINT_VELOCITY_TIME_MARGIN = 1.05
 TRAJECTORY_MAX_VELOCITY_SCALEUP = 20.0
 # UR External Control servos at 500 Hz; never send consecutive setpoints closer than this.
 MIN_TRAJECTORY_SEGMENT_S = 0.02
-WRIST_3_JOINT_INDEX = 5
 HARDWARE_JOINT_TRAJECTORY_ACTION = (
     "/scaled_joint_trajectory_controller/follow_joint_trajectory"
 )
@@ -217,6 +222,17 @@ class ScanPoseResult:
     reachable: bool
     joint_positions: List[float] = field(default_factory=list)
     error: str = ""
+    # Accepted TCP when cone tolerance tilts the look-at (None = use nominal grid TCP).
+    tcp_x_m: Optional[float] = None
+    tcp_y_m: Optional[float] = None
+    tcp_z_m: Optional[float] = None
+    tcp_rx: Optional[float] = None
+    tcp_ry: Optional[float] = None
+    tcp_rz: Optional[float] = None
+    tool_z_x: Optional[float] = None
+    tool_z_y: Optional[float] = None
+    tool_z_z: Optional[float] = None
+    cone_tip_deg: float = 0.0
 
 
 def _normalize(x: float, y: float, z: float) -> tuple[float, float, float]:
@@ -224,6 +240,82 @@ def _normalize(x: float, y: float, z: float) -> tuple[float, float, float]:
     if length <= 1.0e-9:
         return 0.0, 0.0, -1.0
     return x / length, y / length, z / length
+
+
+def _cross(
+    a: Sequence[float], b: Sequence[float]
+) -> tuple[float, float, float]:
+    return (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
+
+
+def iter_tool_z_cone_directions(
+    zx: float,
+    zy: float,
+    zz: float,
+    half_angle_deg: float,
+) -> List[tuple[float, tuple[float, float, float]]]:
+    """Inside→out tool +Z samples in a half-angle cone (degrees).
+
+    Returns (tip_deg, unit_tool_z). Nominal (0°) is always first.
+    """
+    z0 = _normalize(zx, zy, zz)
+    samples: List[tuple[float, tuple[float, float, float]]] = [(0.0, z0)]
+    half = max(0.0, float(half_angle_deg))
+    if half <= 1.0e-6:
+        return samples
+
+    ref = (1.0, 0.0, 0.0) if abs(z0[0]) < 0.9 else (0.0, 1.0, 0.0)
+    u = _normalize(*_cross(z0, ref))
+    v = _normalize(*_cross(z0, u))
+
+    rings: List[tuple[float, int]] = []
+    mid = 0.5 * half
+    if mid >= 0.5:
+        rings.append((mid, PIN_POSE_CONE_MID_AZIMUTHS))
+    rings.append((half, PIN_POSE_CONE_OUTER_AZIMUTHS))
+
+    for tip_deg, n_az in rings:
+        tip = math.radians(tip_deg)
+        cos_t = math.cos(tip)
+        sin_t = math.sin(tip)
+        for k in range(max(1, int(n_az))):
+            az = (2.0 * math.pi * k) / float(n_az)
+            cx = math.cos(az)
+            sx = math.sin(az)
+            dx = cos_t * z0[0] + sin_t * (cx * u[0] + sx * v[0])
+            dy = cos_t * z0[1] + sin_t * (cx * u[1] + sx * v[1])
+            dz = cos_t * z0[2] + sin_t * (cx * u[2] + sx * v[2])
+            samples.append((tip_deg, _normalize(dx, dy, dz)))
+    return samples
+
+
+def scan_pose_target_with_tool_z(
+    target: ScanPoseTarget,
+    tool_z: Sequence[float],
+    *,
+    lock_camera_up: bool,
+) -> ScanPoseTarget:
+    """Same TCP position, new look-at (+ camera-up roll when enabled)."""
+    tzx, tzy, tzz = _normalize(float(tool_z[0]), float(tool_z[1]), float(tool_z[2]))
+    rx, ry, rz = tool_z_to_rotation_vector(
+        tzx, tzy, tzz, lock_camera_up=lock_camera_up
+    )
+    return ScanPoseTarget(
+        index=target.index,
+        x_m=target.x_m,
+        y_m=target.y_m,
+        z_m=target.z_m,
+        rx=rx,
+        ry=ry,
+        rz=rz,
+        tool_z_x=tzx,
+        tool_z_y=tzy,
+        tool_z_z=tzz,
+    )
 
 
 def tool_z_to_rotation_vector(
@@ -510,6 +602,7 @@ class MoveItProcessManager:
                 if self._move_group_ready_for_planning():
                     self._verify_move_group_tool_payload()
                     sys.stderr.write("UR3e MoveIt: move_group ready for scan planning.\n")
+                    sys.stderr.flush()
                     return
                 now = time.time()
                 if now - last_log_s >= 10.0:
@@ -676,6 +769,7 @@ class MoveItScanPlanner:
         self.ur_type = ur_type
         self._process_manager = MoveItProcessManager(ros_distro=ros_distro, ur_type=ur_type)
         self._lock = threading.Lock()
+        self._scene_lock = threading.RLock()
         self._node = None
         self._ik_client = None
         self._validity_client = None
@@ -688,6 +782,8 @@ class MoveItScanPlanner:
         self._spin_thread: Optional[threading.Thread] = None
         self._spin_stop = threading.Event()
         self._workspace_applied: Optional[tuple[Any, ...]] = None
+        self._last_known_move_group_pids: tuple[int, ...] = ()
+        self._plan_in_progress = False
         self._last_workspace: Optional[WorkspaceBox] = None
         self._default_workspace: Optional[WorkspaceBox] = None
         self._boundary_keepalive_thread: Optional[threading.Thread] = None
@@ -695,13 +791,17 @@ class MoveItScanPlanner:
         self._last_plan_start_seed: List[float] = []
         self._home_joints_rad: List[float] = list(DEFAULT_HOME_JOINTS_RAD)
         self._planning_scene_client = None
+        self._planning_scene_pub = None
         self._get_planning_scene_client = None
         self._move_goal_lock = threading.Lock()
+        self._workspace_apply_in_progress = False
+        self._workspace_apply_cv = threading.Condition(self._scene_lock)
         self._active_move_goal_handle: Any = None
         self._latest_joint_positions: List[float] = []
         self._hardware_joint_positions_cache: List[float] = []
         self._joint_state_sub = None
         self._rviz_goal_pub = None
+
     def apply_home_joints_from_body(self, body: Optional[Dict[str, Any]]) -> None:
         self._home_joints_rad = home_joints_rad_from_body(body)
 
@@ -955,12 +1055,17 @@ class MoveItScanPlanner:
             self._boundary_keepalive_thread.start()
 
     def _boundary_keepalive_loop(self) -> None:
+        first_cycle = True
         while True:
-            if self._boundary_keepalive_stop.wait(3.0):
+            # Poll quickly until the first boundary is applied after move_group start.
+            wait_s = 0.5 if first_cycle else 3.0
+            if self._boundary_keepalive_stop.wait(wait_s):
                 break
+            first_cycle = False
 
             workspace = self._default_workspace
             if workspace is None or not self._process_manager.current_move_group_pids():
+                first_cycle = True
                 continue
 
             with self._move_goal_lock:
@@ -977,6 +1082,7 @@ class MoveItScanPlanner:
             except Exception as exc:
                 # Timeouts are common during MoveIt/RViz restart; next cycle retries.
                 sys.stderr.write(f"UR3e MoveIt: boundary keepalive: {exc}\n")
+                sys.stderr.flush()
 
     def ensure_workspace_boundary_visible(self, workspace: WorkspaceBox) -> bool:
         """Publish workspace collision walls into the active MoveIt planning scene."""
@@ -1011,13 +1117,9 @@ class MoveItScanPlanner:
             hardware = self._hardware_joint_positions()
             if hardware is not None:
                 return hardware
-            if self._executor is not None:
-                try:
-                    self._executor.spin_once(timeout_sec=0.05)
-                except Exception:
-                    break
-            else:
-                time.sleep(0.05)
+            # Never spin the shared SingleThreadedExecutor from this thread —
+            # the dedicated spin thread owns it (concurrent spin_once can hang).
+            time.sleep(0.05)
         hardware = self._hardware_joint_positions()
         if hardware is None:
             sys.stderr.write(
@@ -1025,59 +1127,6 @@ class MoveItScanPlanner:
                 "trajectory may use MoveIt branch (controller reject risk).\n"
             )
         return hardware
-
-    def _wait_for_planner_joint_feedback(self, timeout_s: float = 2.0) -> None:
-        """Spin until MoveIt / hardware joint caches are populated."""
-        deadline = time.time() + timeout_s
-        while time.time() < deadline:
-            if self._moveit_start_joint_positions() is not None:
-                return
-            if self._executor is not None:
-                try:
-                    self._executor.spin_once(timeout_sec=0.05)
-                except Exception:
-                    break
-            else:
-                time.sleep(0.05)
-
-    def _resolve_execute_branch(
-        self,
-        goal_joints: Sequence[float],
-        *,
-        direct_only: bool,
-        tcp_target: Optional[Dict[str, Any]] = None,
-        refresh_ik: bool = False,
-    ) -> tuple[List[float], Optional[List[float]]]:
-        """Coalesce goal to live MoveIt branch after ROS joint feedback is available.
-
-        Prefer stored plan joints. Live multi-seed IK (*refresh_ik*) is opt-in.
-        """
-        resolved_goal = [float(v) for v in goal_joints]
-        current_joints = self._current_joint_positions()
-        if current_joints is None:
-            hardware = self._hardware_joint_positions()
-            if hardware is not None:
-                current_joints = coalesce_joints_for_moveit(hardware, hardware)
-
-        moveit_start = self._moveit_start_joint_positions()
-        branch_ref = (
-            list(moveit_start)
-            if moveit_start is not None
-            else (list(current_joints) if current_joints is not None else None)
-        )
-
-        if branch_ref is not None:
-            resolved_goal = self._coalesce_goal_joints(branch_ref, resolved_goal)
-            if not direct_only and len(self._last_plan_start_seed) == 6:
-                resolved_goal = self._coalesce_goal_joints(
-                    self._last_plan_start_seed, resolved_goal
-                )
-            if refresh_ik and isinstance(tcp_target, dict):
-                refreshed = self._goal_joints_from_tcp(tcp_target, branch_ref)
-                if refreshed is not None:
-                    resolved_goal = refreshed
-
-        return resolved_goal, branch_ref
 
     def _moveit_start_joint_positions(self) -> Optional[List[float]]:
         """Current joints on the MoveIt /joint_states branch (from stamper)."""
@@ -1089,12 +1138,63 @@ class MoveItScanPlanner:
             return None
         return coalesce_joints_for_moveit(hardware, hardware)
 
+    def _wait_for_planner_joint_feedback(self, timeout_s: float = 2.0) -> None:
+        """Wait until MoveIt / hardware joint caches are populated (spin thread feeds them)."""
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            if self._moveit_start_joint_positions() is not None:
+                return
+            time.sleep(0.05)
+
+    def _resolve_execute_branch(
+        self,
+        goal_joints: Sequence[float],
+        *,
+        direct_only: bool,
+        tcp_target: Optional[Dict[str, Any]] = None,
+        refresh_ik: bool = False,
+        pin_pose_tolerance_deg: float = 0.0,
+        lock_camera_up: bool = True,
+    ) -> tuple[List[float], Optional[List[float]]]:
+        """Coalesce goal onto the live MoveIt (/joint_states) branch for planning.
+
+        Never re-seed onto the plan-time home seed (that caused wrist branch flips).
+        RTDE multi-turn hardware is applied only when unwrapping the execute trajectory.
+        """
+        del direct_only  # kept for call-site compatibility
+        resolved_goal = [float(v) for v in goal_joints]
+        self._wait_for_planner_joint_feedback(timeout_s=1.5)
+        moveit_start = self._moveit_start_joint_positions()
+        if moveit_start is None:
+            # Last resort: map hardware into MoveIt limits so validity/planning stay in-range.
+            hardware = self._ensure_hardware_joint_positions(timeout_s=1.0)
+            if hardware is not None:
+                moveit_start = coalesce_joints_for_moveit(hardware, hardware)
+
+        if moveit_start is not None:
+            branch_ref = list(moveit_start)
+            resolved_goal = coalesce_joints_for_moveit(branch_ref, resolved_goal)
+        else:
+            branch_ref = None
+
+        if refresh_ik and isinstance(tcp_target, dict) and branch_ref is not None:
+            refreshed = self._goal_joints_from_tcp(
+                tcp_target,
+                branch_ref,
+                pin_pose_tolerance_deg=pin_pose_tolerance_deg,
+                lock_camera_up=lock_camera_up,
+            )
+            if refreshed is not None:
+                resolved_goal = coalesce_joints_for_moveit(branch_ref, refreshed)
+
+        return resolved_goal, branch_ref
+
     def _coalesce_goal_joints(
         self,
         reference: Sequence[float],
         goal: Sequence[float],
     ) -> List[float]:
-        """Align UI / plan goal angles to the same 2π branch as *reference*."""
+        """Align UI / plan goal angles to the same 2π branch as *reference* (MoveIt limits)."""
         return coalesce_joints_for_moveit(reference, goal)
 
     def _wait_for_joint_positions_near(
@@ -1169,10 +1269,9 @@ class MoveItScanPlanner:
         raw: float,
         reference: float,
     ) -> float:
-        """Chain trajectory samples; wrist_3 is continuous — never wrap to (-π, π]."""
-        if joint_index == WRIST_3_JOINT_INDEX:
-            return float(reference) + cls._joint_delta_rad(reference, raw)
-        return cls._pick_joint_branch(joint_index, raw, reference)
+        """Chain trajectory samples continuously (shortest wrap delta — no ±π snap)."""
+        del joint_index  # all axes use continuous unwrap for execute trajectories
+        return unwrap_joint_continuous(reference, raw)
 
     @classmethod
     def _normalize_joint_solution_to_reference(
@@ -1233,16 +1332,28 @@ class MoveItScanPlanner:
         future: Any,
         timeout_s: float,
         stop_event: Optional[threading.Event] = None,
+        *,
+        label: str = "MoveIt call",
     ) -> Any:
         deadline = time.time() + timeout_s
+        last_beat = time.time()
         while time.time() < deadline:
             if stop_event is not None and stop_event.is_set():
                 self.cancel_active_move()
                 raise RuntimeError("Motion stopped.")
             if future.done():
                 return future.result()
+            now = time.time()
+            if now - last_beat >= 5.0:
+                remaining = max(0.0, deadline - now)
+                sys.stderr.write(
+                    f"UR3e MoveIt: still waiting for {label} "
+                    f"({remaining:.0f}s left)…\n"
+                )
+                sys.stderr.flush()
+                last_beat = now
             time.sleep(0.02)
-        raise TimeoutError(f"MoveIt call timed out after {timeout_s:.0f}s.")
+        raise TimeoutError(f"{label} timed out after {timeout_s:.0f}s.")
 
     def cancel_active_move(self) -> None:
         with self._move_goal_lock:
@@ -1262,15 +1373,21 @@ class MoveItScanPlanner:
     def _workspace_key(self, workspace: WorkspaceBox) -> tuple[Any, ...]:
         # Include the live move_group PID set: a restarted or GUI-launched move_group
         # starts with an empty planning scene, so the boundary must be re-published.
+        # Cache last non-empty PIDs — brief pgrep misses must not thrash ApplyPlanningScene.
+        pids = self._process_manager.current_move_group_pids()
+        if pids:
+            self._last_known_move_group_pids = pids
+        else:
+            pids = self._last_known_move_group_pids
         return (
-            self._process_manager.current_move_group_pids(),
+            pids,
             workspace.enabled,
             round(workspace.length_m, 6),
             round(workspace.width_m, 6),
             round(workspace.height_m, 6),
             round(workspace.mount_height_m, 6),
             round(workspace.ceiling_clearance_m, 6),
-            "acm_base_vs_box_top_v1",
+            "acm_base_vs_box_top_v3",
         )
 
     def _ensure_planning_scene_client(self) -> None:
@@ -1283,8 +1400,59 @@ class MoveItScanPlanner:
             ApplyPlanningScene,
             "/apply_planning_scene",
         )
-        if not self._planning_scene_client.wait_for_service(timeout_sec=15.0):
+        if not self._planning_scene_client.wait_for_service(timeout_sec=10.0):
             raise RuntimeError("MoveIt /apply_planning_scene service not available.")
+
+    def _ensure_planning_scene_pub(self) -> None:
+        if self._planning_scene_pub is not None:
+            return
+        from moveit_msgs.msg import PlanningScene
+        from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+
+        # Match MoveIt PlanningSceneMonitor defaults (reliable, depth 1).
+        qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        self._planning_scene_pub = self._node.create_publisher(
+            PlanningScene, "/planning_scene", qos
+        )
+
+    def _publish_planning_scene_diff(self, scene: Any) -> None:
+        """Async scene update via /planning_scene (no service wait)."""
+        scene.is_diff = True
+        scene.robot_state.is_diff = True
+        self._ensure_planning_scene_pub()
+        assert self._planning_scene_pub is not None
+        self._planning_scene_pub.publish(scene)
+        time.sleep(0.15)
+        self._planning_scene_pub.publish(scene)
+        time.sleep(0.35)
+
+    def _apply_planning_scene_diff_service(
+        self,
+        scene: Any,
+        *,
+        timeout_s: float,
+        label: str,
+    ) -> bool:
+        """Synchronous ApplyPlanningScene; returns False on timeout/error (no raise)."""
+        from moveit_msgs.srv import ApplyPlanningScene
+
+        scene.is_diff = True
+        scene.robot_state.is_diff = True
+        try:
+            self._ensure_planning_scene_client()
+            request = ApplyPlanningScene.Request()
+            request.scene = scene
+            future = self._planning_scene_client.call_async(request)
+            self._wait_future(future, timeout_s, label=label)
+            return True
+        except Exception as exc:
+            sys.stderr.write(f"UR3e MoveIt: {label} failed ({exc}).\n")
+            sys.stderr.flush()
+            return False
 
     def _apply_planning_scene_object(self, collision_object: Any) -> None:
         self._apply_planning_scene_objects([collision_object])
@@ -1294,19 +1462,15 @@ class MoveItScanPlanner:
             return
 
         from moveit_msgs.msg import PlanningScene
-        from moveit_msgs.srv import ApplyPlanningScene
-
-        self._ensure_planning_scene_client()
 
         scene = PlanningScene()
         scene.is_diff = True
+        scene.robot_state.is_diff = True
         scene.world.collision_objects.extend(collision_objects)
 
-        request = ApplyPlanningScene.Request()
-        request.scene = scene
-        future = self._planning_scene_client.call_async(request)
-        # Real tool STL + workspace walls can make ApplyPlanningScene slow under WSL.
-        self._wait_future(future, 90.0)
+        # Topic-first: bulk wall ADD via /apply_planning_scene often stalls ~90s on WSL
+        # right after move_group start. Topic path is async and usually lands in <1s.
+        self._publish_planning_scene_diff(scene)
 
     def _ensure_get_planning_scene_client(self) -> None:
         if self._get_planning_scene_client is not None:
@@ -1317,8 +1481,36 @@ class MoveItScanPlanner:
             GetPlanningScene,
             "/get_planning_scene",
         )
-        if not self._get_planning_scene_client.wait_for_service(timeout_sec=15.0):
+        if not self._get_planning_scene_client.wait_for_service(timeout_sec=8.0):
             raise RuntimeError("MoveIt /get_planning_scene service not available.")
+
+    @staticmethod
+    def _acm_is_safe_to_replace(acm: Any) -> bool:
+        """Reject incomplete ACM snapshots — replacing with them wipes SRDF disables.
+
+        A too-early GetPlanningScene (right after move_group start) can return a sparse
+        matrix. Publishing that as a diff replaces the full ACM and makes the BFS camera
+        collide with wrist_3 / flange constantly.
+        """
+        names = set(acm.entry_names or [])
+        if len(names) < 12:
+            return False
+        ur_links = {
+            "shoulder_link",
+            "upper_arm_link",
+            "forearm_link",
+            "wrist_1_link",
+            "wrist_2_link",
+            "wrist_3_link",
+        }
+        if len(names & ur_links) < 5:
+            return False
+        # Tool payload must already be present with SRDF adjacent disables loaded.
+        if TOOL_PAYLOAD_LINK not in names:
+            return False
+        if "wrist_3_link" not in names:
+            return False
+        return True
 
     @staticmethod
     def _acm_set_allowed(acm: Any, name_a: str, name_b: str, allowed: bool = True) -> None:
@@ -1357,38 +1549,86 @@ class MoveItScanPlanner:
         acm.entry_names = names
         acm.entry_values = values
 
+    def _fetch_complete_acm(self, *, timeout_s: float = 25.0) -> Any:
+        """Wait until MoveIt ACM includes UR + tool SRDF entries before mutating it."""
+        from moveit_msgs.msg import PlanningSceneComponents
+        from moveit_msgs.srv import GetPlanningScene
+
+        self._ensure_get_planning_scene_client()
+        deadline = time.time() + timeout_s
+        last_count = -1
+        while time.time() < deadline:
+            get_req = GetPlanningScene.Request()
+            get_req.components.components = (
+                PlanningSceneComponents.ALLOWED_COLLISION_MATRIX
+            )
+            get_future = self._get_planning_scene_client.call_async(get_req)
+            try:
+                get_response = self._wait_future(
+                    get_future, 8.0, label="/get_planning_scene (ACM)"
+                )
+            except TimeoutError:
+                time.sleep(0.4)
+                continue
+            acm = get_response.scene.allowed_collision_matrix
+            count = len(acm.entry_names or [])
+            if count != last_count:
+                sys.stderr.write(
+                    f"UR3e MoveIt: ACM snapshot has {count} entries "
+                    f"(need full UR+tool matrix)…\n"
+                )
+                sys.stderr.flush()
+                last_count = count
+            if self._acm_is_safe_to_replace(acm):
+                return acm
+            time.sleep(0.5)
+        raise RuntimeError(
+            "MoveIt AllowedCollisionMatrix not ready "
+            "(refusing incomplete ACM replace that would break camera SRDF disables)."
+        )
+
     def _allow_base_ceiling_collisions(self) -> None:
         """Ignore base↔workspace-box-top collisions (ceiling mount through box top slab)."""
-        from moveit_msgs.msg import PlanningScene, PlanningSceneComponents
-        from moveit_msgs.srv import ApplyPlanningScene, GetPlanningScene
+        from moveit_msgs.msg import PlanningScene
 
-        self._ensure_planning_scene_client()
-        self._ensure_get_planning_scene_client()
-
-        get_req = GetPlanningScene.Request()
-        get_req.components.components = (
-            PlanningSceneComponents.ALLOWED_COLLISION_MATRIX
-        )
-        get_future = self._get_planning_scene_client.call_async(get_req)
-        get_response = self._wait_future(get_future, 30.0)
-        acm = get_response.scene.allowed_collision_matrix
+        acm = self._fetch_complete_acm(timeout_s=25.0)
 
         for link_name in BASE_LINKS_IGNORE_CEILING:
             self._acm_set_allowed(acm, link_name, BOUNDARY_CEILING_OBJECT_ID, True)
 
+        # Re-assert SRDF tool/camera adjacent disables so a bad merge cannot re-enable them.
+        for link_a, link_b in (
+            ("tool0", TOOL_PAYLOAD_LINK),
+            ("flange", TOOL_PAYLOAD_LINK),
+            ("wrist_3_link", TOOL_PAYLOAD_LINK),
+            ("wrist_2_link", TOOL_PAYLOAD_LINK),
+            ("tool0", "hyperfusion_tcp"),
+            ("flange", "hyperfusion_tcp"),
+            (TOOL_PAYLOAD_LINK, "hyperfusion_tcp"),
+        ):
+            self._acm_set_allowed(acm, link_a, link_b, True)
+
         scene = PlanningScene()
         scene.is_diff = True
+        scene.robot_state.is_diff = True
         # Apply the full merged ACM (MoveIt replaces ACM when entry_names is set on a diff).
         scene.allowed_collision_matrix = acm
 
-        apply_req = ApplyPlanningScene.Request()
-        apply_req.scene = scene
-        apply_future = self._planning_scene_client.call_async(apply_req)
-        self._wait_future(apply_future, 30.0)
+        # Prefer service for ACM — topic-only early replaces wiped camera↔wrist disables.
+        if not self._apply_planning_scene_diff_service(
+            scene, timeout_s=20.0, label="/apply_planning_scene (ACM)"
+        ):
+            sys.stderr.write(
+                "UR3e MoveIt: ACM service timed out — publishing validated ACM on topic.\n"
+            )
+            sys.stderr.flush()
+            self._publish_planning_scene_diff(scene)
+
         sys.stderr.write(
             "UR3e MoveIt: ACM — ignore base vs workspace box top "
             f"({', '.join(BASE_LINKS_IGNORE_CEILING)} ↔ {BOUNDARY_CEILING_OBJECT_ID}).\n"
         )
+        sys.stderr.flush()
 
     def _remove_planning_scene_object(self, object_id: str) -> None:
         from moveit_msgs.msg import CollisionObject
@@ -1533,6 +1773,8 @@ class MoveItScanPlanner:
                     other = bodies[1] if TOOL_PAYLOAD_LINK in bodies[0] else bodies[0]
                     if "forearm" in other:
                         return "tool payload near forearm (pinch / fold risk)"
+                    if "wrist_2" in other:
+                        return "tool payload vs wrist_2 (mount overlap — restart MoveIt after SRDF update)"
                     if "hyperfusion_boundary_" in other:
                         return "tool payload outside workspace boundary"
                     return f"tool payload collision ({body1} vs {body2})"
@@ -1545,35 +1787,79 @@ class MoveItScanPlanner:
 
     def _apply_workspace_collision(self, workspace: WorkspaceBox) -> bool:
         """Install full workspace box collision (floor, walls, ceiling) for whole-arm checks."""
-        workspace_key = self._workspace_key(workspace)
-        if self._workspace_applied == workspace_key:
-            return True
+        with self._workspace_apply_cv:
+            workspace_key = self._workspace_key(workspace)
+            if self._workspace_applied == workspace_key:
+                return True
 
-        if not workspace.enabled:
-            if self._workspace_applied is not None:
-                self._clear_workspace_boundary_objects()
-            self._workspace_applied = workspace_key
-            sys.stderr.write("UR3e MoveIt: workspace boundary disabled.\n")
-            return True
+            if self._plan_in_progress:
+                # Never mutate the planning scene while MoveGroup is planning —
+                # concurrent ApplyPlanningScene yields instant FAILURE (99999).
+                sys.stderr.write(
+                    "UR3e MoveIt: skip workspace boundary update during planning.\n"
+                )
+                sys.stderr.flush()
+                return self._workspace_applied is not None
 
-        collision_objects = self._make_workspace_boundary_objects(workspace)
-        self._apply_planning_scene_objects(collision_objects)
+            # Single-flight: waiters share one apply instead of stampeding after timeout.
+            deadline = time.time() + 90.0
+            while self._workspace_apply_in_progress and time.time() < deadline:
+                self._workspace_apply_cv.wait(timeout=0.5)
+                if self._workspace_applied == workspace_key:
+                    return True
+            if self._workspace_applied == workspace_key:
+                return True
+            if self._workspace_apply_in_progress:
+                sys.stderr.write(
+                    "UR3e MoveIt: workspace boundary apply still in progress — skipping.\n"
+                )
+                sys.stderr.flush()
+                return self._workspace_applied is not None
+
+            if not workspace.enabled:
+                if self._workspace_applied is not None:
+                    self._clear_workspace_boundary_objects()
+                self._workspace_applied = workspace_key
+                sys.stderr.write("UR3e MoveIt: workspace boundary disabled.\n")
+                sys.stderr.flush()
+                return True
+
+            self._workspace_apply_in_progress = True
+
         try:
-            self._allow_base_ceiling_collisions()
-        except Exception as exc:
+            collision_objects = self._make_workspace_boundary_objects(workspace)
             sys.stderr.write(
-                f"UR3e MoveIt: failed to apply base↔ceiling ACM ({exc}).\n"
+                "UR3e MoveIt: applying workspace boundary collision objects…\n"
             )
+            sys.stderr.flush()
+            self._apply_planning_scene_objects(collision_objects)
+            try:
+                self._allow_base_ceiling_collisions()
+            except Exception as exc:
+                sys.stderr.write(
+                    f"UR3e MoveIt: failed to apply base↔ceiling ACM ({exc}).\n"
+                    "UR3e MoveIt: workspace walls published; ACM pending retry "
+                    "(incomplete ACM replace would break camera↔wrist disables).\n"
+                )
+                sys.stderr.flush()
+                # Do not cache as applied — keepalive / next home retries ACM safely.
+                return True
 
-        self._workspace_applied = workspace_key
-        z_bottom, z_top = workspace_vertical_bounds(workspace)
-        sys.stderr.write(
-            "UR3e MoveIt: workspace boundary enabled "
-            f"(enclosed box {workspace.length_m:.3f} x {workspace.width_m:.3f} x "
-            f"{(z_top - z_bottom):.3f} m; mount Z={workspace.mount_height_m:.3f} m, "
-            f"box top Z={z_top:.3f} m, floor Z={z_bottom:.3f} m).\n"
-        )
-        return True
+            with self._workspace_apply_cv:
+                self._workspace_applied = workspace_key
+            z_bottom, z_top = workspace_vertical_bounds(workspace)
+            sys.stderr.write(
+                "UR3e MoveIt: workspace boundary enabled "
+                f"(enclosed box {workspace.length_m:.3f} x {workspace.width_m:.3f} x "
+                f"{(z_top - z_bottom):.3f} m; mount Z={workspace.mount_height_m:.3f} m, "
+                f"box top Z={z_top:.3f} m, floor Z={z_bottom:.3f} m).\n"
+            )
+            sys.stderr.flush()
+            return True
+        finally:
+            with self._workspace_apply_cv:
+                self._workspace_apply_in_progress = False
+                self._workspace_apply_cv.notify_all()
 
     @staticmethod
     def _moveit_error_name(code: int) -> str:
@@ -1683,10 +1969,8 @@ class MoveItScanPlanner:
                     joint_index, raw, prev[joint_index]
                 )
                 unwrapped.append(value)
-                max_step_rad = max(
-                    max_step_rad,
-                    abs(self._joint_delta_rad(prev[joint_index], value)),
-                )
+                # Numeric step (RTDE sees this); continuous unwrap keeps it small.
+                max_step_rad = max(max_step_rad, abs(value - prev[joint_index]))
                 point.positions[traj_index] = value
             prev = unwrapped
         return max_step_rad
@@ -2364,6 +2648,8 @@ class MoveItScanPlanner:
         workspace: WorkspaceBox,
         *,
         initial_seed: Optional[Sequence[float]] = None,
+        pin_pose_tolerance_deg: float = 0.0,
+        lock_camera_up: bool = True,
     ) -> List[ScanPoseResult]:
         with self._lock:
             self._process_manager.ensure_running()
@@ -2384,12 +2670,20 @@ class MoveItScanPlanner:
             last_reachable_pin: Optional[List[float]] = None
             multi_seed_recoveries = 0
             path_rejected = 0
+            cone_recoveries = 0
             total = len(targets)
             move_client = self._ensure_move_client()
+            tolerance_deg = max(0.0, float(pin_pose_tolerance_deg))
             sys.stderr.write(
                 "UR3e MoveIt: planning "
                 f"{total} scan pose(s) (multi-IK closest-to-home; "
-                "home→pin or previous→pin path+unwrap)…\n"
+                "home→pin or previous→pin path+unwrap"
+                + (
+                    f"; pin cone ±{tolerance_deg:.1f}°"
+                    if tolerance_deg > 1.0e-6
+                    else ""
+                )
+                + ")…\n"
             )
 
             for pose_index, target in enumerate(targets):
@@ -2397,8 +2691,8 @@ class MoveItScanPlanner:
                     sys.stderr.write(
                         f"UR3e MoveIt: planned {pose_index}/{total} pose(s)…\n"
                     )
-                pose = pose_target_to_ur_pose(target)
                 result = ScanPoseResult(index=target.index, reachable=False)
+                last_pick_error = "IK failed"
                 try:
                     current_pin_seed = (
                         last_reachable_pin
@@ -2409,32 +2703,68 @@ class MoveItScanPlanner:
                         plan_start_seed,
                         current_pin=current_pin_seed,
                     )
-                    joints, pick_error, recovered = self._pick_ik_closest_to_home_with_path(
-                        pose,
-                        plan_start_seed,
-                        ik_seeds,
-                        move_client,
-                        last_pin_joints=last_reachable_pin,
-                        desired_tool_z=(
-                            target.tool_z_x,
-                            target.tool_z_y,
-                            target.tool_z_z,
-                        ),
+                    cone_samples = iter_tool_z_cone_directions(
+                        target.tool_z_x,
+                        target.tool_z_y,
+                        target.tool_z_z,
+                        tolerance_deg,
                     )
-                    if joints is None:
-                        result.error = pick_error or "IK failed"
-                        if pick_error and (
-                            "path from home" in pick_error
-                            or "path from previous" in pick_error
-                            or "previous pin" in pick_error
-                        ):
-                            path_rejected += 1
-                    else:
+                    for tip_deg, tool_z in cone_samples:
+                        if tip_deg <= 1.0e-9:
+                            sample_target = target
+                        else:
+                            sample_target = scan_pose_target_with_tool_z(
+                                target,
+                                tool_z,
+                                lock_camera_up=lock_camera_up,
+                            )
+                        pose = pose_target_to_ur_pose(sample_target)
+                        joints, pick_error, recovered = (
+                            self._pick_ik_closest_to_home_with_path(
+                                pose,
+                                plan_start_seed,
+                                ik_seeds,
+                                move_client,
+                                last_pin_joints=last_reachable_pin,
+                                desired_tool_z=(
+                                    sample_target.tool_z_x,
+                                    sample_target.tool_z_y,
+                                    sample_target.tool_z_z,
+                                ),
+                            )
+                        )
+                        if joints is None:
+                            last_pick_error = pick_error or last_pick_error
+                            if pick_error and (
+                                "path from home" in pick_error
+                                or "path from previous" in pick_error
+                                or "previous pin" in pick_error
+                            ):
+                                # Count once per pin at most (nominal path reject).
+                                if tip_deg <= 1.0e-9:
+                                    path_rejected += 1
+                            continue
+
                         if recovered:
                             multi_seed_recoveries += 1
+                        if tip_deg > 1.0e-9:
+                            cone_recoveries += 1
                         result.reachable = True
                         result.joint_positions = joints
+                        result.cone_tip_deg = float(tip_deg)
+                        result.tcp_x_m = float(sample_target.x_m)
+                        result.tcp_y_m = float(sample_target.y_m)
+                        result.tcp_z_m = float(sample_target.z_m)
+                        result.tcp_rx = float(sample_target.rx)
+                        result.tcp_ry = float(sample_target.ry)
+                        result.tcp_rz = float(sample_target.rz)
+                        result.tool_z_x = float(sample_target.tool_z_x)
+                        result.tool_z_y = float(sample_target.tool_z_y)
+                        result.tool_z_z = float(sample_target.tool_z_z)
                         last_reachable_pin = list(joints)
+                        break
+                    else:
+                        result.error = last_pick_error or "IK failed"
                 except Exception as exc:
                     result.error = str(exc)
                 results.append(result)
@@ -2443,6 +2773,11 @@ class MoveItScanPlanner:
                 sys.stderr.write(
                     "UR3e MoveIt: multi-IK / path pick recovered "
                     f"{multi_seed_recoveries} additional reachable pose(s).\n"
+                )
+            if cone_recoveries > 0:
+                sys.stderr.write(
+                    "UR3e MoveIt: pin-pose cone recovered "
+                    f"{cone_recoveries} pose(s) (tolerance ±{tolerance_deg:.1f}°).\n"
                 )
             if path_rejected > 0:
                 sys.stderr.write(
@@ -2720,6 +3055,10 @@ class MoveItScanPlanner:
                 + "\n"
             )
 
+    @staticmethod
+    def _joints_deg_csv(joints: Sequence[float]) -> str:
+        return ", ".join(f"{math.degrees(float(v)):.1f}" for v in joints)
+
     def _format_state_invalid_reason(
         self,
         joints: Sequence[float],
@@ -2822,9 +3161,12 @@ class MoveItScanPlanner:
         self,
         tcp_target: Dict[str, Any],
         current_joints: Sequence[float],
+        *,
+        pin_pose_tolerance_deg: float = 0.0,
+        lock_camera_up: bool = True,
     ) -> Optional[List[float]]:
-        """Re-run IK from the live robot pose so execute matches current joint branches."""
-        target = ScanPoseTarget(
+        """Re-run IK from the live robot pose (optional look-at cone, inside→out)."""
+        base = ScanPoseTarget(
             index=0,
             x_m=float(tcp_target.get("x_m", tcp_target.get("x", 0.0))),
             y_m=float(tcp_target.get("y_m", tcp_target.get("y", 0.0))),
@@ -2836,7 +3178,6 @@ class MoveItScanPlanner:
             tool_z_y=float(tcp_target.get("tool_z_y", 0.0)),
             tool_z_z=float(tcp_target.get("tool_z_z", -1.0)),
         )
-        pose = pose_target_to_ur_pose(target)
         reference = list(current_joints)
         plan_start = (
             self._last_plan_start_seed
@@ -2847,37 +3188,61 @@ class MoveItScanPlanner:
             plan_start,
             current_pin=reference,
         )
-        joints, ik_error, _recovered = self._solve_ik_multi_seed(
-            pose,
-            reference,
-            ik_seeds,
-            desired_tool_z=(
-                target.tool_z_x,
-                target.tool_z_y,
-                target.tool_z_z,
-            ),
+        tolerance_deg = max(0.0, float(pin_pose_tolerance_deg))
+        last_error = "no IK solution"
+        for tip_deg, tool_z in iter_tool_z_cone_directions(
+            base.tool_z_x,
+            base.tool_z_y,
+            base.tool_z_z,
+            tolerance_deg,
+        ):
+            if tip_deg <= 1.0e-9:
+                sample = base
+            else:
+                sample = scan_pose_target_with_tool_z(
+                    base, tool_z, lock_camera_up=lock_camera_up
+                )
+            pose = pose_target_to_ur_pose(sample)
+            joints, ik_error, _recovered = self._solve_ik_multi_seed(
+                pose,
+                reference,
+                ik_seeds,
+                desired_tool_z=(
+                    sample.tool_z_x,
+                    sample.tool_z_y,
+                    sample.tool_z_z,
+                ),
+            )
+            if joints is None:
+                last_error = ik_error or last_error
+                continue
+
+            joints = self._normalize_joint_solution_to_reference(plan_start, joints)
+            joints = self._normalize_joint_solution_to_reference(reference, joints)
+            if not self._ik_joint_angles_are_sane(joints):
+                last_error = "invalid IK joint angles"
+                continue
+
+            valid, reason = self._state_is_valid(joints)
+            if not valid:
+                last_error = reason or "collision"
+                continue
+
+            if tip_deg > 1.0e-9:
+                sys.stderr.write(
+                    "UR3e MoveIt execute: live IK refresh used pin-pose cone "
+                    f"tip={tip_deg:.1f}° (tolerance ±{tolerance_deg:.1f}°).\n"
+                )
+            else:
+                sys.stderr.write(
+                    "UR3e MoveIt execute: refreshed IK goal from current robot pose.\n"
+                )
+            return joints
+
+        sys.stderr.write(
+            f"UR3e MoveIt execute: live IK refresh failed ({last_error}).\n"
         )
-        if joints is None:
-            sys.stderr.write(
-                f"UR3e MoveIt execute: live IK refresh failed ({ik_error or 'unknown'}).\n"
-            )
-            return None
-
-        joints = self._normalize_joint_solution_to_reference(plan_start, joints)
-        joints = self._normalize_joint_solution_to_reference(reference, joints)
-        if not self._ik_joint_angles_are_sane(joints):
-            sys.stderr.write("UR3e MoveIt execute: live IK refresh produced invalid joint angles.\n")
-            return None
-
-        valid, reason = self._state_is_valid(joints)
-        if not valid:
-            sys.stderr.write(
-                f"UR3e MoveIt execute: live IK refresh invalid ({reason or 'collision'}).\n"
-            )
-            return None
-
-        sys.stderr.write("UR3e MoveIt execute: refreshed IK goal from current robot pose.\n")
-        return joints
+        return None
 
     def _motion_scale_for(
         self,
@@ -2912,9 +3277,14 @@ class MoveItScanPlanner:
         # applied only when unwrapping the trajectory for scaled_joint_trajectory_controller.
         hardware_start = self._ensure_hardware_joint_positions(timeout_s=1.5)
         moveit_start = self._moveit_start_joint_positions()
+        # Principalize continuous joints for MoveGroup (matches stamper (-π, π] stream).
+        if moveit_start is not None:
+            moveit_start = coalesce_joints_for_moveit(moveit_start, moveit_start)
         plan_goal = list(goal_joints)
         if moveit_start is not None:
             plan_goal = coalesce_joints_for_moveit(moveit_start, plan_goal)
+        else:
+            plan_goal = coalesce_joints_for_moveit(plan_goal, plan_goal)
         if hardware_start is not None:
             sys.stderr.write(
                 "UR3e MoveIt execute: plan in MoveIt joint branch; "
@@ -2925,6 +3295,18 @@ class MoveItScanPlanner:
         if moveit_start is not None:
             self._log_moveit_joint_issues(moveit_start, label="current")
         self._log_moveit_joint_issues(plan_goal, label="goal")
+        if moveit_start is not None:
+            sys.stderr.write(
+                "UR3e MoveIt execute: "
+                f"start=[{self._joints_deg_csv(moveit_start)}] "
+                f"goal=[{self._joints_deg_csv(plan_goal)}] "
+                f"Δ={math.degrees(self._joint_distance_rad(moveit_start, plan_goal)):.1f}°·joint\n"
+            )
+        else:
+            sys.stderr.write(
+                "UR3e MoveIt execute: "
+                f"goal=[{self._joints_deg_csv(plan_goal)}] (no MoveIt start feedback)\n"
+            )
 
         if recovery:
             allowed_planning_time = RECOVERY_ALLOWED_PLANNING_TIME_S
@@ -2936,76 +3318,104 @@ class MoveItScanPlanner:
         last_code = MoveItErrorCodes.FAILURE
         last_name = "failure"
 
-        for pipeline_id, planner_id in EXECUTE_PLANNER_ATTEMPTS:
-            try:
-                error_code, planned = self._plan_move_group_joint_goal(
-                    plan_goal,
-                    move_client,
-                    pipeline_id=pipeline_id,
-                    planner_id=planner_id,
-                    motion_scale=motion_scale,
-                    start_joints=moveit_start,
-                    stop_event=stop_event,
-                    allowed_planning_time=allowed_planning_time,
-                    num_planning_attempts=num_planning_attempts,
+        with self._scene_lock:
+            self._plan_in_progress = True
+        try:
+            if moveit_start is not None:
+                start_ok, start_reason = self._state_is_valid(moveit_start)
+                if not start_ok:
+                    detail = self._format_state_invalid_reason(moveit_start, start_reason)
+                    sys.stderr.write(
+                        f"UR3e MoveIt execute: start state invalid before plan — {detail}\n"
+                    )
+                    sys.stderr.flush()
+                    return False, MoveItErrorCodes.START_STATE_INVALID, detail
+            goal_ok, goal_reason = self._state_is_valid(plan_goal)
+            if not goal_ok:
+                detail = self._format_state_invalid_reason(plan_goal, goal_reason)
+                sys.stderr.write(
+                    f"UR3e MoveIt execute: goal state invalid before plan — {detail}\n"
                 )
-            except RuntimeError:
-                raise
+                sys.stderr.flush()
+                return False, MoveItErrorCodes.GOAL_STATE_INVALID, detail
 
-            if error_code != MoveItErrorCodes.SUCCESS or planned is None:
-                last_code = error_code
-                last_name = self._moveit_error_name(error_code)
+            for pipeline_id, planner_id in EXECUTE_PLANNER_ATTEMPTS:
+                try:
+                    error_code, planned = self._plan_move_group_joint_goal(
+                        plan_goal,
+                        move_client,
+                        pipeline_id=pipeline_id,
+                        planner_id=planner_id,
+                        motion_scale=motion_scale,
+                        start_joints=moveit_start,
+                        stop_event=stop_event,
+                        allowed_planning_time=allowed_planning_time,
+                        num_planning_attempts=num_planning_attempts,
+                    )
+                except RuntimeError:
+                    raise
+
+                if error_code != MoveItErrorCodes.SUCCESS or planned is None:
+                    last_code = error_code
+                    last_name = self._moveit_error_name(error_code)
+                    sys.stderr.write(
+                        "UR3e MoveIt execute: "
+                        f"{pipeline_id}/{planner_id} plan failed "
+                        f"({last_name}, code={error_code}).\n"
+                    )
+                    continue
+
+                prepared = copy.deepcopy(planned)
+                if not self._prepare_trajectory_for_robot(prepared):
+                    sys.stderr.write(
+                        "UR3e MoveIt execute: "
+                        f"{pipeline_id}/{planner_id} rejected (unwrap/velocity limit).\n"
+                    )
+                    continue
+
+                waypoints = self._trajectory_joint_waypoints(prepared)
+                if len(waypoints) < 2:
+                    sys.stderr.write(
+                        "UR3e MoveIt execute: "
+                        f"{pipeline_id}/{planner_id} returned empty trajectory.\n"
+                    )
+                    continue
+
+                pinch_ok, min_gap_m, pinch_reason = self._trajectory_pinch_ok(waypoints)
+                if not pinch_ok:
+                    sys.stderr.write(
+                        "UR3e MoveIt execute: "
+                        f"{pipeline_id}/{planner_id} rejected ({pinch_reason}).\n"
+                    )
+                    continue
+
+                travel_rad = self._trajectory_joint_travel_rad(waypoints)
                 sys.stderr.write(
                     "UR3e MoveIt execute: "
-                    f"{pipeline_id}/{planner_id} plan failed "
-                    f"({last_name}, code={error_code}).\n"
+                    f"{pipeline_id}/{planner_id} candidate "
+                    f"travel={math.degrees(travel_rad):.1f}°·joint "
+                    f"min pinch gap={min_gap_m * 1000.0:.1f} mm "
+                    "(first valid — executing).\n"
                 )
-                continue
-
-            prepared = copy.deepcopy(planned)
-            if not self._prepare_trajectory_for_robot(prepared):
+                with self._scene_lock:
+                    self._plan_in_progress = False
+                execute_code = self._execute_planned_trajectory(
+                    prepared, already_prepared=True, stop_event=stop_event
+                )
+                if execute_code == MoveItErrorCodes.SUCCESS:
+                    return True, MoveItErrorCodes.SUCCESS, "success"
+                last_code = execute_code
+                last_name = self._moveit_error_name(execute_code)
                 sys.stderr.write(
                     "UR3e MoveIt execute: "
-                    f"{pipeline_id}/{planner_id} rejected (unwrap/velocity limit).\n"
+                    f"{pipeline_id}/{planner_id} execute failed "
+                    f"({last_name}, code={execute_code}) — trying next planner.\n"
                 )
-                continue
-
-            waypoints = self._trajectory_joint_waypoints(prepared)
-            if len(waypoints) < 2:
-                sys.stderr.write(
-                    "UR3e MoveIt execute: "
-                    f"{pipeline_id}/{planner_id} returned empty trajectory.\n"
-                )
-                continue
-
-            pinch_ok, min_gap_m, pinch_reason = self._trajectory_pinch_ok(waypoints)
-            if not pinch_ok:
-                sys.stderr.write(
-                    "UR3e MoveIt execute: "
-                    f"{pipeline_id}/{planner_id} rejected ({pinch_reason}).\n"
-                )
-                continue
-
-            travel_rad = self._trajectory_joint_travel_rad(waypoints)
-            sys.stderr.write(
-                "UR3e MoveIt execute: "
-                f"{pipeline_id}/{planner_id} candidate "
-                f"travel={math.degrees(travel_rad):.1f}°·joint "
-                f"min pinch gap={min_gap_m * 1000.0:.1f} mm "
-                "(first valid — executing).\n"
-            )
-            execute_code = self._execute_planned_trajectory(
-                prepared, already_prepared=True, stop_event=stop_event
-            )
-            if execute_code == MoveItErrorCodes.SUCCESS:
-                return True, MoveItErrorCodes.SUCCESS, "success"
-            last_code = execute_code
-            last_name = self._moveit_error_name(execute_code)
-            sys.stderr.write(
-                "UR3e MoveIt execute: "
-                f"{pipeline_id}/{planner_id} execute failed "
-                f"({last_name}, code={execute_code}) — trying next planner.\n"
-            )
+                with self._scene_lock:
+                    self._plan_in_progress = True
+        finally:
+            with self._scene_lock:
+                self._plan_in_progress = False
 
         return False, last_code, last_name
 
@@ -3016,11 +3426,18 @@ class MoveItScanPlanner:
         tcp_target: Optional[Dict[str, Any]] = None,
         *,
         refresh_ik: bool = True,
+        pin_pose_tolerance_deg: float = 0.0,
+        lock_camera_up: bool = True,
     ) -> tuple[Optional[List[float]], str]:
         """Joint-space goal at *at_joints*, optionally refreshed with live IK for scan pins."""
         resolved = self._normalize_joint_solution_to_reference(at_joints, goal_joints)
         if refresh_ik and isinstance(tcp_target, dict):
-            refreshed = self._goal_joints_from_tcp(tcp_target, at_joints)
+            refreshed = self._goal_joints_from_tcp(
+                tcp_target,
+                at_joints,
+                pin_pose_tolerance_deg=pin_pose_tolerance_deg,
+                lock_camera_up=lock_camera_up,
+            )
             if refreshed is not None:
                 resolved = refreshed
 
@@ -3038,17 +3455,30 @@ class MoveItScanPlanner:
         goal_joints: Sequence[float],
         at_joints: Sequence[float],
         tcp_target: Optional[Dict[str, Any]] = None,
+        *,
+        pin_pose_tolerance_deg: float = 0.0,
+        lock_camera_up: bool = True,
     ) -> tuple[Optional[List[float]], str]:
         """Resolve scan-pin goal joints; prefer stored plan joints over live IK refresh."""
         planned, planned_error = self._resolve_goal_joints(
-            goal_joints, at_joints, tcp_target=None, refresh_ik=False
+            goal_joints,
+            at_joints,
+            tcp_target=None,
+            refresh_ik=False,
+            pin_pose_tolerance_deg=pin_pose_tolerance_deg,
+            lock_camera_up=lock_camera_up,
         )
         if planned is not None:
             return planned, ""
 
         if isinstance(tcp_target, dict):
             refreshed, refresh_error = self._resolve_goal_joints(
-                goal_joints, at_joints, tcp_target, refresh_ik=True
+                goal_joints,
+                at_joints,
+                tcp_target,
+                refresh_ik=True,
+                pin_pose_tolerance_deg=pin_pose_tolerance_deg,
+                lock_camera_up=lock_camera_up,
             )
             if refreshed is not None:
                 return refreshed, ""
@@ -3066,16 +3496,27 @@ class MoveItScanPlanner:
         motion_scale: Optional[float] = None,
         stop_event: Optional[threading.Event] = None,
         log_prefix: str = "no direct collision-free path",
+        pin_pose_tolerance_deg: float = 0.0,
+        lock_camera_up: bool = True,
     ) -> Dict[str, Any]:
         """Retreat to fixed home, then approach the pin from the home branch."""
         sys.stderr.write(
             f"UR3e MoveIt execute: {log_prefix} — "
             "retreating to home pose, then approaching pin.\n"
         )
-        home_ref = current_joints if current_joints is not None else self.home_joints_rad()
-        home_joints = self._normalize_joint_solution_to_reference(
-            home_ref, self.home_joints_rad()
+        hardware = self._ensure_hardware_joint_positions(timeout_s=1.5)
+        self._wait_for_planner_joint_feedback(timeout_s=1.5)
+        moveit_start = self._moveit_start_joint_positions()
+        if moveit_start is None and hardware is not None:
+            moveit_start = coalesce_joints_for_moveit(hardware, hardware)
+
+        home_ref = (
+            moveit_start
+            if moveit_start is not None
+            else (hardware if hardware is not None else self.home_joints_rad())
         )
+        # Plan/validity must stay on the MoveIt branch; RTDE unwrap happens at execute.
+        home_joints = coalesce_joints_for_moveit(home_ref, self.home_joints_rad())
         home_valid, home_reason = self._state_is_valid(home_joints)
         if not home_valid:
             return {
@@ -3089,7 +3530,11 @@ class MoveItScanPlanner:
             live_before_retreat = self._normalize_joint_solution_to_reference(
                 live_before_retreat, live_before_retreat
             )
-        retreat_from = live_before_retreat if live_before_retreat is not None else current_joints
+        retreat_from = (
+            moveit_start
+            if moveit_start is not None
+            else (live_before_retreat if live_before_retreat is not None else current_joints)
+        )
 
         retreat_scale = motion_scale
         if retreat_scale is None:
@@ -3115,7 +3560,11 @@ class MoveItScanPlanner:
         )
 
         goal2, goal_error = self._resolve_pin_approach_goal(
-            goal_joints, current2, tcp_target
+            goal_joints,
+            current2,
+            tcp_target,
+            pin_pose_tolerance_deg=pin_pose_tolerance_deg,
+            lock_camera_up=lock_camera_up,
         )
         if goal2 is None:
             return {
@@ -3196,6 +3645,8 @@ class MoveItScanPlanner:
         stop_event: Optional[threading.Event] = None,
         require_home_first: bool = False,
         direct_only: bool = False,
+        pin_pose_tolerance_deg: float = 0.0,
+        lock_camera_up: bool = True,
     ) -> Dict[str, Any]:
         """Plan and execute one collision-aware joint-space motion via MoveIt.
 
@@ -3216,6 +3667,7 @@ class MoveItScanPlanner:
             raise ValueError("Waypoint must have 6 joint values.")
 
         goal_joints = [float(v) for v in joints]
+        tolerance_deg = max(0.0, float(pin_pose_tolerance_deg))
 
         with self._lock:
             self._process_manager.ensure_running()
@@ -3223,7 +3675,18 @@ class MoveItScanPlanner:
             ws = workspace if workspace is not None else self._last_workspace
             if ws is None:
                 ws = WorkspaceBox(enabled=True)
+            self._last_workspace = ws
+
+        try:
             self._apply_workspace_collision(ws)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "skipped": not direct_only,
+                "error": f"could not apply workspace boundary ({exc})",
+            }
+
+        with self._lock:
             move_client = self._ensure_move_client()
 
         self._wait_for_planner_joint_feedback(timeout_s=2.0)
@@ -3233,6 +3696,8 @@ class MoveItScanPlanner:
             direct_only=direct_only,
             tcp_target=tcp_target,
             refresh_ik=False,
+            pin_pose_tolerance_deg=tolerance_deg,
+            lock_camera_up=lock_camera_up,
         )
         if branch_ref is not None and not self._ik_joint_angles_are_sane(goal_joints):
             return {
@@ -3262,13 +3727,21 @@ class MoveItScanPlanner:
             if not goal_valid and isinstance(tcp_target, dict) and branch_ref is not None:
                 sys.stderr.write(
                     "UR3e MoveIt execute: planned joints invalid "
-                    f"({goal_reason or 'collision'}) — trying live IK fallback.\n"
+                    f"({goal_reason or 'collision'}) — trying live IK fallback"
+                    + (
+                        f" (cone ±{tolerance_deg:.1f}°)"
+                        if tolerance_deg > 1.0e-6
+                        else ""
+                    )
+                    + ".\n"
                 )
                 goal_joints, branch_ref = self._resolve_execute_branch(
                     planned_joints,
                     direct_only=direct_only,
                     tcp_target=tcp_target,
                     refresh_ik=True,
+                    pin_pose_tolerance_deg=tolerance_deg,
+                    lock_camera_up=lock_camera_up,
                 )
                 goal_valid, goal_reason = self._state_is_valid(goal_joints)
             if not goal_valid:
@@ -3300,7 +3773,7 @@ class MoveItScanPlanner:
                     "error": "home-first motion is not allowed for direct-only moves",
                 }
 
-            # 2) One via-home attempt, then skip (no second live-IK approach retry).
+            # 2) One via-home attempt, then skip.
             home_prefix = (
                 "ring boundary — home-first required"
                 if require_home_first
@@ -3313,6 +3786,8 @@ class MoveItScanPlanner:
                 tcp_target=tcp_target,
                 stop_event=stop_event,
                 log_prefix=home_prefix,
+                pin_pose_tolerance_deg=tolerance_deg,
+                lock_camera_up=lock_camera_up,
             )
         except RuntimeError as exc:
             if stop_event is not None and stop_event.is_set():
@@ -3334,24 +3809,58 @@ class MoveItScanPlanner:
             ws = workspace if workspace is not None else self._last_workspace
             if ws is None:
                 ws = WorkspaceBox(enabled=True)
+            self._last_workspace = ws
+
+        # Keep ApplyPlanningScene / action wait outside the planner lock so UI
+        # preview and joint polls cannot deadlock against this home request.
+        sys.stderr.write("UR3e MoveIt execute: preparing scan home motion…\n")
+        sys.stderr.flush()
+        try:
+            # Topic-based boundary apply (~1s); formerly blocked ~90s on WSL service hang.
             self._apply_workspace_collision(ws)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "skipped": True,
+                "error": f"could not apply workspace boundary ({exc})",
+            }
+
+        with self._lock:
             move_client = self._ensure_move_client()
 
+        hardware = self._ensure_hardware_joint_positions(timeout_s=1.5)
+        self._wait_for_planner_joint_feedback(timeout_s=1.5)
         current_joints = self._current_joint_positions()
         if current_joints is not None:
             current_joints = self._normalize_joint_solution_to_reference(
                 current_joints, current_joints
             )
-        home_ref = current_joints if current_joints is not None else self.home_joints_rad()
-        home_joints = self._normalize_joint_solution_to_reference(
-            home_ref, self.home_joints_rad()
+        elif hardware is not None:
+            current_joints = coalesce_joints_for_moveit(hardware, hardware)
+
+        home_ref = (
+            current_joints if current_joints is not None else self.home_joints_rad()
         )
+        home_joints = coalesce_joints_for_moveit(home_ref, self.home_joints_rad())
 
         if current_joints is not None:
-            if self._joint_distance_rad(current_joints, home_joints) <= HOME_JOINT_TOLERANCE_RAD:
+            near_moveit = (
+                self._joint_distance_rad(current_joints, home_joints)
+                <= HOME_JOINT_TOLERANCE_RAD
+            )
+            # MoveIt stamper can look "at home" on a wrapped branch while RTDE is not.
+            near_hardware = True
+            if hardware is not None:
+                home_hw = coalesce_joints_for_execute(hardware, self.home_joints_rad())
+                near_hardware = (
+                    self._joint_distance_rad(hardware, home_hw)
+                    <= HOME_JOINT_TOLERANCE_RAD
+                )
+            if near_moveit and near_hardware:
                 current_valid, current_reason = self._state_is_valid(current_joints)
                 if current_valid:
                     sys.stderr.write("UR3e MoveIt execute: already at scan home pose.\n")
+                    sys.stderr.flush()
                     return {"ok": True, "already_at_home": True}
                 return {
                     "ok": False,
@@ -3361,6 +3870,12 @@ class MoveItScanPlanner:
                         f"({current_reason or 'collision or limits'})"
                     ),
                 }
+            if near_moveit and not near_hardware:
+                sys.stderr.write(
+                    "UR3e MoveIt execute: MoveIt joints look like home but RTDE does not — "
+                    "commanding home motion on the hardware branch.\n"
+                )
+                sys.stderr.flush()
 
         home_valid, home_reason = self._state_is_valid(home_joints)
         if not home_valid:
@@ -3380,6 +3895,7 @@ class MoveItScanPlanner:
         )
         if ok:
             sys.stderr.write("UR3e MoveIt execute: reached scan home pose.\n")
+            sys.stderr.flush()
             return {"ok": True}
 
         return {

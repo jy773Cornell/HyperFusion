@@ -414,6 +414,8 @@ void Ur3ePanelController::wireSettingsTabConnections()
                 this,
                 [this]() {
                     scanPlanReady_ = false;
+                    if (host_->ur3eHemisphereScanSettings_ != nullptr)
+                        host_->ur3eHemisphereScanSettings_->setPlannedReachablePins(-1);
                     if (host_->ur3eScanRoutePlanWidget_ != nullptr)
                         host_->ur3eScanRoutePlanWidget_->clearScanPlan();
                     if (host_->ur3eScanRoutePlanWidget_ != nullptr
@@ -1099,11 +1101,16 @@ void Ur3ePanelController::finishScanPlan(const Ur3eHemisphereScanPlan &plan,
     plannedScanPlan_ = plan;
     scanPlanReady_ = !plan.points.empty();
 
+    if (host_->ur3eHemisphereScanSettings_ != nullptr)
+        host_->ur3eHemisphereScanSettings_->setPlannedReachablePins(plan.reachableCount);
+
     host_->appendLog(
-        QStringLiteral("UR3e scan plan (MoveIt): %1 points — %2 reachable, %3 unreachable.")
+        QStringLiteral("UR3e scan plan (MoveIt): %1 points — %2 reachable, %3 unreachable"
+                       " (pin cone ±%4°).")
             .arg(plan.points.size())
             .arg(plan.reachableCount)
-            .arg(plan.unreachableCount));
+            .arg(plan.unreachableCount)
+            .arg(hf::hardwareConfig().ur3e.pinPoseToleranceDeg, 0, 'f', 1));
 
     if (!plan.errorMessage.isEmpty())
         host_->appendLog(QStringLiteral("UR3e scan plan: %1").arg(plan.errorMessage));
@@ -1183,6 +1190,9 @@ void Ur3ePanelController::tryLoadCachedScanPlan()
 
     plannedScanPlan_ = plan;
     scanPlanReady_ = plan.reachableCount > 0;
+
+    if (host_->ur3eHemisphereScanSettings_ != nullptr)
+        host_->ur3eHemisphereScanSettings_->setPlannedReachablePins(plan.reachableCount);
 
     host_->appendLog(
         QStringLiteral("UR3e scan plan cache: loaded %1 points (%2 reachable, %3 unreachable).")
@@ -1275,13 +1285,19 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
         options.stabilizeMs > 0 ? options.stabilizeMs
                                 : (ur3eCfg.scanCaptureStabilizeMs >= 0 ? ur3eCfg.scanCaptureStabilizeMs
                                                                       : kScanCaptureStabilizeMs);
-    const bool wristSweepEnabled = ur3eCfg.scanWristSweepEnabled;
-    const double wristSweepStepDeg = ur3eCfg.scanWristSweepStepDeg;
-    const int wristSweepStepsEachWay = ur3eCfg.scanWristSweepStepsEachWay;
-    const int wristPosesPerPin =
-        wristSweepEnabled
-            ? (1 + (2 * wristSweepStepsEachWay) * (2 * wristSweepStepsEachWay))
-            : 1;
+    Ur3eWristSweepParams wristSweep;
+    if (host_->ur3eHemisphereScanSettings_ != nullptr)
+        wristSweep = host_->ur3eHemisphereScanSettings_->wristSweepParams();
+    else
+    {
+        wristSweep.enabled = ur3eCfg.scanWristSweepEnabled;
+        wristSweep.stepDeg = ur3eCfg.scanWristSweepStepDeg;
+        wristSweep.stepsEachWay = ur3eCfg.scanWristSweepStepsEachWay;
+        wristSweep.wrist1 = ur3eCfg.scanWristSweepWrist1;
+        wristSweep.wrist2 = ur3eCfg.scanWristSweepWrist2;
+        wristSweep.wrist3 = ur3eCfg.scanWristSweepWrist3;
+    }
+    const int wristPosesPerPin = wristSweep.imagesPerPin();
 
     if (captureStills)
     {
@@ -1294,6 +1310,23 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
         QDir().mkpath(captureDir);
     }
 
+    QString wristSummary;
+    if (wristSweep.enabled && wristSweep.enabledAxisCount() > 0)
+    {
+        QStringList axes;
+        if (wristSweep.wrist1)
+            axes << QStringLiteral("w1");
+        if (wristSweep.wrist2)
+            axes << QStringLiteral("w2");
+        if (wristSweep.wrist3)
+            axes << QStringLiteral("w3");
+        wristSummary = QStringLiteral(", wrist %1 ±%2×%3° → %4 pose(s)/pin")
+                           .arg(axes.join(QLatin1Char('+')))
+                           .arg(wristSweep.stepsEachWay)
+                           .arg(wristSweep.stepDeg, 0, 'f', 0)
+                           .arg(wristPosesPerPin);
+    }
+
     const QString serverUrl = serverManager_->serverUrl();
     host_->appendLog(
         QStringLiteral("UR3e scan execute: %1 reachable point(s), top-ring-first sweep "
@@ -1302,12 +1335,7 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
             .arg(stabilizeMs)
             .arg(captureStills ? QStringLiteral(", BFS stills → ") + captureDir
                                : QStringLiteral(", motion-only"))
-            .arg(wristSweepEnabled
-                     ? QStringLiteral(", wrist_2/3 grid %1×%2° → %3 pose(s)/pin")
-                           .arg(2 * wristSweepStepsEachWay)
-                           .arg(wristSweepStepDeg, 0, 'f', 0)
-                           .arg(wristPosesPerPin)
-                     : QString()));
+            .arg(wristSummary));
     stopRequested_.store(false, std::memory_order_release);
     scanExecuting_ = true;
     if (host_->ur3eScanRoutePlanWidget_ != nullptr)
@@ -1331,9 +1359,7 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                                           captureDir,
                                           captureStills,
                                           stabilizeMs,
-                                          wristSweepEnabled,
-                                          wristSweepStepDeg,
-                                          wristSweepStepsEachWay]() {
+                                          wristSweep]() {
             int executed = 0;
             int skipped = 0;
             int captured = 0;
@@ -1343,7 +1369,13 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
             const int total = static_cast<int>(order.size());
             TransformsJsonDocument transformsDoc;
             const std::vector<double> wristOffsets =
-                wristSweepOffsetsRad(wristSweepStepsEachWay, wristSweepStepDeg);
+                wristSweepOffsetsRad(wristSweep.stepsEachWay, wristSweep.stepDeg);
+            const std::vector<double> axis1 =
+                wristSweep.wrist1 ? wristOffsets : std::vector<double>{0.0};
+            const std::vector<double> axis2 =
+                wristSweep.wrist2 ? wristOffsets : std::vector<double>{0.0};
+            const std::vector<double> axis3 =
+                wristSweep.wrist3 ? wristOffsets : std::vector<double>{0.0};
 
             const auto sessionActive = [this, sessionId]() {
                 return !shutdownRequested_.load(std::memory_order_acquire)
@@ -1656,82 +1688,98 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                     break;
                 }
 
-                if (wristSweepEnabled && !wristOffsets.empty()
+                // Count pin as soon as center still is taken (Stop mid wrist-sweep
+                // must not report 0 successful waypoints while frames exist).
+                ++executed;
+
+                if (wristSweep.enabled && wristSweep.enabledAxisCount() > 0
                     && point.jointPositionsRad.size() >= 6)
                 {
-                    for (const double dWrist2 : wristOffsets)
+                    for (const double dWrist1 : axis1)
                     {
-                        for (const double dWrist3 : wristOffsets)
+                        for (const double dWrist2 : axis2)
                         {
-                            if (!sessionActive()
-                                || stopRequested_.load(std::memory_order_acquire))
+                            for (const double dWrist3 : axis3)
                             {
-                                ur3eStopMotion(serverUrl);
-                                goto scan_execute_loop_done;
-                            }
+                                if (dWrist1 == 0.0 && dWrist2 == 0.0 && dWrist3 == 0.0)
+                                    continue; // center already captured
 
-                            std::vector<double> wristJoints = point.jointPositionsRad;
-                            wristJoints[4] += dWrist2;
-                            wristJoints[5] += dWrist3;
-
-                            const Ur3eScanWaypointMoveResult wristMove =
-                                ur3eExecuteScanWaypoint(serverUrl,
-                                                        wristJoints,
-                                                        nullptr,
-                                                        nullptr,
-                                                        false,
-                                                        true);
-                            if (wristMove.stopped)
-                            {
-                                if (stopRequested_.load(std::memory_order_acquire))
-                                    ur3eStopMotion(serverUrl);
-                                else
+                                if (!sessionActive()
+                                    || stopRequested_.load(std::memory_order_acquire))
                                 {
-                                    ok = false;
-                                    errorMessage = wristMove.errorMessage.isEmpty()
-                                                       ? QStringLiteral(
-                                                             "Wrist sweep stopped before motion.")
-                                                       : wristMove.errorMessage;
+                                    ur3eStopMotion(serverUrl);
+                                    goto scan_execute_loop_done;
                                 }
-                                goto scan_execute_loop_done;
-                            }
-                            if (!wristMove.ok)
-                            {
-                                ++wristSkipped;
-                                const QString reason = wristMove.errorMessage.isEmpty()
-                                                           ? QStringLiteral("collision / no path")
+
+                                std::vector<double> wristJoints = point.jointPositionsRad;
+                                wristJoints[3] += dWrist1;
+                                wristJoints[4] += dWrist2;
+                                wristJoints[5] += dWrist3;
+
+                                const Ur3eScanWaypointMoveResult wristMove =
+                                    ur3eExecuteScanWaypoint(serverUrl,
+                                                            wristJoints,
+                                                            nullptr,
+                                                            nullptr,
+                                                            false,
+                                                            true);
+                                if (wristMove.stopped)
+                                {
+                                    if (stopRequested_.load(std::memory_order_acquire))
+                                        ur3eStopMotion(serverUrl);
+                                    else
+                                    {
+                                        ok = false;
+                                        errorMessage = wristMove.errorMessage.isEmpty()
+                                                           ? QStringLiteral(
+                                                                 "Wrist sweep stopped before motion.")
                                                            : wristMove.errorMessage;
-                                const double w2Deg = dWrist2 * (180.0 / 3.14159265358979323846);
-                                const double w3Deg = dWrist3 * (180.0 / 3.14159265358979323846);
-                                QMetaObject::invokeMethod(
-                                    this,
-                                    [this, pointIndex, w2Deg, w3Deg, reason]() {
-                                        host_->appendLog(
-                                            QStringLiteral(
-                                                "UR3e scan wrist sweep pin %1: skip Δw2=%2° "
-                                                "Δw3=%3° — %4")
-                                                .arg(pointIndex)
-                                                .arg(w2Deg, 0, 'f', 1)
-                                                .arg(w3Deg, 0, 'f', 1)
-                                                .arg(reason));
-                                    },
-                                    Qt::QueuedConnection);
-                                continue;
-                            }
+                                    }
+                                    goto scan_execute_loop_done;
+                                }
+                                if (!wristMove.ok)
+                                {
+                                    ++wristSkipped;
+                                    const QString reason =
+                                        wristMove.errorMessage.isEmpty()
+                                            ? QStringLiteral("collision / no path")
+                                            : wristMove.errorMessage;
+                                    constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
+                                    const double w1Deg = dWrist1 * kRadToDeg;
+                                    const double w2Deg = dWrist2 * kRadToDeg;
+                                    const double w3Deg = dWrist3 * kRadToDeg;
+                                    QMetaObject::invokeMethod(
+                                        this,
+                                        [this, pointIndex, w1Deg, w2Deg, w3Deg, reason]() {
+                                            host_->appendLog(
+                                                QStringLiteral(
+                                                    "UR3e scan wrist sweep pin %1: skip "
+                                                    "Δw1=%2° Δw2=%3° Δw3=%4° — %5")
+                                                    .arg(pointIndex)
+                                                    .arg(w1Deg, 0, 'f', 1)
+                                                    .arg(w2Deg, 0, 'f', 1)
+                                                    .arg(w3Deg, 0, 'f', 1)
+                                                    .arg(reason));
+                                        },
+                                        Qt::QueuedConnection);
+                                    continue;
+                                }
 
-                            std::this_thread::sleep_for(std::chrono::milliseconds(stabilizeMs));
+                                std::this_thread::sleep_for(
+                                    std::chrono::milliseconds(stabilizeMs));
 
-                            if (!sessionActive()
-                                || stopRequested_.load(std::memory_order_acquire))
-                            {
-                                ur3eStopMotion(serverUrl);
-                                goto scan_execute_loop_done;
-                            }
+                                if (!sessionActive()
+                                    || stopRequested_.load(std::memory_order_acquire))
+                                {
+                                    ur3eStopMotion(serverUrl);
+                                    goto scan_execute_loop_done;
+                                }
 
-                            if (!captureStillAtPose(point.tcp, pointIndex))
-                            {
-                                returnHomeAfterScan = true;
-                                goto scan_execute_loop_done;
+                                if (!captureStillAtPose(point.tcp, pointIndex))
+                                {
+                                    returnHomeAfterScan = true;
+                                    goto scan_execute_loop_done;
+                                }
                             }
                         }
                     }
@@ -1777,8 +1825,6 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                     "scanExecuteMarkCompleted",
                     Qt::QueuedConnection,
                     Q_ARG(int, pointIndex));
-
-                ++executed;
             }
 
         scan_execute_loop_done:

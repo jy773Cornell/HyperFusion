@@ -26,17 +26,17 @@ MOVEIT_JOINT_LIMITS_RAD: tuple[Optional[tuple[float, float]], ...] = (
     None,  # wrist_3: continuous (no position limits in URDF)
 )
 
-# Wider branch search for execute trajectories on hardware.
+# Wider branch search for execute trajectories on hardware (multi-turn wrists / pan).
 UR3E_JOINT_LIMITS_RAD: tuple[Optional[tuple[float, float]], ...] = (
-    (-TWO_PI, TWO_PI),
-    (-TWO_PI, TWO_PI),
-    (-math.pi, math.pi),
-    (-TWO_PI, TWO_PI),
-    (-TWO_PI, TWO_PI),
-    None,
+    (-4.0 * TWO_PI, 4.0 * TWO_PI),  # shoulder_pan
+    (-TWO_PI, TWO_PI),  # shoulder_lift
+    (-math.pi, math.pi),  # elbow
+    (-4.0 * TWO_PI, 4.0 * TWO_PI),  # wrist_1
+    (-4.0 * TWO_PI, 4.0 * TWO_PI),  # wrist_2
+    None,  # wrist_3 continuous
 )
 
-MAX_IK_BRANCH_STEPS = 4
+MAX_IK_BRANCH_STEPS = 8
 JOINT_STREAM_DEADBAND_RAD = 0.0015  # ~0.09° — ignore RTDE noise in live display / MoveIt feed
 
 
@@ -69,16 +69,15 @@ def pick_joint_branch(
         if limits is not None:
             if candidate < limits[0] - 1e-9 or candidate > limits[1] + 1e-9:
                 continue
-        else:
-            candidate = wrap_to_pi(candidate)
+        # Continuous joints (limits is None): keep multi-turn candidates; do not wrap_to_pi.
         if not any(abs(existing - candidate) < 1e-9 for existing in candidates):
             candidates.append(candidate)
 
     if not candidates:
         if limits is None:
-            return wrap_to_pi(raw)
+            return float(reference) + joint_delta_rad(reference, raw)
         lo, hi = limits
-        return max(lo, min(hi, wrap_to_pi(raw)))
+        return max(lo, min(hi, float(reference) + joint_delta_rad(reference, raw)))
 
     def sort_key(candidate: float) -> tuple[float, float, float, float]:
         # Equivalent 2π branches can differ by ~1e-9 in wrapped delta; bucket so
@@ -97,6 +96,11 @@ def pick_joint_branch(
         if limits is None or (limits[0] - 1e-6 <= float(reference) <= limits[1] + 1e-6):
             return float(reference)
     return best
+
+
+def unwrap_joint_continuous(reference: float, raw: float) -> float:
+    """Place *raw* on the continuous branch of *reference* (shortest wrapped delta)."""
+    return float(reference) + joint_delta_rad(reference, raw)
 
 
 def stabilize_joint_reading(last: float, new: float) -> float:
@@ -147,12 +151,14 @@ def _snap_continuous_joints_to_reference(
     reference: Sequence[float],
     joints: Sequence[float],
 ) -> List[float]:
-    """Keep wrist_3 on the reference branch when the pose is equivalent."""
+    """Keep multi-turn joints on the reference branch when the pose is equivalent."""
     if len(reference) != 6 or len(joints) != 6:
         return [float(v) for v in joints]
     coalesced = [float(v) for v in joints]
-    if abs(joint_delta_rad(reference[5], coalesced[5])) < 1e-4:
-        coalesced[5] = float(reference[5])
+    # pan, wrist_1, wrist_2, wrist_3 — joints that commonly accumulate turns on hardware.
+    for index in (0, 3, 4, 5):
+        if abs(joint_delta_rad(reference[index], coalesced[index])) < 1e-4:
+            coalesced[index] = float(reference[index])
     return coalesced
 
 
@@ -215,10 +221,17 @@ def joint_distance_rad(reference: Sequence[float], candidate: Sequence[float]) -
 
 
 def wrap_joint_for_stream(name: str, value: float, reference: float) -> float:
-    """Branch-continuous wrap for /joint_states (MoveIt / ur_description limits)."""
+    """Branch-continuous wrap for /joint_states (MoveIt / ur_description limits).
+
+    Continuous joints are published in (-π, π] so MoveIt's monitored state stays
+    in the principal range (multi-turn RTDE values remain on the hardware topic).
+    """
     try:
         index = CANONICAL_JOINT_NAMES.index(name)
     except ValueError:
+        return wrap_to_pi(value)
+    limits = MOVEIT_JOINT_LIMITS_RAD[index]
+    if limits is None:
         return wrap_to_pi(value)
     return pick_joint_branch(
         index,

@@ -16,6 +16,37 @@ struct Ur3eHemisphereScanParams
     double thetaMaxDeg = 90.0;
 };
 
+/// Per-pin wrist_1/2/3 photo grid used at Execute (not part of MoveIt Plan).
+struct Ur3eWristSweepParams
+{
+    bool enabled = true;
+    double stepDeg = 3.0;
+    int stepsEachWay = 4;
+    bool wrist1 = false;
+    bool wrist2 = true;
+    bool wrist3 = true;
+
+    [[nodiscard]] int enabledAxisCount() const
+    {
+        return (wrist1 ? 1 : 0) + (wrist2 ? 1 : 0) + (wrist3 ? 1 : 0);
+    }
+
+    /// Center + non-zero offset product on enabled wrists: (2N)^k + 1.
+    [[nodiscard]] int imagesPerPin() const
+    {
+        if (!enabled)
+            return 1;
+        const int axes = enabledAxisCount();
+        if (axes <= 0 || stepsEachWay <= 0 || !(stepDeg > 0.0))
+            return 1;
+        const int offsets = 2 * stepsEachWay;
+        int product = 1;
+        for (int i = 0; i < axes; ++i)
+            product *= offsets;
+        return product + 1;
+    }
+};
+
 struct Ur3eHemisphereScanPoint
 {
     double phiDeg = 0.0;

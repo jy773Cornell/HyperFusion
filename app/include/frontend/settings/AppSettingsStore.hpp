@@ -53,8 +53,12 @@ struct PersistedUr3eHemisphereScanSettings
     int verticalPoints = 5;
     double thetaMinDeg = 30.0;
     double thetaMaxDeg = 90.0;
-    /// Persist last MoveIt plan beside app.exe and reload on start if cfg fingerprint matches.
-    bool rememberLastPlan = true;
+    bool wristSweepEnabled = true;
+    double wristSweepStepDeg = 3.0;
+    int wristSweepStepsEachWay = 4;
+    bool wristSweepWrist1 = false;
+    bool wristSweepWrist2 = true;
+    bool wristSweepWrist3 = true;
 };
 
 struct PersistedBfsCameraSettings

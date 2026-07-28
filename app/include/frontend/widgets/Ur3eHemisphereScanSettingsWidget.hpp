@@ -10,6 +10,7 @@ class QDoubleSpinBox;
 class QPushButton;
 class QSpinBox;
 class QCheckBox;
+class QLabel;
 
 namespace ui
 {
@@ -21,11 +22,14 @@ public:
     explicit Ur3eHemisphereScanSettingsWidget(QWidget *parent = nullptr);
 
     [[nodiscard]] hf::ur3e::Ur3eHemisphereScanParams params() const;
+    [[nodiscard]] hf::ur3e::Ur3eWristSweepParams wristSweepParams() const;
     [[nodiscard]] bool rememberLastPlan() const;
     void applyBoundaryLimits(const hf::ur3e::Ur3eWorkspaceBoundary &boundary);
     void setPlanEnabled(bool enabled);
     void setExecuteEnabled(bool enabled);
     void setParamsEnabled(bool enabled);
+    /// After Plan: use reachable pin count for total-image estimate (−1 = grid estimate).
+    void setPlannedReachablePins(int reachablePins);
 
 signals:
     void planScanRequested();
@@ -34,16 +38,26 @@ signals:
 
 private:
     void onParameterChanged();
+    void onWristSweepChanged();
+    void updateImageEstimateLabel();
     void loadFromSettings();
     void saveToSettings() const;
+    void syncWristSweepEnabledState();
 
     hf::ur3e::Ur3eWorkspaceBoundary boundaryLimits_;
+    int plannedReachablePins_ = -1;
     QDoubleSpinBox *sphereRadiusSpin_ = nullptr;
     QSpinBox *horizontalPointsSpin_ = nullptr;
     QSpinBox *verticalPointsSpin_ = nullptr;
     QDoubleSpinBox *thetaMinSpin_ = nullptr;
     QDoubleSpinBox *thetaMaxSpin_ = nullptr;
-    QCheckBox *rememberLastPlanCheck_ = nullptr;
+    QCheckBox *wristSweepEnabledCheck_ = nullptr;
+    QDoubleSpinBox *wristSweepStepSpin_ = nullptr;
+    QSpinBox *wristSweepStepsSpin_ = nullptr;
+    QCheckBox *wrist1Check_ = nullptr;
+    QCheckBox *wrist2Check_ = nullptr;
+    QCheckBox *wrist3Check_ = nullptr;
+    QLabel *imageEstimateLabel_ = nullptr;
     QPushButton *planBtn_ = nullptr;
     QPushButton *executeBtn_ = nullptr;
 };

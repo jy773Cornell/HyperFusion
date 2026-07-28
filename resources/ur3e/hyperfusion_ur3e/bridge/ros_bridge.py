@@ -1516,7 +1516,15 @@ class Ur3eRosBridge:
 
     planner = get_scan_planner(ros_distro=self.ros_distro, ur_type=self.ur_type)
     planner.apply_home_joints_from_body(body)
-    results = planner.plan_poses(targets, workspace, initial_seed=seed_joints)
+    tolerance_deg = float(body.get("pin_pose_tolerance_deg", 0.0) or 0.0)
+    lock_camera_up = bool(body.get("scan_camera_up_world_z", True))
+    results = planner.plan_poses(
+      targets,
+      workspace,
+      initial_seed=seed_joints,
+      pin_pose_tolerance_deg=tolerance_deg,
+      lock_camera_up=lock_camera_up,
+    )
 
     payload_results = []
     reachable_count = 0
@@ -1529,14 +1537,26 @@ class Ur3eRosBridge:
         unreachable_count += 1
         reason = item.error or "unknown"
         failure_summary[reason] = failure_summary.get(reason, 0) + 1
-      payload_results.append(
-        {
-          "index": item.index,
-          "reachable": item.reachable,
-          "joints": item.joint_positions,
-          "error": item.error or None,
+      entry = {
+        "index": item.index,
+        "reachable": item.reachable,
+        "joints": item.joint_positions,
+        "error": item.error or None,
+        "cone_tip_deg": float(item.cone_tip_deg),
+      }
+      if item.reachable and item.tcp_rx is not None:
+        entry["tcp"] = {
+          "x": item.tcp_x_m,
+          "y": item.tcp_y_m,
+          "z": item.tcp_z_m,
+          "rx": item.tcp_rx,
+          "ry": item.tcp_ry,
+          "rz": item.tcp_rz,
+          "tool_z_x": item.tool_z_x,
+          "tool_z_y": item.tool_z_y,
+          "tool_z_z": item.tool_z_z,
         }
-      )
+      payload_results.append(entry)
 
     return {
       "ok": True,
@@ -1567,6 +1587,8 @@ class Ur3eRosBridge:
     tcp_target = body.get("tcp")
     require_home_first = bool(body.get("require_home_first", False))
     direct_only = bool(body.get("direct_only", False))
+    tolerance_deg = float(body.get("pin_pose_tolerance_deg", 0.0) or 0.0)
+    lock_camera_up = bool(body.get("scan_camera_up_world_z", True))
     return planner.execute_single_waypoint(
       [float(v) for v in joints],
       workspace=workspace,
@@ -1574,6 +1596,8 @@ class Ur3eRosBridge:
       stop_event=self._stop_requested,
       require_home_first=require_home_first,
       direct_only=direct_only,
+      pin_pose_tolerance_deg=tolerance_deg,
+      lock_camera_up=lock_camera_up,
     )
 
   def preview_manual_target(self, body: Dict[str, Any]) -> Dict[str, Any]:

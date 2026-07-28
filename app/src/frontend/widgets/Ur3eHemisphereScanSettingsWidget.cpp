@@ -85,12 +85,47 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
   thetaLayout->addWidget(thetaMaxSpin_);
   form->addRow(QStringLiteral("Theta range"), thetaRow);
 
-  rememberLastPlanCheck_ = new QCheckBox(QStringLiteral("Remember last plan"), group);
-  rememberLastPlanCheck_->setChecked(true);
-  rememberLastPlanCheck_->setToolTip(
-      QStringLiteral("Save Plan results beside the app and reload on startup when "
-                     "hyperfusion.cfg robot geometry and these scan parameters are unchanged."));
-  form->addRow(QStringLiteral(""), rememberLastPlanCheck_);
+  wristSweepEnabledCheck_ = new QCheckBox(QStringLiteral("Enabled"), group);
+  wristSweepEnabledCheck_->setToolTip(
+      QStringLiteral("After each pin, permute selected wrists for multiview stills "
+                     "(collision skips). Center pose is always included."));
+  form->addRow(QStringLiteral("Wrist permutation"), wristSweepEnabledCheck_);
+
+  wristSweepStepSpin_ = new QDoubleSpinBox(group);
+  wristSweepStepSpin_->setRange(0.5, 45.0);
+  wristSweepStepSpin_->setDecimals(1);
+  wristSweepStepSpin_->setSingleStep(1.0);
+  wristSweepStepSpin_->setSuffix(QStringLiteral(" °"));
+  wristSweepStepSpin_->setValue(3.0);
+  form->addRow(QStringLiteral("Wrist step"), wristSweepStepSpin_);
+
+  wristSweepStepsSpin_ = new QSpinBox(group);
+  wristSweepStepsSpin_->setRange(1, 12);
+  wristSweepStepsSpin_->setValue(4);
+  wristSweepStepsSpin_->setToolTip(
+      QStringLiteral("Steps each way from center (±N×step). Offsets exclude 0 "
+                     "(center is captured separately)."));
+  form->addRow(QStringLiteral("Steps each way"), wristSweepStepsSpin_);
+
+  wrist1Check_ = new QCheckBox(QStringLiteral("wrist_1"), group);
+  wrist2Check_ = new QCheckBox(QStringLiteral("wrist_2"), group);
+  wrist3Check_ = new QCheckBox(QStringLiteral("wrist_3"), group);
+  wrist2Check_->setChecked(true);
+  wrist3Check_->setChecked(true);
+  auto *wristAxesRow = new QWidget(group);
+  auto *wristAxesLayout = new QHBoxLayout(wristAxesRow);
+  wristAxesLayout->setContentsMargins(0, 0, 0, 0);
+  wristAxesLayout->setSpacing(8);
+  wristAxesLayout->addWidget(wrist1Check_);
+  wristAxesLayout->addWidget(wrist2Check_);
+  wristAxesLayout->addWidget(wrist3Check_);
+  wristAxesLayout->addStretch(1);
+  form->addRow(QStringLiteral("Permute"), wristAxesRow);
+
+  imageEstimateLabel_ = new QLabel(group);
+  imageEstimateLabel_->setWordWrap(true);
+  imageEstimateLabel_->setStyleSheet(QStringLiteral("color: #444;"));
+  form->addRow(QStringLiteral("Images"), imageEstimateLabel_);
 
   planBtn_ = new QPushButton(QStringLiteral("Plan"), group);
   planBtn_->setToolTip(
@@ -122,9 +157,17 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
           hook);
   connect(thetaMaxSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
           hook);
-  connect(rememberLastPlanCheck_, &QCheckBox::toggled, this, [this](bool) {
-    saveToSettings();
-  });
+
+  const auto wristHook = [this]() { onWristSweepChanged(); };
+  connect(wristSweepEnabledCheck_, &QCheckBox::toggled, this, wristHook);
+  connect(wristSweepStepSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged),
+          this, wristHook);
+  connect(wristSweepStepsSpin_, qOverload<int>(&QSpinBox::valueChanged), this,
+          wristHook);
+  connect(wrist1Check_, &QCheckBox::toggled, this, wristHook);
+  connect(wrist2Check_, &QCheckBox::toggled, this, wristHook);
+  connect(wrist3Check_, &QCheckBox::toggled, this, wristHook);
+
   connect(planBtn_, &QPushButton::clicked, this,
           [this]() { emit planScanRequested(); });
   connect(executeBtn_, &QPushButton::clicked, this,
@@ -133,6 +176,8 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
   loadFromSettings();
   applyBoundaryLimits(
       hf::ur3e::workspaceBoundaryFromConfig(hf::hardwareConfig().ur3e));
+  syncWristSweepEnabledState();
+  updateImageEstimateLabel();
   saveToSettings();
 }
 
@@ -145,14 +190,24 @@ void Ur3eHemisphereScanSettingsWidget::loadFromSettings()
     const QSignalBlocker blockVertical(verticalPointsSpin_);
     const QSignalBlocker blockThetaMin(thetaMinSpin_);
     const QSignalBlocker blockThetaMax(thetaMaxSpin_);
-    const QSignalBlocker blockRemember(rememberLastPlanCheck_);
+    const QSignalBlocker blockWristEn(wristSweepEnabledCheck_);
+    const QSignalBlocker blockWristStep(wristSweepStepSpin_);
+    const QSignalBlocker blockWristSteps(wristSweepStepsSpin_);
+    const QSignalBlocker blockW1(wrist1Check_);
+    const QSignalBlocker blockW2(wrist2Check_);
+    const QSignalBlocker blockW3(wrist3Check_);
 
     sphereRadiusSpin_->setValue(saved.sphereRadiusMm);
     horizontalPointsSpin_->setValue(saved.horizontalPoints);
     verticalPointsSpin_->setValue(saved.verticalPoints);
     thetaMinSpin_->setValue(saved.thetaMinDeg);
     thetaMaxSpin_->setValue(saved.thetaMaxDeg);
-    rememberLastPlanCheck_->setChecked(saved.rememberLastPlan);
+    wristSweepEnabledCheck_->setChecked(saved.wristSweepEnabled);
+    wristSweepStepSpin_->setValue(saved.wristSweepStepDeg);
+    wristSweepStepsSpin_->setValue(saved.wristSweepStepsEachWay);
+    wrist1Check_->setChecked(saved.wristSweepWrist1);
+    wrist2Check_->setChecked(saved.wristSweepWrist2);
+    wrist3Check_->setChecked(saved.wristSweepWrist3);
 }
 
 void Ur3eHemisphereScanSettingsWidget::saveToSettings() const
@@ -163,8 +218,13 @@ void Ur3eHemisphereScanSettingsWidget::saveToSettings() const
     saved.verticalPoints = verticalPointsSpin_->value();
     saved.thetaMinDeg = thetaMinSpin_->value();
     saved.thetaMaxDeg = thetaMaxSpin_->value();
-    saved.rememberLastPlan =
-        rememberLastPlanCheck_ != nullptr && rememberLastPlanCheck_->isChecked();
+    const hf::ur3e::Ur3eWristSweepParams wrist = wristSweepParams();
+    saved.wristSweepEnabled = wrist.enabled;
+    saved.wristSweepStepDeg = wrist.stepDeg;
+    saved.wristSweepStepsEachWay = wrist.stepsEachWay;
+    saved.wristSweepWrist1 = wrist.wrist1;
+    saved.wristSweepWrist2 = wrist.wrist2;
+    saved.wristSweepWrist3 = wrist.wrist3;
     AppSettingsStore::saveUr3eHemisphereScan(saved);
 }
 
@@ -206,9 +266,22 @@ Ur3eHemisphereScanSettingsWidget::params() const {
   return scanParams;
 }
 
+hf::ur3e::Ur3eWristSweepParams
+Ur3eHemisphereScanSettingsWidget::wristSweepParams() const
+{
+  hf::ur3e::Ur3eWristSweepParams wrist;
+  wrist.enabled = wristSweepEnabledCheck_ != nullptr && wristSweepEnabledCheck_->isChecked();
+  wrist.stepDeg = wristSweepStepSpin_ != nullptr ? wristSweepStepSpin_->value() : 3.0;
+  wrist.stepsEachWay = wristSweepStepsSpin_ != nullptr ? wristSweepStepsSpin_->value() : 4;
+  wrist.wrist1 = wrist1Check_ != nullptr && wrist1Check_->isChecked();
+  wrist.wrist2 = wrist2Check_ != nullptr && wrist2Check_->isChecked();
+  wrist.wrist3 = wrist3Check_ != nullptr && wrist3Check_->isChecked();
+  return wrist;
+}
+
 bool Ur3eHemisphereScanSettingsWidget::rememberLastPlan() const
 {
-    return rememberLastPlanCheck_ != nullptr && rememberLastPlanCheck_->isChecked();
+    return hf::hardwareConfig().ur3e.rememberLastScanPlan;
 }
 
 void Ur3eHemisphereScanSettingsWidget::setPlanEnabled(const bool enabled) {
@@ -232,6 +305,72 @@ void Ur3eHemisphereScanSettingsWidget::setParamsEnabled(const bool enabled) {
     thetaMinSpin_->setEnabled(enabled);
   if (thetaMaxSpin_ != nullptr)
     thetaMaxSpin_->setEnabled(enabled);
+  if (wristSweepEnabledCheck_ != nullptr)
+    wristSweepEnabledCheck_->setEnabled(enabled);
+  syncWristSweepEnabledState();
+  if (!enabled) {
+    if (wristSweepStepSpin_ != nullptr)
+      wristSweepStepSpin_->setEnabled(false);
+    if (wristSweepStepsSpin_ != nullptr)
+      wristSweepStepsSpin_->setEnabled(false);
+    if (wrist1Check_ != nullptr)
+      wrist1Check_->setEnabled(false);
+    if (wrist2Check_ != nullptr)
+      wrist2Check_->setEnabled(false);
+    if (wrist3Check_ != nullptr)
+      wrist3Check_->setEnabled(false);
+  }
+}
+
+void Ur3eHemisphereScanSettingsWidget::setPlannedReachablePins(const int reachablePins)
+{
+  plannedReachablePins_ = reachablePins;
+  updateImageEstimateLabel();
+}
+
+void Ur3eHemisphereScanSettingsWidget::syncWristSweepEnabledState()
+{
+  const bool on = wristSweepEnabledCheck_ != nullptr && wristSweepEnabledCheck_->isChecked()
+                  && wristSweepEnabledCheck_->isEnabled();
+  if (wristSweepStepSpin_ != nullptr)
+    wristSweepStepSpin_->setEnabled(on);
+  if (wristSweepStepsSpin_ != nullptr)
+    wristSweepStepsSpin_->setEnabled(on);
+  if (wrist1Check_ != nullptr)
+    wrist1Check_->setEnabled(on);
+  if (wrist2Check_ != nullptr)
+    wrist2Check_->setEnabled(on);
+  if (wrist3Check_ != nullptr)
+    wrist3Check_->setEnabled(on);
+}
+
+void Ur3eHemisphereScanSettingsWidget::updateImageEstimateLabel()
+{
+  if (imageEstimateLabel_ == nullptr)
+    return;
+
+  const hf::ur3e::Ur3eWristSweepParams wrist = wristSweepParams();
+  const int perPin = wrist.imagesPerPin();
+  const int gridPins = hf::ur3e::hemisphereScanPointCount(params());
+  const int pinCount = plannedReachablePins_ >= 0 ? plannedReachablePins_ : gridPins;
+  const qint64 total = static_cast<qint64>(perPin) * static_cast<qint64>(pinCount);
+
+  const QString pinSource = plannedReachablePins_ >= 0
+                                ? QStringLiteral("%1 reachable").arg(pinCount)
+                                : QStringLiteral("%1 grid").arg(pinCount);
+
+  imageEstimateLabel_->setText(
+      QStringLiteral("%1 / pin × %2 ≈ %3 total")
+          .arg(perPin)
+          .arg(pinSource)
+          .arg(total));
+}
+
+void Ur3eHemisphereScanSettingsWidget::onWristSweepChanged()
+{
+  syncWristSweepEnabledState();
+  saveToSettings();
+  updateImageEstimateLabel();
 }
 
 void Ur3eHemisphereScanSettingsWidget::onParameterChanged() {
@@ -243,7 +382,9 @@ void Ur3eHemisphereScanSettingsWidget::onParameterChanged() {
   if (sphereRadiusSpin_->value() > maxRadiusMm)
     sphereRadiusSpin_->setValue(maxRadiusMm);
 
+  plannedReachablePins_ = -1;
   saveToSettings();
+  updateImageEstimateLabel();
   emit paramsChanged();
 }
 } // namespace ui
