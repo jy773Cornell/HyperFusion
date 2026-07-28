@@ -227,6 +227,13 @@ class SidecarHttpHandler(BaseHTTPRequestHandler):
                 self._send_json(500, {"ok": False, "error": str(exc)})
             return
 
+        if path == "/rewind_wrist3_cable":
+            try:
+                self._send_json(200, bridge.maybe_rewind_wrist3_cable(body))
+            except Exception as exc:
+                self._send_json(500, {"ok": False, "error": str(exc)})
+            return
+
         self._send_json(404, {"ok": False, "error": "not found"})
 
     def _shutdown_server(self) -> None:

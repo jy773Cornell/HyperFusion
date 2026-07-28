@@ -103,6 +103,17 @@ def unwrap_joint_continuous(reference: float, raw: float) -> float:
     return float(reference) + joint_delta_rad(reference, raw)
 
 
+def wrist3_completed_turns(live_rad: float, ref_rad: float) -> int:
+    """Full ±2π turns of wrist_3 from *ref* to *live* (truncated toward zero)."""
+    return int((float(live_rad) - float(ref_rad)) / TWO_PI)
+
+
+def wrist3_unwind_target_rad(live_rad: float, ref_rad: float) -> tuple[float, int]:
+    """Return (target_wrist_3, completed_turns). Target removes full turns toward *ref*."""
+    turns = wrist3_completed_turns(live_rad, ref_rad)
+    return float(live_rad) - float(turns) * TWO_PI, turns
+
+
 def stabilize_joint_reading(last: float, new: float) -> float:
     """Hold the previous branch when hardware noise is sub-degree."""
     if abs(joint_delta_rad(last, new)) < JOINT_STREAM_DEADBAND_RAD:

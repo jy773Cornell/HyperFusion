@@ -693,6 +693,49 @@ Ur3eScanWaypointMoveResult ur3eExecuteMoveHome(const QString &serverUrl, QString
     return result;
 }
 
+Ur3eWrist3RewindResult ur3eRewindWrist3Cable(const QString &serverUrl, QString *errorMessage)
+{
+    Ur3eWrist3RewindResult result;
+    QString localError;
+    const QJsonObject response = postJson(
+        serverUrl,
+        QStringLiteral("/rewind_wrist3_cable"),
+        buildScanMotionRequestBody(),
+        180000,
+        &localError);
+    if (response.isEmpty())
+    {
+        result.errorMessage = localError;
+        if (errorMessage != nullptr)
+            *errorMessage = localError;
+        return result;
+    }
+
+    if (response.value(QStringLiteral("stopped")).toBool(false))
+    {
+        result.stopped = true;
+        result.errorMessage = response.value(QStringLiteral("error")).toString(
+            QStringLiteral("Motion stopped."));
+        if (errorMessage != nullptr)
+            *errorMessage = result.errorMessage;
+        return result;
+    }
+
+    result.rewound = response.value(QStringLiteral("rewound")).toBool(false);
+    result.turns = response.value(QStringLiteral("turns")).toInt(0);
+
+    if (!response.value(QStringLiteral("ok")).toBool(false))
+    {
+        result.errorMessage = response.value(QStringLiteral("error")).toString(localError);
+        if (errorMessage != nullptr)
+            *errorMessage = result.errorMessage;
+        return result;
+    }
+
+    result.ok = true;
+    return result;
+}
+
 bool ur3eStopMotion(const QString &serverUrl, QString *errorMessage)
 {
     const QJsonObject response =

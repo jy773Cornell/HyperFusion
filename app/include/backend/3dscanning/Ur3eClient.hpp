@@ -95,6 +95,15 @@ struct Ur3eScanWaypointMoveResult
     bool alreadyAtHome = false;
 };
 
+struct Ur3eWrist3RewindResult
+{
+    bool ok = false;
+    QString errorMessage;
+    bool stopped = false;
+    bool rewound = false;
+    int turns = 0;
+};
+
 bool ur3eServerHealthCheck(const QString &serverUrl,
                            Ur3eHealthStatus *status = nullptr,
                            QString *errorMessage = nullptr);
@@ -145,6 +154,10 @@ Ur3eScanWaypointMoveResult ur3eExecuteScanWaypoint(const QString &serverUrl,
 
 Ur3eScanWaypointMoveResult ur3eExecuteMoveHome(const QString &serverUrl,
                                                QString *errorMessage = nullptr);
+
+/// After a pin: if wrist_3 completed ≥1 turn from home, retreat home and unwind.
+Ur3eWrist3RewindResult ur3eRewindWrist3Cable(const QString &serverUrl,
+                                            QString *errorMessage = nullptr);
 
 bool ur3eStopMotion(const QString &serverUrl, QString *errorMessage = nullptr);
 

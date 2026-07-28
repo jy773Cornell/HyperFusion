@@ -1825,6 +1825,50 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                     "scanExecuteMarkCompleted",
                     Qt::QueuedConnection,
                     Q_ARG(int, pointIndex));
+
+                // Leave MoveIt pin paths alone; if wrist_3 completed ≥1 turn from home,
+                // retreat home and unwind before the next pin (or final home).
+                if (sessionActive() && !stopRequested_.load(std::memory_order_acquire))
+                {
+                    const Ur3eWrist3RewindResult rewind = ur3eRewindWrist3Cable(serverUrl);
+                    if (rewind.stopped)
+                    {
+                        if (stopRequested_.load(std::memory_order_acquire))
+                            ur3eStopMotion(serverUrl);
+                        goto scan_execute_loop_done;
+                    }
+                    if (rewind.ok && rewind.rewound)
+                    {
+                        const int turns = rewind.turns;
+                        QMetaObject::invokeMethod(
+                            this,
+                            [this, turns]() {
+                                host_->appendLog(
+                                    QStringLiteral(
+                                        "UR3e scan: wrist_3 cable rewind (%1 turn(s)) "
+                                        "at home before next move.")
+                                        .arg(turns > 0 ? QStringLiteral("+%1").arg(turns)
+                                                       : QString::number(turns)));
+                                syncHomeJointTargetSliders();
+                            },
+                            Qt::QueuedConnection);
+                    }
+                    else if (!rewind.ok)
+                    {
+                        const QString reason = rewind.errorMessage.isEmpty()
+                                                  ? QStringLiteral("rewind failed")
+                                                  : rewind.errorMessage;
+                        QMetaObject::invokeMethod(
+                            this,
+                            [this, reason]() {
+                                host_->appendLog(
+                                    QStringLiteral(
+                                        "UR3e scan warning: wrist_3 cable rewind — %1")
+                                        .arg(reason));
+                            },
+                            Qt::QueuedConnection);
+                    }
+                }
             }
 
         scan_execute_loop_done:

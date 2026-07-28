@@ -1638,6 +1638,24 @@ class Ur3eRosBridge:
       stop_event=self._stop_requested,
     )
 
+  def maybe_rewind_wrist3_cable(self, body: Dict[str, Any]) -> Dict[str, Any]:
+    """Between scan pins: unwind wrist_3 at home if ≥1 full turn from home ref."""
+    from hyperfusion_ur3e.moveit.scan_planner import get_scan_planner, workspace_from_dict
+
+    if not self._status.connected:
+      raise RuntimeError("Robot not connected.")
+    self._stop_requested.clear()
+
+    workspace_cfg = body.get("workspace")
+    workspace = workspace_from_dict(workspace_cfg) if isinstance(workspace_cfg, dict) else None
+
+    planner = get_scan_planner(ros_distro=self.ros_distro, ur_type=self.ur_type)
+    planner.apply_home_joints_from_body(body)
+    return planner.maybe_rewind_wrist3_cable(
+      workspace=workspace,
+      stop_event=self._stop_requested,
+    )
+
   def execute_hemisphere_scan(self, body: Dict[str, Any]) -> Dict[str, Any]:
     """Collision-aware MoveIt execution for planned joint waypoints."""
     from hyperfusion_ur3e.moveit.scan_planner import get_scan_planner, workspace_from_dict

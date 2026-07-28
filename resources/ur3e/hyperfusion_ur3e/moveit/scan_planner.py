@@ -29,6 +29,7 @@ from hyperfusion_ur3e.joint_angles import (
     pick_joint_branch,
     unwrap_joint_continuous,
     wrap_to_pi,
+    wrist3_unwind_target_rad,
 )
 
 GROUP_NAME = "ur_manipulator"
@@ -3904,6 +3905,186 @@ class MoveItScanPlanner:
             "error": f"could not move to home ({error_name})",
         }
 
+    def _execute_hardware_joint_spin(
+        self,
+        start_joints: Sequence[float],
+        goal_joints: Sequence[float],
+        *,
+        stop_event: Optional[threading.Event] = None,
+        label: str = "hardware joint move",
+    ) -> tuple[bool, str]:
+        """Send a 2-point joint trajectory on the RTDE branch (bypass MoveIt planning)."""
+        from builtin_interfaces.msg import Duration
+        from moveit_msgs.msg import MoveItErrorCodes, RobotTrajectory
+        from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
+
+        if len(start_joints) != 6 or len(goal_joints) != 6:
+            return False, "expected 6 joints"
+
+        start = [float(v) for v in start_joints]
+        goal = [float(v) for v in goal_joints]
+        if self._joint_distance_rad(start, goal) <= HOME_JOINT_TOLERANCE_RAD:
+            return True, ""
+
+        trajectory = RobotTrajectory()
+        joint_traj = JointTrajectory()
+        joint_traj.joint_names = list(CANONICAL_JOINT_NAMES)
+
+        p0 = JointTrajectoryPoint()
+        p0.positions = list(start)
+        p0.time_from_start = Duration(sec=0, nanosec=0)
+
+        p1 = JointTrajectoryPoint()
+        p1.positions = list(goal)
+        # Duration filled by stretch helper from joint deltas + speed cap.
+        p1.time_from_start = Duration(sec=1, nanosec=0)
+        joint_traj.points = [p0, p1]
+        trajectory.joint_trajectory = joint_traj
+
+        self._strip_trajectory_derivatives(trajectory)
+        self._stretch_trajectory_segment_times(trajectory)
+
+        sys.stderr.write(
+            f"UR3e MoveIt: {label} "
+            f"[{self._joints_deg_csv(start)}] → [{self._joints_deg_csv(goal)}].\n"
+        )
+        sys.stderr.flush()
+
+        try:
+            code = self._execute_trajectory_via_controller(
+                trajectory, stop_event=stop_event
+            )
+        except RuntimeError as exc:
+            if stop_event is not None and stop_event.is_set():
+                return False, "stopped"
+            return False, str(exc)
+
+        if int(code) == int(MoveItErrorCodes.SUCCESS):
+            return True, ""
+        return False, self._moveit_error_name(int(code))
+
+    def maybe_rewind_wrist3_cable(
+        self,
+        workspace: Optional[WorkspaceBox] = None,
+        stop_event: Optional[threading.Event] = None,
+    ) -> Dict[str, Any]:
+        """If wrist_3 completed ≥1 full turn from home, retreat home then unwind.
+
+        MoveIt pin trajectories are left unchanged. Detection uses live RTDE wrist_3
+        vs configured home. Unwind is a hardware-controller wrist_3 spin (MoveIt only
+        sees ±π and cannot plan multi-turn cable recovery).
+        """
+        if stop_event is not None and stop_event.is_set():
+            return {"ok": False, "stopped": True, "rewound": False, "error": "stopped"}
+
+        hardware = self._ensure_hardware_joint_positions(timeout_s=1.5)
+        if hardware is None or len(hardware) != 6:
+            return {
+                "ok": True,
+                "rewound": False,
+                "skipped": True,
+                "reason": "no hardware joint feedback",
+            }
+
+        home = self.home_joints_rad()
+        live_w3 = float(hardware[5])
+        ref_w3 = float(home[5])
+        _target, turns = wrist3_unwind_target_rad(live_w3, ref_w3)
+        if abs(turns) < 1:
+            return {
+                "ok": True,
+                "rewound": False,
+                "turns": 0,
+                "live_wrist3_deg": math.degrees(live_w3),
+                "ref_wrist3_deg": math.degrees(ref_w3),
+            }
+
+        detected_turns = int(turns)
+        sys.stderr.write(
+            "UR3e MoveIt: wrist_3 cable rewind — "
+            f"{detected_turns:+d} turn(s) "
+            f"(live {math.degrees(live_w3):.0f}°, "
+            f"home ref {math.degrees(ref_w3):.0f}°). "
+            "Retreating home, then hardware wrist_3 unwind.\n"
+        )
+        sys.stderr.flush()
+
+        home_result = self.execute_move_home(workspace=workspace, stop_event=stop_event)
+        if home_result.get("stopped"):
+            return {"ok": False, "stopped": True, "rewound": False, "error": "stopped"}
+        if not home_result.get("ok"):
+            return {
+                "ok": False,
+                "rewound": False,
+                "turns": detected_turns,
+                "error": (
+                    "could not retreat home before wrist_3 unwind "
+                    f"({home_result.get('error') or 'home failed'})"
+                ),
+            }
+
+        if stop_event is not None and stop_event.is_set():
+            return {"ok": False, "stopped": True, "rewound": False, "error": "stopped"}
+
+        # Re-measure: home motion may have already removed some turns via unwrap.
+        hardware = self._ensure_hardware_joint_positions(timeout_s=1.5)
+        if hardware is None or len(hardware) != 6:
+            return {
+                "ok": False,
+                "rewound": False,
+                "turns": detected_turns,
+                "error": "lost hardware joints after home retreat",
+            }
+
+        target_w3, turns_left = wrist3_unwind_target_rad(float(hardware[5]), ref_w3)
+        if abs(turns_left) < 1:
+            sys.stderr.write(
+                "UR3e MoveIt: wrist_3 cable already near home branch after retreat — "
+                "no extra unwind needed.\n"
+            )
+            sys.stderr.flush()
+            return {
+                "ok": True,
+                "rewound": True,
+                "turns": detected_turns,
+                "live_wrist3_deg": math.degrees(live_w3),
+                "ref_wrist3_deg": math.degrees(ref_w3),
+            }
+
+        unwind_goal = list(hardware)
+        unwind_goal[5] = target_w3
+        ok_spin, spin_err = self._execute_hardware_joint_spin(
+            hardware,
+            unwind_goal,
+            stop_event=stop_event,
+            label=f"wrist_3 cable unwind ({turns_left:+d} turn(s))",
+        )
+        if not ok_spin:
+            if spin_err == "stopped" or (
+                stop_event is not None and stop_event.is_set()
+            ):
+                return {"ok": False, "stopped": True, "rewound": False, "error": "stopped"}
+            return {
+                "ok": False,
+                "rewound": False,
+                "turns": detected_turns,
+                "error": f"wrist_3 unwind failed ({spin_err})",
+            }
+
+        sys.stderr.write(
+            "UR3e MoveIt: wrist_3 cable rewind complete "
+            f"({detected_turns:+d} turn(s) cleared).\n"
+        )
+        sys.stderr.flush()
+        return {
+            "ok": True,
+            "rewound": True,
+            "turns": detected_turns,
+            "live_wrist3_deg": math.degrees(live_w3),
+            "target_wrist3_deg": math.degrees(target_w3),
+            "ref_wrist3_deg": math.degrees(ref_w3),
+        }
+
     def execute_waypoints(
         self,
         waypoints: Sequence[Sequence[float]],
@@ -3934,6 +4115,20 @@ class MoveItScanPlanner:
                     return {"ok": True, "stopped": True, "executed": executed}
                 raise RuntimeError(result.get("error") or "MoveIt execution failed.")
             executed += 1
+
+            # Between pins: unwind wrist_3 at home if a full turn has accumulated.
+            if index + 1 < len(waypoints):
+                rewind = self.maybe_rewind_wrist3_cable(
+                    workspace=ws, stop_event=stop_event
+                )
+                if rewind.get("stopped"):
+                    return {"ok": True, "stopped": True, "executed": executed}
+                if not rewind.get("ok"):
+                    sys.stderr.write(
+                        "UR3e MoveIt: wrist_3 rewind warning — "
+                        f"{rewind.get('error') or 'failed'}; continuing scan.\n"
+                    )
+                    sys.stderr.flush()
 
         return {"ok": True, "executed": executed}
 
