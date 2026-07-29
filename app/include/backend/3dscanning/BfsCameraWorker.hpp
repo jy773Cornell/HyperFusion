@@ -65,6 +65,7 @@ private:
     std::atomic<bool> running_{false};
     std::atomic<bool> streamEnabled_{false};
     std::atomic<bool> streamInPoll_{false};
+    std::atomic<int> consecutiveTimeouts_{0};
     std::atomic<BfsCameraState> state_{BfsCameraState::Disconnected};
 
     std::thread controlThread_;

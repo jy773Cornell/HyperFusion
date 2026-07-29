@@ -957,6 +957,16 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 else
                     config.ur3e.connectTimeoutMs = timeoutMs;
             }
+            else if (key == QStringLiteral("plan_timeout_ms"))
+            {
+                bool ok = false;
+                const int timeoutMs = value.toInt(&ok);
+                if (!ok || timeoutMs < 60000)
+                    warnings.push_back(
+                        QStringLiteral("Invalid ur3e plan_timeout_ms (min 60000): %1").arg(value));
+                else
+                    config.ur3e.planTimeoutMs = timeoutMs;
+            }
             else if (key == QStringLiteral("ros_distro"))
                 config.ur3e.rosDistro = value;
             else if (key == QStringLiteral("ur_type"))
@@ -1101,6 +1111,14 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 else
                     warnings.push_back(QStringLiteral("Invalid ur3e mount_offset_y_mm: %1").arg(value));
             }
+            else if (key == QStringLiteral("scan_center_offset_x_mm")
+                     || key == QStringLiteral("scan_center_offset_y_mm"))
+            {
+                warnings.push_back(
+                    QStringLiteral("Deprecated %1 — scan center is the tray projection of "
+                                   "optical TCP at home_joints_deg")
+                        .arg(key));
+            }
             else if (key == QStringLiteral("home_joints_deg"))
             {
                 const QStringList parts = value.split(QLatin1Char(','), Qt::SkipEmptyParts);
@@ -1206,6 +1224,66 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 config.ur3e.rememberLastScanPlan =
                     lower.isEmpty() || lower == QStringLiteral("true") || lower == QStringLiteral("1")
                     || lower == QStringLiteral("yes");
+            }
+            else if (key == QStringLiteral("bfs_camera_fx"))
+            {
+                if (!hasNumber || numericValue < 0.0)
+                    warnings.push_back(QStringLiteral("Invalid ur3e bfs_camera_fx: %1").arg(value));
+                else
+                    config.ur3e.bfsCameraFx = numericValue;
+            }
+            else if (key == QStringLiteral("bfs_camera_fy"))
+            {
+                if (!hasNumber || numericValue < 0.0)
+                    warnings.push_back(QStringLiteral("Invalid ur3e bfs_camera_fy: %1").arg(value));
+                else
+                    config.ur3e.bfsCameraFy = numericValue;
+            }
+            else if (key == QStringLiteral("bfs_camera_cx"))
+            {
+                if (!hasNumber || numericValue < 0.0)
+                    warnings.push_back(QStringLiteral("Invalid ur3e bfs_camera_cx: %1").arg(value));
+                else
+                    config.ur3e.bfsCameraCx = numericValue;
+            }
+            else if (key == QStringLiteral("bfs_camera_cy"))
+            {
+                if (!hasNumber || numericValue < 0.0)
+                    warnings.push_back(QStringLiteral("Invalid ur3e bfs_camera_cy: %1").arg(value));
+                else
+                    config.ur3e.bfsCameraCy = numericValue;
+            }
+            else if (key == QStringLiteral("bfs_camera_distortion"))
+            {
+                const QString trimmed = value.trimmed();
+                if (trimmed.isEmpty())
+                {
+                    config.ur3e.bfsCameraDistortion.clear();
+                }
+                else
+                {
+                    const QStringList parts = trimmed.split(QLatin1Char(','), Qt::SkipEmptyParts);
+                    std::vector<double> parsed;
+                    parsed.reserve(static_cast<std::size_t>(parts.size()));
+                    bool allOk = true;
+                    for (const QString &part : parts)
+                    {
+                        bool ok = false;
+                        const double coeff = part.trimmed().toDouble(&ok);
+                        if (!ok)
+                        {
+                            allOk = false;
+                            break;
+                        }
+                        parsed.push_back(coeff);
+                    }
+                    if (allOk)
+                        config.ur3e.bfsCameraDistortion = std::move(parsed);
+                    else
+                        warnings.push_back(QStringLiteral(
+                            "Invalid ur3e bfs_camera_distortion (comma-separated floats): %1")
+                                               .arg(value));
+                }
             }
             else
                 warnings.push_back(QStringLiteral("Unknown key in [3d scanning]: %1").arg(key));
@@ -1358,6 +1436,8 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "rtde_port = 30004\n"
         << "prestart_driver = false\n"
         << "connect_timeout_ms = 120000\n"
+        << "# MoveIt hemisphere Plan HTTP timeout (ms). Large grids often need 30–60 min.\n"
+        << "plan_timeout_ms = 3600000\n"
         << "ros_distro = jazzy\n"
         << "ur_type = ur3e\n"
         << "use_mock_hardware = true\n"
@@ -1386,13 +1466,21 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "mount_yaw_deg = 0\n"
         << "mount_offset_x_mm = 0\n"
         << "mount_offset_y_mm = 0\n"
+        << "# Scan center = tray projection of optical TCP at home_joints_deg.\n"
         << "# Scan home pose (degrees): pan, lift, elbow, wrist_1, wrist_2, wrist_3.\n"
         << "home_joints_deg = 0,-150,120,0,90,0\n"
         << "scan_capture_stabilize_ms = 500\n"
         << "scan_camera_up_world_z = true\n"
         << "# Half-angle cone (deg) around each pin look-at for Plan reachability (0=off).\n"
         << "pin_pose_tolerance_deg = 5\n"
-        << "remember_last_scan_plan = true\n";
+        << "remember_last_scan_plan = true\n"
+        << "# BFS OpenCV intrinsics for multiview JSON (pixels). fx/fy=0 until calibrated.\n"
+        << "bfs_camera_fx = 0\n"
+        << "bfs_camera_fy = 0\n"
+        << "bfs_camera_cx = 0\n"
+        << "bfs_camera_cy = 0\n"
+        << "# Optional Brown-Conrady: k1,k2,p1,p2,k3\n"
+        << "bfs_camera_distortion =\n";
 
     if (!file.commit())
     {

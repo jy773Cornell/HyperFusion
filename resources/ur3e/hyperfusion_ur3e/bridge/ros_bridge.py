@@ -250,6 +250,62 @@ class Ur3eRosBridge:
           f"UR driver is not ready for {mode}: {expected} is not active.\n{detail}"
       )
 
+  def _wait_for_external_control(
+      self,
+      *,
+      timeout_s: float = 120.0,
+      stop_event: Optional[threading.Event] = None,
+      reason: str = "",
+  ) -> bool:
+    """Block until External Control reverse ports are up (or timeout / stop).
+
+    Used when the teach pendant protective-stops (e.g. near joint limit) and
+    drops the URCap connection mid-scan — user presses Play again to continue.
+    """
+    if self.use_mock_hardware:
+      return True
+    if self._external_control_reverse_connected():
+      return True
+
+    detail = f" ({reason})" if reason else ""
+    sys.stderr.write(
+        "UR3e bridge: External Control not connected"
+        f"{detail} — on the teach pendant clear any protective stop, "
+        f"open External Control (remote PC {self.reverse_ip}:50002), press Play.\n"
+    )
+    sys.stderr.flush()
+    deadline = time.time() + max(5.0, float(timeout_s))
+    while time.time() < deadline:
+      if stop_event is not None and stop_event.is_set():
+        return False
+      if self._external_control_reverse_connected():
+        sys.stderr.write("UR3e bridge: External Control restored — continuing.\n")
+        sys.stderr.flush()
+        return True
+      time.sleep(0.5)
+    sys.stderr.write(
+        f"UR3e bridge: timed out waiting for External Control Play ({timeout_s:.0f}s).\n"
+    )
+    sys.stderr.flush()
+    return False
+
+  def _external_control_error(self, message: str) -> bool:
+    text = (message or "").lower()
+    needles = (
+        "external control",
+        "reverse",
+        "not connected",
+        "controller",
+        "protective",
+        "goal aborted",
+        "goal canceled",
+        "goal cancelled",
+        "trajectory execution",
+        "failed to send goal",
+        "action server",
+    )
+    return any(n in text for n in needles)
+
   def _external_control_reverse_connected(self) -> bool:
     """True when the robot has reverse TCP sessions for External Control.
 
@@ -601,6 +657,7 @@ class Ur3eRosBridge:
         self._shutdown_ros_unlocked()
 
       self._connect_cancel.clear()
+      self._stop_requested.clear()
       self._connect_error = None
       self._connect_result = None
       self._connecting = True
@@ -623,7 +680,10 @@ class Ur3eRosBridge:
   def _connect_worker(self) -> None:
     try:
       self._connect_ros_unlocked()
+      self._raise_if_connect_cancelled()
       with self._lock:
+        if self._connect_cancel.is_set():
+          raise RuntimeError("Connect cancelled.")
         self._status.connected = True
         self._status.driver_state = "idle"
         self._status.fault = ""
@@ -651,17 +711,32 @@ class Ur3eRosBridge:
           self._connect_phase = "cancelled"
           self._connect_message = "Connect cancelled"
           self._connect_error = None
-          self._status.driver_state = "disconnected"
+          self._status.connected = False
+          # Keep prestarted driver warm so Connect re-enables immediately.
+          driver_alive = self._driver is not None and self._driver.running
+          self._status.driver_state = "idle" if driver_alive else "disconnected"
         else:
           self._connect_phase = "failed"
           self._connect_message = str(exc)
           self._connect_error = str(exc)
           self._status.fault = str(exc)
           self._status.driver_state = "fault"
-        self._shutdown_ros_unlocked()
+          self._status.connected = False
+      # Never hold bridge._lock across ROS/driver teardown (blocks /connect/status).
+      try:
+        if cancelled:
+          self._shutdown_bridge_unlocked()
+        else:
+          self._shutdown_ros_unlocked()
+      except Exception as shutdown_exc:
+        sys.stderr.write(f"UR3e bridge: connect teardown after error: {shutdown_exc}\n")
     finally:
       with self._lock:
         self._connecting = False
+        if self._connect_phase == "cancelled":
+          driver_alive = self._driver is not None and self._driver.running
+          if driver_alive:
+            self._status.driver_state = "idle"
 
   def connect_status(self) -> Dict[str, Any]:
     with self._lock:
@@ -1107,23 +1182,90 @@ class Ur3eRosBridge:
       self._status.fault = f"{self._status.fault} TF unavailable ({exc}).".strip()
 
   def disconnect(self) -> Dict[str, Any]:
+    """Tear down bridge + driver and prepare for a clean reconnect.
+
+    Disconnect used to kill the driver while the UI still thought prestart was
+    ready, so the next Connect cold-started under a short timeout and often
+    failed. Also cancel any in-flight connect and clear the stop latch.
+    """
+    self._connect_cancel.set()
+    connect_thread: Optional[threading.Thread] = None
     with self._lock:
       if self._moving:
         self._stop_unlocked()
+      connect_thread = self._connect_thread
+
+    if connect_thread is not None and connect_thread.is_alive():
+      # Do not block forever — driver.start() may ignore cancel until timeout.
+      connect_thread.join(timeout=8.0)
+
+    with self._lock:
       self._shutdown_ros_unlocked()
       self._status.connected = False
       self._status.driver_state = "disconnected"
-      return {"ok": True, **self.status().to_dict()}
+      self._status.fault = ""
+      self._stop_requested.clear()
+      self._connecting = False
+      self._connect_phase = "idle"
+      self._connect_message = ""
+      self._connect_error = None
+      self._connect_result = None
+      # If the connect worker is still alive, keep cancel set so it cannot mark connected.
+      still_connecting = (
+          connect_thread is not None and connect_thread.is_alive()
+      )
+      if still_connecting:
+        self._connect_thread = connect_thread
+      else:
+        self._connect_thread = None
+        self._connect_cancel.clear()
+      status = {"ok": True, **self.status().to_dict()}
+
+    # Free reverse ports / orphan move_group outside the bridge lock.
+    try:
+      Ur3eRosDriverManager.stop_stale_launches()
+    except Exception as exc:
+      sys.stderr.write(f"UR3e bridge: disconnect stale cleanup: {exc}\n")
+
+    try:
+      from hyperfusion_ur3e.moveit.scan_planner import get_scan_planner
+
+      planner = get_scan_planner(ros_distro=self.ros_distro, ur_type=self.ur_type)
+      planner.cancel_active_move()
+    except Exception:
+      pass
+
+    # Re-warm driver so next Connect is not a cold ~2 min start.
+    threading.Thread(
+        target=self._rewarm_driver_after_disconnect,
+        daemon=True,
+        name="ur3e-rewarm-after-disconnect",
+    ).start()
+    return status
+
+  def _rewarm_driver_after_disconnect(self) -> None:
+    try:
+      sys.stderr.write(
+          "UR3e bridge: re-warming ur_robot_driver after disconnect…\n"
+      )
+      self.warm_driver()
+    except Exception as exc:
+      sys.stderr.write(f"UR3e bridge: re-warm after disconnect failed: {exc}\n")
+      sys.stderr.flush()
 
   def get_pose(self) -> Dict[str, Any]:
     with self._lock:
       if not self._status.connected:
         raise RuntimeError("Robot not connected.")
-      try:
-        self._update_pose_from_tf_unlocked(timeout_s=1.0)
-      except Exception as exc:
-        self._status.fault = f"Using fallback pose; TF unavailable ({exc})."
-      return {"ok": True, "pose": self._pose.as_list(), **self.status().to_dict()}
+      # Must refresh from TF — never return the TcpPose() default (z=0.4).
+      self._update_pose_from_tf_unlocked(timeout_s=1.5)
+      return {
+          "ok": True,
+          "pose": self._pose.as_list(),
+          "frame": "base_link",
+          "tip_link": "hyperfusion_tcp",
+          **self.status().to_dict(),
+      }
 
   def get_joints(self) -> Dict[str, Any]:
     with self._lock:
@@ -1376,40 +1518,47 @@ class Ur3eRosBridge:
     self._wait_future(result_future, 30.0)
 
   def _update_pose_from_tf_unlocked(self, timeout_s: float = 5.0) -> None:
+    """Refresh self._pose as base_link-frame optical TCP (UR rotvec).
+
+    Depth / capture JSON use robot base as origin with tip hyperfusion_tcp
+    (tool_tcp_* offset). Independent of tray/world mount height.
+    """
     from rclpy.duration import Duration
     import rclpy
 
     if self._tf_buffer is None or self._node is None:
-      return
+      raise RuntimeError("TF buffer not ready — connect the robot first.")
+
+    from hyperfusion_ur3e.moveit.scan_planner import quaternion_to_rotvec
 
     deadline = time.time() + timeout_s
     transform = None
+    last_error: Optional[Exception] = None
     while time.time() < deadline and transform is None:
       try:
         transform = self._tf_buffer.lookup_transform(
-          "base_link",
-          "tool0",
-          rclpy.time.Time(),
-          timeout=Duration(seconds=0.2),
+            "base_link",
+            "hyperfusion_tcp",
+            rclpy.time.Time(),
+            timeout=Duration(seconds=0.1),
         )
-      except Exception:
+      except Exception as exc:
+        last_error = exc
+        transform = None
         time.sleep(0.05)
 
     if transform is None:
-      raise RuntimeError("Could not read tool0 pose from TF.")
+      raise RuntimeError(
+          "Could not read base_link→hyperfusion_tcp from TF "
+          f"(needed for scan pose / depth JSON): {last_error}"
+      )
 
     t = transform.transform.translation
     q = transform.transform.rotation
-    sinr_cosp = 2.0 * (q.w * q.x + q.y * q.z)
-    cosr_cosp = 1.0 - 2.0 * (q.x * q.x + q.y * q.y)
-    rx = math.atan2(sinr_cosp, cosr_cosp)
-    sinp = 2.0 * (q.w * q.y - q.z * q.x)
-    ry = math.asin(max(-1.0, min(1.0, sinp)))
-    siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
-    cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
-    rz = math.atan2(siny_cosp, cosy_cosp)
-
-    self._pose = TcpPose(t.x, t.y, t.z, rx, ry, rz)
+    rx, ry, rz = quaternion_to_rotvec(
+        float(q.x), float(q.y), float(q.z), float(q.w)
+    )
+    self._pose = TcpPose(float(t.x), float(t.y), float(t.z), rx, ry, rz)
 
   def _finish_pose_fallback(self, delay_s: float) -> None:
     time.sleep(delay_s)
@@ -1442,7 +1591,8 @@ class Ur3eRosBridge:
     if self._status.connected:
       self._status.driver_state = "idle"
 
-  def _shutdown_ros_unlocked(self) -> None:
+  def _shutdown_bridge_unlocked(self) -> None:
+    """Tear down bridge ROS node/spin only; leave ur_robot_driver running (prestart)."""
     self._spin_stop.set()
     if self._spin_thread is not None:
       self._spin_thread.join(timeout=3.0)
@@ -1456,8 +1606,15 @@ class Ur3eRosBridge:
     self._last_joint_state_rx_s = 0.0
 
     if self._node is not None:
-      self._node.destroy_node()
+      try:
+        self._node.destroy_node()
+      except Exception as exc:
+        sys.stderr.write(f"UR3e bridge: destroy_node during bridge shutdown: {exc}\n")
       self._node = None
+
+  def _shutdown_ros_unlocked(self) -> None:
+    """Tear down bridge node and stop ur_robot_driver (full disconnect / failed connect)."""
+    self._shutdown_bridge_unlocked()
     if self._driver is not None:
       self._driver.stop()
       self._driver = None
@@ -1511,6 +1668,10 @@ class Ur3eRosBridge:
           tool_z_x=float(entry.get("tool_z_x", 0.0)),
           tool_z_y=float(entry.get("tool_z_y", 0.0)),
           tool_z_z=float(entry.get("tool_z_z", -1.0)),
+          camera_up_x=float(entry.get("camera_up_x", 0.0)),
+          camera_up_y=float(entry.get("camera_up_y", 0.0)),
+          camera_up_z=float(entry.get("camera_up_z", 1.0)),
+          require_perpendicular=bool(entry.get("require_perpendicular", False)),
         )
       )
 
@@ -1568,7 +1729,7 @@ class Ur3eRosBridge:
     }
 
   def execute_scan_waypoint(self, body: Dict[str, Any]) -> Dict[str, Any]:
-    """Collision-aware MoveIt plan+execute for one scan waypoint."""
+    """Execute one scan pin; wait for External Control if the pendant dropped it."""
     from hyperfusion_ur3e.moveit.scan_planner import get_scan_planner, workspace_from_dict
 
     if not self._status.connected:
@@ -1589,16 +1750,58 @@ class Ur3eRosBridge:
     direct_only = bool(body.get("direct_only", False))
     tolerance_deg = float(body.get("pin_pose_tolerance_deg", 0.0) or 0.0)
     lock_camera_up = bool(body.get("scan_camera_up_world_z", True))
-    return planner.execute_single_waypoint(
-      [float(v) for v in joints],
-      workspace=workspace,
-      tcp_target=tcp_target if isinstance(tcp_target, dict) else None,
-      stop_event=self._stop_requested,
-      require_home_first=require_home_first,
-      direct_only=direct_only,
-      pin_pose_tolerance_deg=tolerance_deg,
-      lock_camera_up=lock_camera_up,
+
+    if not self._wait_for_external_control(
+        timeout_s=120.0,
+        stop_event=self._stop_requested,
+        reason="before pin motion",
+    ):
+      return {
+          "ok": False,
+          "skipped": True,
+          "error": (
+              "External Control not connected — clear pendant protective stop / "
+              "joint-limit popup, press Play on External Control, then retry."
+          ),
+      }
+
+    kwargs = dict(
+        workspace=workspace,
+        tcp_target=tcp_target if isinstance(tcp_target, dict) else None,
+        stop_event=self._stop_requested,
+        require_home_first=require_home_first,
+        direct_only=direct_only,
+        pin_pose_tolerance_deg=tolerance_deg,
+        lock_camera_up=lock_camera_up,
     )
+    result = planner.execute_single_waypoint([float(v) for v in joints], **kwargs)
+    if result.get("ok") or result.get("stopped"):
+      return result
+
+    err = str(result.get("error") or "")
+    if not self._external_control_error(err) and self._external_control_reverse_connected():
+      return result
+
+    # Pendant often kills EC on "close to joint limit" — wait for Play, retry once.
+    if not self._wait_for_external_control(
+        timeout_s=120.0,
+        stop_event=self._stop_requested,
+        reason=f"after pin failure: {err or 'unknown'}",
+    ):
+      out = dict(result)
+      out["error"] = (
+          f"{err}; External Control not restored — clear pendant warning, "
+          "press Play, then continue the scan."
+      ).strip("; ")
+      return out
+
+    sys.stderr.write("UR3e bridge: retrying pin after External Control restore…\n")
+    sys.stderr.flush()
+    retry = planner.execute_single_waypoint([float(v) for v in joints], **kwargs)
+    if retry.get("ok"):
+      retry = dict(retry)
+      retry["reconnected_external_control"] = True
+    return retry
 
   def preview_manual_target(self, body: Dict[str, Any]) -> Dict[str, Any]:
     """Push UI joint target + workspace boundary into MoveIt/RViz."""

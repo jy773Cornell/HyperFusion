@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cstddef>
+#include <vector>
 
 namespace hf
 {
@@ -118,6 +119,8 @@ struct HardwareConfig
         bool prestartDriver = false;
         /// HTTP /connect client timeout (ms). Driver startup can take ~2 min per attempt.
         int connectTimeoutMs = 120000;
+        /// HTTP /plan_hemisphere_scan client timeout (ms). Large grids + path checks can take >15 min.
+        int planTimeoutMs = 3600000;
         QString rosDistro = QStringLiteral("jazzy");
         QString urType = QStringLiteral("ur3e");
         bool useMockHardware = true;
@@ -133,7 +136,7 @@ struct HardwareConfig
         double toolTcpXMm = 0.0;
         double toolTcpYMm = -56.035;
         double toolTcpZMm = 20.0;
-        /// Robot base mount height in world frame (mm). Z=0 is tray floor; mount plane is at this height.
+        /// Robot base mount height in world frame (mm). Z=0 is tray surface; mount plane is at this height.
         double ceilingMountHeightMm = 650.0;
         /// MoveIt workspace collision cube (mm). Extends downward from the mount plane (relative to robot).
         bool workspaceBoundaryEnabled = true;
@@ -167,6 +170,14 @@ struct HardwareConfig
         double pinPoseToleranceDeg = 5.0;
         /// Persist last MoveIt plan beside app.exe; reload on start if cfg fingerprint matches.
         bool rememberLastScanPlan = true;
+        /// BFS OpenCV intrinsics for multiview pose JSON / transforms.json (pixels).
+        /// fx/fy ≤ 0 → width/height (+ optional cx/cy defaults) only until calibrated.
+        double bfsCameraFx = 0.0;
+        double bfsCameraFy = 0.0;
+        double bfsCameraCx = 0.0;
+        double bfsCameraCy = 0.0;
+        /// Brown-Conrady distortion: k1,k2,p1,p2,k3 (optional).
+        std::vector<double> bfsCameraDistortion;
     };
 
     Ur3eConfig ur3e;

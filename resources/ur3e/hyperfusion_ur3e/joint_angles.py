@@ -203,6 +203,44 @@ def coalesce_joints_for_execute(
     return _snap_continuous_joints_to_reference(reference, coalesced)
 
 
+# Soft keep-out near MoveIt hard limits (pendant "close to joint limit" protective stop).
+SOFT_JOINT_LIMIT_MARGIN_RAD = math.radians(10.0)
+
+
+def joint_limit_clearance_rad(
+    joints: Sequence[float],
+    *,
+    limits_table: tuple[Optional[tuple[float, float]], ...] = MOVEIT_JOINT_LIMITS_RAD,
+) -> float:
+    """Minimum distance (rad) from any limited joint to its nearest MoveIt hard limit.
+
+    Continuous joints (limits is None) are ignored. Returns +inf if no limited joints.
+    """
+    if len(joints) != 6:
+        return 0.0
+    clearance = float("inf")
+    for index, value in enumerate(joints):
+        limits = limits_table[index]
+        if limits is None:
+            continue
+        lo, hi = limits
+        v = float(value)
+        clearance = min(clearance, v - lo, hi - v)
+    if clearance == float("inf"):
+        return float("inf")
+    return float(clearance)
+
+
+def near_soft_joint_limit(
+    joints: Sequence[float],
+    *,
+    margin_rad: float = SOFT_JOINT_LIMIT_MARGIN_RAD,
+    limits_table: tuple[Optional[tuple[float, float]], ...] = MOVEIT_JOINT_LIMITS_RAD,
+) -> bool:
+    """True when any limited joint is within *margin_rad* of a MoveIt hard limit."""
+    return joint_limit_clearance_rad(joints, limits_table=limits_table) < float(margin_rad)
+
+
 def moveit_joint_limit_violations(joints: Sequence[float]) -> List[str]:
     """Human-readable MoveIt limit violations (empty when all joints are in range)."""
     if len(joints) != 6:

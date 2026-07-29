@@ -47,9 +47,10 @@ Ur3eScanTcpPose tcpPoseForHemispherePoint(const Ur3eHemisphereScanPoint &gridPoi
         Ur3eMountTransform::sceneAlignFromConfig(hf::hardwareConfig().ur3e);
     mount.transformPoint(tcp.xM, tcp.yM, tcp.zM);
 
-    // Dome axis / floor-circle center (tray origin projected through sphere center).
+    // Dome axis / floor-circle center (home optical-TCP projected onto tray).
     double centerXM = 0.0;
     double centerYM = 0.0;
+    scanCenterOffsetM(centerXM, centerYM);
     double centerZM = kSampleTrayHeightM;
     mount.transformPoint(centerXM, centerYM, centerZM);
 
@@ -57,15 +58,16 @@ Ur3eScanTcpPose tcpPoseForHemispherePoint(const Ur3eHemisphereScanPoint &gridPoi
     tcp.toolZMy = centerYM - tcp.yM;
     tcp.toolZMz = centerZM - tcp.zM;
 
-    double upX = 0.0;
+    // Apex (θ=0, look-down): image-up / TCP upper face → world +X.
+    // Other pins: image-up ≈ tray/world +Z when scan_camera_up_world_z is enabled.
+    const bool isApexPin = std::abs(gridPoint.thetaDeg) <= 1.0e-9;
+    double upX = isApexPin ? 1.0 : 0.0;
     double upY = 0.0;
-    double upZ = 1.0;
+    double upZ = isApexPin ? 0.0 : 1.0;
     mount.transformVector(upX, upY, upZ);
-    orientScanTcpFromToolZ(tcp,
-                           hf::hardwareConfig().ur3e.scanCameraUpWorldZ,
-                           upX,
-                           upY,
-                           upZ);
+    const bool lockUp =
+        isApexPin || hf::hardwareConfig().ur3e.scanCameraUpWorldZ;
+    orientScanTcpFromToolZ(tcp, lockUp, upX, upY, upZ);
 
     return tcp;
 
@@ -147,6 +149,14 @@ Ur3eHemisphereScanPlan evaluateHemisphereScanPlanMoveIt(const QString &serverUrl
 
         pose.insert(QStringLiteral("tool_z_z"), tcp.toolZMz);
 
+        // Camera-up preference for MoveIt cone re-rolls (apex uses world +X).
+        const bool isApexPin =
+            std::abs(gridPoints[index].thetaDeg) <= 1.0e-9;
+        pose.insert(QStringLiteral("camera_up_x"), isApexPin ? 1.0 : 0.0);
+        pose.insert(QStringLiteral("camera_up_y"), 0.0);
+        pose.insert(QStringLiteral("camera_up_z"), isApexPin ? 0.0 : 1.0);
+        pose.insert(QStringLiteral("require_perpendicular"), isApexPin);
+
         poses.append(pose);
 
     }
@@ -180,13 +190,11 @@ Ur3eHemisphereScanPlan evaluateHemisphereScanPlanMoveIt(const QString &serverUrl
 
     appendUr3eScanHomeJointsToJson(body);
 
-
-
-    // Large grids + home→pin path checks can exceed 5 min; keep curl alive until MoveIt finishes.
-    constexpr int kPlanHemisphereScanTimeoutMs = 900000; // 15 min
+    // Large grids + home→pin path checks can exceed 15 min; keep curl alive until MoveIt finishes.
+    const int planTimeoutMs = std::max(60000, hf::hardwareConfig().ur3e.planTimeoutMs);
     const QJsonObject response =
         ur3ePostJsonRequest(serverUrl, QStringLiteral("/plan_hemisphere_scan"), body,
-                            kPlanHemisphereScanTimeoutMs, errorMessage);
+                            planTimeoutMs, errorMessage);
 
     if (response.isEmpty() || !response.value(QStringLiteral("ok")).toBool(false))
 
@@ -371,6 +379,7 @@ void appendRingPhiSweep(std::vector<int> &order,
                         const std::vector<int> &ringIndices,
                         const int entryIndex)
 {
+    // Sweep decreasing φ from entry (clockwise about world +Z when looking down on tray).
     if (ringIndices.empty() || entryIndex < 0)
         return;
 
@@ -387,12 +396,24 @@ void appendRingPhiSweep(std::vector<int> &order,
         std::find(sorted.begin(), sorted.end(), entryIndex);
     if (entryIt == sorted.end())
     {
-        order.insert(order.end(), sorted.begin(), sorted.end());
+        // No entry pin: still walk clockwise (descending φ).
+        order.insert(order.end(), sorted.rbegin(), sorted.rend());
         return;
     }
 
-    order.insert(order.end(), entryIt, sorted.end());
-    order.insert(order.end(), sorted.begin(), entryIt);
+    // entry → lower φ … → first, then wrap from last → … → just above entry.
+    for (auto it = entryIt;; )
+    {
+        order.push_back(*it);
+        if (it == sorted.begin())
+            break;
+        --it;
+    }
+    for (auto it = sorted.end(); it != std::next(entryIt); )
+    {
+        --it;
+        order.push_back(*it);
+    }
 }
 
 void buildTopRingFirstExecutionOrder(std::vector<int> &order,

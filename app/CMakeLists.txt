@@ -173,6 +173,7 @@ qt_add_executable(app WIN32
     src/backend/camera/processing/GsamWslPathUtil.cpp
     src/backend/3dscanning/Ur3eClient.cpp
     src/backend/3dscanning/Ur3eHemisphereScan.cpp
+    src/backend/3dscanning/Ur3eHomeScanCenter.cpp
     src/backend/3dscanning/Ur3eHemisphereScanReachability.cpp
     src/backend/3dscanning/Ur3eWorkspaceBoundary.cpp
     src/backend/3dscanning/Ur3eMountTransform.cpp

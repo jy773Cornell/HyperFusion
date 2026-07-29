@@ -139,6 +139,7 @@ void BfsCameraWorker::requestConnect(const BfsCameraSettings &settings)
         }
 
         notifyState(BfsCameraState::Streaming);
+        consecutiveTimeouts_ = 0;
         streamEnabled_ = true;
     });
 }
@@ -168,6 +169,7 @@ void BfsCameraWorker::requestApplySettings(const BfsCameraSettings &settings)
                 return;
             }
             notifyState(BfsCameraState::Streaming);
+            consecutiveTimeouts_ = 0;
             streamEnabled_ = true;
         }
     });
@@ -270,7 +272,7 @@ void BfsCameraWorker::streamLoop()
         streamInPoll_ = true;
         BfsRgbFrame frame;
         BfsError error;
-        const bool ok = camera_->pollFrame(frame, 500, error);
+        const bool ok = camera_->pollFrame(frame, 2000, error);
         streamInPoll_ = false;
 
         if (!streamEnabled_)
@@ -279,10 +281,26 @@ void BfsCameraWorker::streamLoop()
         if (!ok)
         {
             if (error.code == BfsErrorCode::Timeout)
+            {
+                const int n = ++consecutiveTimeouts_;
+                // ~5s at 500 ms poll — surface once so blank preview is diagnosable.
+                if (n == 5)
+                {
+                    notifyError(
+                        {BfsErrorCode::Timeout,
+                         "BFS streaming but no frames (GetNextImage timeout). "
+                         "Try Frame Rate ≤5 Hz, raise Device Link Throughput Limit, "
+                         "TriggerMode=Off, close SpinView, check GigE NIC.",
+                         false});
+                }
                 continue;
+            }
+            consecutiveTimeouts_ = 0;
             notifyError(error);
             continue;
         }
+
+        consecutiveTimeouts_ = 0;
 
         FrameCallback cb;
         {

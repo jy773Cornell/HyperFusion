@@ -14,7 +14,7 @@ namespace hf::ur3e
 namespace
 {
 
-constexpr int kCacheSchemaVersion = 1;
+constexpr int kCacheSchemaVersion = 3; // tray surface at Z=0 (no 20 mm thickness)
 
 QJsonObject matPoseToJson(const Ur3eScanTcpPose &tcp)
 {
@@ -59,6 +59,9 @@ QString ur3eScanPlanFingerprint(const hf::HardwareConfig::Ur3eConfig &ur3e,
     fp.insert(QStringLiteral("vertical_points"), params.verticalPoints);
     fp.insert(QStringLiteral("theta_min_deg"), params.thetaMinDeg);
     fp.insert(QStringLiteral("theta_max_deg"), params.thetaMaxDeg);
+    fp.insert(QStringLiteral("always_apex_pin"), true);
+    fp.insert(QStringLiteral("apex_camera_up_world_x"), true);
+    fp.insert(QStringLiteral("apex_no_cone"), true);
 
     // Robot geometry from hyperfusion.cfg [3d scanning]
     fp.insert(QStringLiteral("ur_type"), ur3e.urType);
@@ -81,6 +84,7 @@ QString ur3eScanPlanFingerprint(const hf::HardwareConfig::Ur3eConfig &ur3e,
     fp.insert(QStringLiteral("mount_yaw_deg"), ur3e.mountYawDeg);
     fp.insert(QStringLiteral("mount_offset_x_mm"), ur3e.mountOffsetXMm);
     fp.insert(QStringLiteral("mount_offset_y_mm"), ur3e.mountOffsetYMm);
+    fp.insert(QStringLiteral("scan_center_from_home_tcp"), true);
 
     QJsonArray home;
     for (const double deg : ur3e.homeJointsDeg)

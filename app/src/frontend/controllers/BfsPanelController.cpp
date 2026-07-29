@@ -20,6 +20,7 @@
 #include <QPixmap>
 #include <QPushButton>
 #include <QSizePolicy>
+#include <QTimer>
 
 #include <string>
 
@@ -48,6 +49,10 @@ BfsPanelController::BfsPanelController(MainWindow *host, QObject *parent)
     : QObject(parent)
     , host_(host)
 {
+    settingsApplyTimer_ = new QTimer(this);
+    settingsApplyTimer_->setSingleShot(true);
+    settingsApplyTimer_->setInterval(400);
+    connect(settingsApplyTimer_, &QTimer::timeout, this, &BfsPanelController::applySettingsFromUi);
 }
 
 BfsPanelController::~BfsPanelController()
@@ -264,6 +269,17 @@ void BfsPanelController::onCaptureClicked()
 }
 
 void BfsPanelController::onSettingsEdited()
+{
+    if (worker_ == nullptr || settingsApplyTimer_ == nullptr)
+        return;
+    if (worker_->currentState() != BfsCameraState::Streaming
+        && worker_->currentState() != BfsCameraState::Connected)
+        return;
+    // Debounce: UI edits restart acquisition; rapid applies prevent any frames.
+    settingsApplyTimer_->start();
+}
+
+void BfsPanelController::applySettingsFromUi()
 {
     if (worker_ == nullptr)
         return;

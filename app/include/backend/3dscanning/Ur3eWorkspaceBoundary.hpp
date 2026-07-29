@@ -10,10 +10,10 @@
 namespace hf::ur3e
 {
 
-/// Sample tray footprint (metres), centred at origin on the workspace floor.
+/// Sample tray footprint (metres). Workspace Z=0 is the tray surface (no thickness).
 constexpr double kSampleTrayLengthM = 0.54;
 constexpr double kSampleTrayWidthM = 0.49;
-constexpr double kSampleTrayHeightM = 0.02;
+constexpr double kSampleTrayHeightM = 0.0;
 
 struct Ur3eWorkspaceBoundary
 {
@@ -24,7 +24,7 @@ struct Ur3eWorkspaceBoundary
     double widthMm = 1200.0;
     /// Vertical extent (mm) below the mount plane (MoveIt collision box depth to floor).
     double heightMm = 1000.0;
-    /// Robot mount plane height in world frame (mm). Tray/sample stage stays at Z=0.
+    /// Robot mount plane height in world frame (mm). Tray surface is Z=0.
     double mountHeightMm = 1000.0;
     /// Collision box top inset below mount plane (mm). Base stays at mountHeightMm.
     double ceilingClearanceMm = 40.0;
@@ -45,7 +45,8 @@ struct Ur3eWorkspaceBoundary
 [[nodiscard]] Ur3eWorkspaceBoundary workspaceBoundaryFromConfig(
     const HardwareConfig::Ur3eConfig &config);
 
-/// Largest hemisphere radius (m) that fits inside the workspace cube and sample tray.
+/// Largest hemisphere radius (m) that fits inside the workspace collision box
+/// around the home-TCP tray projection (scan center).
 [[nodiscard]] double maxHemisphereRadiusM(const Ur3eWorkspaceBoundary &boundary);
 void clampHemisphereScanParamsToBoundary(Ur3eHemisphereScanParams &params,
                                          const Ur3eWorkspaceBoundary &boundary);

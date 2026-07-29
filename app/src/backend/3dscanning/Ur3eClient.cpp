@@ -13,6 +13,8 @@
 #include <QTemporaryFile>
 #include <QUrl>
 
+#include <cmath>
+
 namespace hf::ur3e
 {
 namespace
@@ -664,12 +666,23 @@ Ur3eScanWaypointMoveResult ur3eExecuteScanWaypoint(const QString &serverUrl,
         tcp.insert(QStringLiteral("tool_z_x"), tcpPose->toolZMx);
         tcp.insert(QStringLiteral("tool_z_y"), tcpPose->toolZMy);
         tcp.insert(QStringLiteral("tool_z_z"), tcpPose->toolZMz);
+        // Apex look-down: keep exact perpendicular (no pin-pose cone) + camera-up +X.
+        const bool apexLookDown = tcpPose->toolZMz < -0.98
+                                  && std::abs(tcpPose->toolZMx) < 0.15
+                                  && std::abs(tcpPose->toolZMy) < 0.15;
+        if (apexLookDown)
+        {
+            tcp.insert(QStringLiteral("require_perpendicular"), true);
+            tcp.insert(QStringLiteral("camera_up_x"), 1.0);
+            tcp.insert(QStringLiteral("camera_up_y"), 0.0);
+            tcp.insert(QStringLiteral("camera_up_z"), 0.0);
+        }
         body.insert(QStringLiteral("tcp"), tcp);
     }
 
     QString localError;
     const QJsonObject response = postJson(
-        serverUrl, QStringLiteral("/execute_scan_waypoint"), body, 180000, &localError);
+        serverUrl, QStringLiteral("/execute_scan_waypoint"), body, 360000, &localError);
     Ur3eScanWaypointMoveResult result = parseScanMotionResponse(response, localError);
     if (errorMessage != nullptr && !result.ok && !result.stopped && !result.skipped)
         *errorMessage = result.errorMessage;

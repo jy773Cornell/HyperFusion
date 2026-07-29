@@ -32,7 +32,7 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
   sphereRadiusSpin_ = new QDoubleSpinBox(group);
   sphereRadiusSpin_->setRange(10.0, 5000.0);
   sphereRadiusSpin_->setDecimals(0);
-  sphereRadiusSpin_->setSingleStep(50.0);
+  sphereRadiusSpin_->setSingleStep(10.0);
   sphereRadiusSpin_->setSuffix(QStringLiteral(" mm"));
   sphereRadiusSpin_->setValue(500.0);
   form->addRow(QStringLiteral("Sphere radius"), sphereRadiusSpin_);
@@ -63,7 +63,8 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
   thetaMinSpin_->setSuffix(QStringLiteral(" °"));
   thetaMinSpin_->setValue(30.0);
   thetaMinSpin_->setToolTip(QStringLiteral(
-      "Polar angle from dome apex (0°) toward the tray rim (90°)."));
+      "Start of the latitude band from the apex toward the tray rim (90°). "
+      "A perpendicular top-of-dome pin (θ=0°) is always planned in addition."));
 
   thetaMaxSpin_ = new QDoubleSpinBox(group);
   thetaMaxSpin_->setRange(0.0, 90.0);
@@ -240,14 +241,19 @@ void Ur3eHemisphereScanSettingsWidget::applyBoundaryLimits(
     sphereRadiusSpin_->setValue(maxRadiusMm);
 
   if (boundaryLimits_.enabled) {
+    double centerXM = 0.0;
+    double centerYM = 0.0;
+    hf::ur3e::scanCenterOffsetM(centerXM, centerYM);
     sphereRadiusSpin_->setToolTip(
         QStringLiteral(
-            "Max %1 mm for workspace %2×%3×%4 mm (depth below mount at %5 mm) in hyperfusion.cfg.")
+            "Max %1 mm so the dome fits in workspace %2×%3 mm with scan center "
+            "(%4, %5) mm from home-TCP tray projection. Raise workspace_*_mm "
+            "or adjust home_joints_deg for a larger radius.")
             .arg(maxRadiusMm, 0, 'f', 0)
             .arg(static_cast<int>(boundaryLimits_.lengthMm))
             .arg(static_cast<int>(boundaryLimits_.widthMm))
-            .arg(static_cast<int>(boundaryLimits_.heightMm))
-            .arg(static_cast<int>(boundaryLimits_.mountHeightMm)));
+            .arg(centerXM * 1000.0, 0, 'f', 0)
+            .arg(centerYM * 1000.0, 0, 'f', 0));
   } else {
     sphereRadiusSpin_->setToolTip(
         QStringLiteral("Workspace limits disabled in hyperfusion.cfg."));

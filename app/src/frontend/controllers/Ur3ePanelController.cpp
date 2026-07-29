@@ -83,6 +83,11 @@ Ur3eScanTcpPose scanTcpFromLivePose(const Ur3eTcpPose &live, const Ur3eScanTcpPo
     tcp.rxRad = live.rx;
     tcp.ryRad = live.ry;
     tcp.rzRad = live.rz;
+    // Optical +Z from live rotvec (OpenCV camera forward) — keep aligned with extrinsics R.
+    const CameraExtrinsicsRt ext = cameraExtrinsicsOpenCvFromTcp(tcp);
+    tcp.toolZMx = ext.R[0][2];
+    tcp.toolZMy = ext.R[1][2];
+    tcp.toolZMz = ext.R[2][2];
     return tcp;
 }
 
@@ -1329,7 +1334,7 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
 
     const QString serverUrl = serverManager_->serverUrl();
     host_->appendLog(
-        QStringLiteral("UR3e scan execute: %1 reachable point(s), top-ring-first sweep "
+        QStringLiteral("UR3e scan execute: %1 reachable point(s), top-ring-first clockwise sweep "
                        "(%2 ms settle%3%4)…")
             .arg(order.size())
             .arg(stabilizeMs)
@@ -1458,10 +1463,30 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                     return true;
                 }
 
+                // Depth JSON: optical TCP in base_link (robot frame + hyperfusion_tcp).
+                // Live TF is authoritative; planned pin stays world-frame audit only.
                 Ur3eScanTcpPose tcpForPose = plannedTcp;
+                QString poseSource = QStringLiteral("planned_world_fallback");
                 const Ur3ePoseResult livePose = ur3eGetTcpPose(serverUrl);
                 if (livePose.ok)
+                {
                     tcpForPose = scanTcpFromLivePose(livePose.pose, plannedTcp);
+                    poseSource = QStringLiteral("live_tf_base_hyperfusion_tcp");
+                }
+                else
+                {
+                    QMetaObject::invokeMethod(
+                        this,
+                        [this, pointIndex]() {
+                            host_->appendLog(
+                                QStringLiteral(
+                                    "UR3e scan capture: live base_link→hyperfusion_tcp "
+                                    "unavailable at pin %1 — writing planned world pose "
+                                    "(pose_source=planned_world_fallback).")
+                                    .arg(pointIndex));
+                        },
+                        Qt::QueuedConnection);
+                }
 
                 const QString stem =
                     QStringLiteral("%1").arg(captured, 5, 10, QLatin1Char('0'));
@@ -1482,7 +1507,23 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                     return false;
                 }
 
+                const auto &ur3eCfg = hf::hardwareConfig().ur3e;
+                CameraIntrinsics intrinsics;
+                intrinsics.fx = ur3eCfg.bfsCameraFx;
+                intrinsics.fy = ur3eCfg.bfsCameraFy;
+                intrinsics.width = frame.width;
+                intrinsics.height = frame.height;
+                intrinsics.cx = ur3eCfg.bfsCameraCx > 0.0
+                                    ? ur3eCfg.bfsCameraCx
+                                    : (frame.width > 0 ? 0.5 * static_cast<double>(frame.width) : 0.0);
+                intrinsics.cy = ur3eCfg.bfsCameraCy > 0.0
+                                    ? ur3eCfg.bfsCameraCy
+                                    : (frame.height > 0 ? 0.5 * static_cast<double>(frame.height)
+                                                        : 0.0);
+                intrinsics.distortion = ur3eCfg.bfsCameraDistortion;
+
                 const Mat4 c2w = cameraToWorldOpenGlFromTcp(tcpForPose);
+                const CameraExtrinsicsRt extrinsics = cameraExtrinsicsOpenCvFromTcp(tcpForPose);
                 const QString imageName = stem + QStringLiteral(".tif");
                 const QString poseJsonPath =
                     QDir(captureDir).filePath(stem + QStringLiteral(".json"));
@@ -1490,9 +1531,11 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                 if (!writeCameraPoseJson(poseJsonPath,
                                          tcpForPose,
                                          c2w,
+                                         extrinsics,
+                                         intrinsics,
                                          imageName,
-                                         frame.width,
-                                         frame.height,
+                                         poseSource,
+                                         &plannedTcp,
                                          &poseError))
                 {
                     ok = false;
@@ -1502,14 +1545,12 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                     return false;
                 }
 
-                if (transformsDoc.width <= 0)
-                {
-                    transformsDoc.width = frame.width;
-                    transformsDoc.height = frame.height;
-                }
+                if (transformsDoc.intrinsics.width <= 0)
+                    transformsDoc.intrinsics = intrinsics;
                 TransformsJsonFrame entry;
                 entry.filePathStem = stem;
                 entry.transformMatrix = c2w;
+                entry.extrinsics = extrinsics;
                 transformsDoc.frames.push_back(std::move(entry));
                 ++captured;
                 return true;
@@ -2523,14 +2564,31 @@ void Ur3ePanelController::onConnectDialogCancelled()
     if (serverManager_ != nullptr)
     {
         const QString serverUrl = serverManager_->serverUrl();
+        host_->appendLog(QStringLiteral("UR3e: cancelling connect\u2026"));
         std::thread([this, serverUrl]() {
             QString error;
             (void)ur3eConnectCancel(serverUrl, &error);
+
+            // Short wait only — cancel keeps the warm driver and must not hang the UI.
+            for (int i = 0; i < 20; ++i)
+            {
+                Ur3eConnectAsyncStatus status;
+                QString statusError;
+                if (ur3eConnectStatus(serverUrl, &status, &statusError) && !status.inProgress
+                    && status.phase != QStringLiteral("cancelling"))
+                {
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+            }
+
             QMetaObject::invokeMethod(
                 this,
                 [this]() {
                     connectInProgress_ = false;
                     setBusy(false);
+                    // Cancel no longer kills the prestarted driver — keep Connect enabled.
+                    host_->appendLog(QStringLiteral("UR3e: connect cancel complete."));
                     updateRobotUi();
                 },
                 Qt::QueuedConnection);
@@ -2569,10 +2627,22 @@ void Ur3ePanelController::onConnectTimedOut()
         std::thread([this, serverUrl, useMockHardware]() {
             QString error;
             (void)ur3eConnectCancel(serverUrl, &error);
+            for (int i = 0; i < 120; ++i)
+            {
+                Ur3eConnectAsyncStatus status;
+                QString statusError;
+                if (ur3eConnectStatus(serverUrl, &status, &statusError) && !status.inProgress
+                    && status.phase != QStringLiteral("cancelling"))
+                {
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            }
             QMetaObject::invokeMethod(
                 this,
                 [this, useMockHardware]() {
                     connectInProgress_ = false;
+                    // Cancel keeps the warm driver; do not force a cold re-prestart.
                     finishConnect(
                         false,
                         useMockHardware
@@ -2910,8 +2980,26 @@ void Ur3ePanelController::finishDisconnect(const bool ok, const QString &detail)
     endHomeMotionUi();
     setBusy(false);
     robotConnected_ = false;
+    stopRequested_.store(false, std::memory_order_release);
     if (host_->ur3ePosePollTimer_ != nullptr)
         host_->ur3ePosePollTimer_->stop();
+
+    // Disconnect stops the UR driver; do not leave Connect enabled as if prestart
+    // were still warm — wait for driver_ready again.
+    const hf::HardwareConfig::Ur3eConfig &cfg = hf::hardwareConfig().ur3e;
+    if (cfg.prestartDriver && isSidecarRunning())
+    {
+        driverPrestartReady_ = false;
+        if (driverReadyPollTimer_ != nullptr)
+            driverReadyPollTimer_->start();
+        pollDriverPrestartReady();
+        if (ok)
+        {
+            host_->appendLog(
+                QStringLiteral(
+                    "UR3e: disconnected — re-warming driver (Connect enables when ready)…"));
+        }
+    }
 
     if (ok)
         host_->appendLog(QStringLiteral("UR3e: %1").arg(detail));

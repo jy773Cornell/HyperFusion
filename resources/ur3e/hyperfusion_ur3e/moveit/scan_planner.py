@@ -18,13 +18,16 @@ from hyperfusion_ur3e import PKG_ROOT
 from hyperfusion_ur3e.joint_angles import (
     CANONICAL_JOINT_NAMES,
     MAX_IK_BRANCH_STEPS,
+    SOFT_JOINT_LIMIT_MARGIN_RAD,
     TWO_PI,
     UR3E_JOINT_LIMITS_RAD,
     coalesce_joints_for_execute,
     coalesce_joints_for_moveit,
     joint_delta_rad,
     joint_distance_rad,
+    joint_limit_clearance_rad,
     moveit_joint_limit_violations,
+    near_soft_joint_limit,
     normalize_joint_solution_to_reference,
     pick_joint_branch,
     unwrap_joint_continuous,
@@ -154,7 +157,7 @@ class WorkspaceBox:
     width_m: float = 0.6
     """Vertical depth below the mount plane (collision box extent to floor)."""
     height_m: float = 0.65
-    """World Z of the robot mount plane (tray floor remains at Z=0)."""
+    """World Z of the robot mount plane (tray surface remains at Z=0)."""
     mount_height_m: float = 0.65
     """Collision box top inset below the mount plane (metres)."""
     ceiling_clearance_m: float = 0.04
@@ -215,6 +218,12 @@ class ScanPoseTarget:
     tool_z_x: float = 0.0
     tool_z_y: float = 0.0
     tool_z_z: float = -1.0
+    # Preferred image-up / TCP upper-face direction in world (OpenCV up = −tool Y).
+    camera_up_x: float = 0.0
+    camera_up_y: float = 0.0
+    camera_up_z: float = 1.0
+    # Apex pin: no look-at cone — exact surface-normal only.
+    require_perpendicular: bool = False
 
 
 @dataclass
@@ -302,8 +311,9 @@ def scan_pose_target_with_tool_z(
 ) -> ScanPoseTarget:
     """Same TCP position, new look-at (+ camera-up roll when enabled)."""
     tzx, tzy, tzz = _normalize(float(tool_z[0]), float(tool_z[1]), float(tool_z[2]))
+    up = (float(target.camera_up_x), float(target.camera_up_y), float(target.camera_up_z))
     rx, ry, rz = tool_z_to_rotation_vector(
-        tzx, tzy, tzz, lock_camera_up=lock_camera_up
+        tzx, tzy, tzz, lock_camera_up=lock_camera_up, up=up
     )
     return ScanPoseTarget(
         index=target.index,
@@ -316,6 +326,10 @@ def scan_pose_target_with_tool_z(
         tool_z_x=tzx,
         tool_z_y=tzy,
         tool_z_z=tzz,
+        camera_up_x=target.camera_up_x,
+        camera_up_y=target.camera_up_y,
+        camera_up_z=target.camera_up_z,
+        require_perpendicular=target.require_perpendicular,
     )
 
 
@@ -382,6 +396,23 @@ def rotvec_to_quaternion(rx: float, ry: float, rz: float) -> tuple[float, float,
     half = angle * 0.5
     s = math.sin(half) / angle
     return rx * s, ry * s, rz * s, math.cos(half)
+
+
+def quaternion_to_rotvec(qx: float, qy: float, qz: float, qw: float) -> tuple[float, float, float]:
+    """Unit quaternion → UR axis-angle rotation vector."""
+    # Ensure qw >= 0 for the short-arc rotvec.
+    if qw < 0.0:
+        qx, qy, qz, qw = -qx, -qy, -qz, -qw
+    norm = math.sqrt(qx * qx + qy * qy + qz * qz + qw * qw)
+    if norm <= 1.0e-12:
+        return 0.0, 0.0, 0.0
+    qx, qy, qz, qw = qx / norm, qy / norm, qz / norm, qw / norm
+    sin_half = math.sqrt(max(0.0, 1.0 - qw * qw))
+    if sin_half <= 1.0e-9:
+        return 0.0, 0.0, 0.0
+    angle = 2.0 * math.atan2(sin_half, qw)
+    axis_scale = angle / sin_half
+    return qx * axis_scale, qy * axis_scale, qz * axis_scale
 
 
 def quat_tool_z_axis(qx: float, qy: float, qz: float, qw: float) -> tuple[float, float, float]:
@@ -2410,6 +2441,12 @@ class MoveItScanPlanner:
             if len(waypoints) < 2:
                 last_error = f"no collision-free path from {label} (empty trajectory)"
                 continue
+            soft_ok, soft_reason = self._trajectory_soft_joint_limits_ok(waypoints)
+            if not soft_ok:
+                last_error = (
+                    f"no collision-free path from {label} ({soft_reason})"
+                )
+                continue
             return True, ""
 
         return False, last_error
@@ -2430,6 +2467,7 @@ class MoveItScanPlanner:
         seed_joints: Sequence[float],
         *,
         frame_id: str = PLANNING_FRAME,
+        avoid_collisions: bool = True,
     ) -> tuple[Optional[List[float]], str]:
         from moveit_msgs.srv import GetPositionIK
         from geometry_msgs.msg import PoseStamped
@@ -2442,7 +2480,7 @@ class MoveItScanPlanner:
         request = GetPositionIK.Request()
         request.ik_request.group_name = GROUP_NAME
         request.ik_request.ik_link_name = EE_LINK
-        request.ik_request.avoid_collisions = True
+        request.ik_request.avoid_collisions = bool(avoid_collisions)
         request.ik_request.pose_stamped = PoseStamped()
         request.ik_request.pose_stamped.header.frame_id = frame_id
         request.ik_request.pose_stamped.header.stamp = self._node.get_clock().now().to_msg()
@@ -2480,6 +2518,7 @@ class MoveItScanPlanner:
         *,
         desired_tool_z: Optional[Sequence[float]] = None,
         max_solutions: int = PLAN_IK_MAX_CANDIDATES,
+        prefer_collision_free_ik: bool = True,
     ) -> tuple[List[List[float]], str]:
         """Collect up to *max_solutions* unique valid IK joint sets (unsorted)."""
         last_error = "no IK solution"
@@ -2490,6 +2529,9 @@ class MoveItScanPlanner:
             and len(desired_tool_z) == 3
             and not self._use_mock_hardware()
         )
+        # Apex / near-home vertical: try collision-aware IK first, then allow
+        # collision-blind IK + explicit validity (avoids false NO_IK near walls).
+        avoid_modes = (True,) if prefer_collision_free_ik else (True, False)
 
         for seed_joints in ik_seeds:
             if len(solutions) >= max_solutions:
@@ -2505,7 +2547,14 @@ class MoveItScanPlanner:
                     last_error = seed_reason
                 continue
 
-            joints, ik_error = self._solve_ik(pose, seed_for_ik)
+            joints = None
+            ik_error = "no IK solution"
+            for avoid in avoid_modes:
+                joints, ik_error = self._solve_ik(
+                    pose, seed_for_ik, avoid_collisions=avoid
+                )
+                if joints is not None:
+                    break
             if joints is None:
                 if ik_error:
                     last_error = ik_error
@@ -2546,6 +2595,7 @@ class MoveItScanPlanner:
         ik_seeds: Sequence[Sequence[float]],
         *,
         desired_tool_z: Optional[Sequence[float]] = None,
+        prefer_collision_free_ik: bool = True,
     ) -> tuple[Optional[List[float]], str, bool]:
         """Try IK seeds in order; return the first collision-free solution."""
         solutions, last_error = self._collect_ik_solutions(
@@ -2554,6 +2604,7 @@ class MoveItScanPlanner:
             ik_seeds,
             desired_tool_z=desired_tool_z,
             max_solutions=1,
+            prefer_collision_free_ik=prefer_collision_free_ik,
         )
         if not solutions:
             return None, last_error, False
@@ -2569,33 +2620,63 @@ class MoveItScanPlanner:
         *,
         last_pin_joints: Optional[Sequence[float]] = None,
         desired_tool_z: Optional[Sequence[float]] = None,
+        prefer_collision_free_ik: bool = True,
     ) -> tuple[Optional[List[float]], str, bool]:
-        """Collect IK candidates; green if home→pin or last-pin→pin path+unwrap OK."""
+        """Collect IK candidates; green if home→pin or last-pin→pin path+unwrap OK.
+
+        Prefers solutions farther from MoveIt hard limits (soft margin) so the
+        teach pendant is less likely to protective-stop External Control mid-move.
+        """
         solutions, ik_error = self._collect_ik_solutions(
             pose,
             home_joints,
             ik_seeds,
             desired_tool_z=desired_tool_z,
             max_solutions=PLAN_IK_MAX_CANDIDATES,
+            prefer_collision_free_ik=prefer_collision_free_ik,
         )
         if not solutions:
             return None, ik_error or "no IK solution", False
 
-        ranked = sorted(
-            solutions,
-            key=lambda joints: self._joint_distance_rad(home_joints, joints),
-        )
+        def rank_key(joints: Sequence[float]) -> tuple[float, float]:
+            # Larger clearance first, then closer to home.
+            clearance = joint_limit_clearance_rad(joints)
+            return (-clearance, self._joint_distance_rad(home_joints, joints))
+
+        ranked = sorted(solutions, key=rank_key)
+        soft_ok = [
+            j for j in ranked if not near_soft_joint_limit(j, margin_rad=SOFT_JOINT_LIMIT_MARGIN_RAD)
+        ]
+        # Soft-clear goals first; near-limit IK only if none of those have a path.
+        ordered: List[Sequence[float]] = list(soft_ok) + [
+            j for j in ranked if j not in soft_ok
+        ]
+        if soft_ok and len(soft_ok) < len(ranked):
+            sys.stderr.write(
+                f"UR3e MoveIt: preferring {len(soft_ok)}/{len(ranked)} IK candidate(s) "
+                f"≥{math.degrees(SOFT_JOINT_LIMIT_MARGIN_RAD):.0f}° from joint limits.\n"
+            )
+
         last_path_error = "no collision-free path from home or previous pin"
-        for rank_index, joints in enumerate(ranked):
+        for rank_index, joints in enumerate(ordered):
             normalized = self._normalize_joint_solution_to_reference(home_joints, joints)
             if not self._ik_joint_angles_are_sane(normalized):
                 last_path_error = "invalid IK joint angles"
                 continue
 
+            goal_near_soft = near_soft_joint_limit(normalized)
             home_ok, home_error = self._start_to_goal_path_ok(
                 home_joints, normalized, move_client, label="home"
             )
             if home_ok:
+                if goal_near_soft:
+                    sys.stderr.write(
+                        "UR3e MoveIt: accepted pin IK within soft joint-limit margin "
+                        f"(clearance {math.degrees(joint_limit_clearance_rad(normalized)):.1f}°) "
+                        "— no ≥"
+                        f"{math.degrees(SOFT_JOINT_LIMIT_MARGIN_RAD):.0f}° alternative "
+                        "with a clear path.\n"
+                    )
                 return normalized, "", rank_index > 0
 
             prev_ok = False
@@ -2609,6 +2690,13 @@ class MoveItScanPlanner:
                     prev_start, goal_from_prev, move_client, label="previous pin"
                 )
                 if prev_ok:
+                    if goal_near_soft:
+                        sys.stderr.write(
+                            "UR3e MoveIt: accepted pin IK within soft joint-limit margin "
+                            f"(clearance {math.degrees(joint_limit_clearance_rad(normalized)):.1f}°) "
+                            "via previous-pin path — no ≥"
+                            f"{math.degrees(SOFT_JOINT_LIMIT_MARGIN_RAD):.0f}° alternative.\n"
+                        )
                     return normalized, "", True
 
             last_path_error = home_error or prev_error or last_path_error
@@ -2695,6 +2783,14 @@ class MoveItScanPlanner:
                 result = ScanPoseResult(index=target.index, reachable=False)
                 last_pick_error = "IK failed"
                 try:
+                    # Apex: same XY + orientation as home TCP (MoveIt FK); only Z changes.
+                    pin_target = target
+                    if target.require_perpendicular:
+                        pin_target = self._apex_target_from_home(target, plan_start_seed)
+                        sys.stderr.write(
+                            "UR3e MoveIt: apex pin — home TCP XY/orientation, "
+                            f"Z={pin_target.z_m:.3f} m (no cone).\n"
+                        )
                     current_pin_seed = (
                         last_reachable_pin
                         if last_reachable_pin is not None
@@ -2704,18 +2800,26 @@ class MoveItScanPlanner:
                         plan_start_seed,
                         current_pin=current_pin_seed,
                     )
+                    # Prefer home seed first for vertical apex approach.
+                    if pin_target.require_perpendicular:
+                        ik_seeds = [list(plan_start_seed)] + [
+                            s for s in ik_seeds if s != list(plan_start_seed)
+                        ]
+                    pin_tol_deg = (
+                        0.0 if pin_target.require_perpendicular else tolerance_deg
+                    )
                     cone_samples = iter_tool_z_cone_directions(
-                        target.tool_z_x,
-                        target.tool_z_y,
-                        target.tool_z_z,
-                        tolerance_deg,
+                        pin_target.tool_z_x,
+                        pin_target.tool_z_y,
+                        pin_target.tool_z_z,
+                        pin_tol_deg,
                     )
                     for tip_deg, tool_z in cone_samples:
                         if tip_deg <= 1.0e-9:
-                            sample_target = target
+                            sample_target = pin_target
                         else:
                             sample_target = scan_pose_target_with_tool_z(
-                                target,
+                                pin_target,
                                 tool_z,
                                 lock_camera_up=lock_camera_up,
                             )
@@ -2732,6 +2836,7 @@ class MoveItScanPlanner:
                                     sample_target.tool_z_y,
                                     sample_target.tool_z_z,
                                 ),
+                                prefer_collision_free_ik=not pin_target.require_perpendicular,
                             )
                         )
                         if joints is None:
@@ -3004,6 +3109,31 @@ class MoveItScanPlanner:
             total += self._joint_distance_rad(start, end)
         return total
 
+    def _trajectory_soft_joint_limits_ok(
+        self,
+        waypoints: Sequence[Sequence[float]],
+    ) -> tuple[bool, str]:
+        """Reject trajectories that enter the soft keep-out near MoveIt hard limits.
+
+        Start sample is skipped so a near-limit live pose can still retreat; goal and
+        interior samples must stay ≥ soft margin from MoveIt hard limits.
+        """
+        if len(waypoints) < 2:
+            return True, ""
+        margin = SOFT_JOINT_LIMIT_MARGIN_RAD
+        for index, joints in enumerate(waypoints):
+            if index == 0 or len(joints) != 6:
+                continue
+            clearance = joint_limit_clearance_rad(joints)
+            if clearance < margin:
+                return (
+                    False,
+                    "trajectory within "
+                    f"{math.degrees(margin):.0f}° of joint limit "
+                    f"(min clearance {math.degrees(clearance):.1f}° at waypoint {index})",
+                )
+        return True, ""
+
     def _trajectory_pinch_ok(
         self,
         waypoints: Sequence[Sequence[float]],
@@ -3178,6 +3308,12 @@ class MoveItScanPlanner:
             tool_z_x=float(tcp_target.get("tool_z_x", 0.0)),
             tool_z_y=float(tcp_target.get("tool_z_y", 0.0)),
             tool_z_z=float(tcp_target.get("tool_z_z", -1.0)),
+            camera_up_x=float(tcp_target.get("camera_up_x", 0.0)),
+            camera_up_y=float(tcp_target.get("camera_up_y", 0.0)),
+            camera_up_z=float(tcp_target.get("camera_up_z", 1.0)),
+            require_perpendicular=bool(
+                tcp_target.get("require_perpendicular", False)
+            ),
         )
         reference = list(current_joints)
         plan_start = (
@@ -3190,6 +3326,8 @@ class MoveItScanPlanner:
             current_pin=reference,
         )
         tolerance_deg = max(0.0, float(pin_pose_tolerance_deg))
+        if base.require_perpendicular:
+            tolerance_deg = 0.0
         last_error = "no IK solution"
         for tip_deg, tool_z in iter_tool_z_cone_directions(
             base.tool_z_x,
@@ -3379,6 +3517,14 @@ class MoveItScanPlanner:
                     sys.stderr.write(
                         "UR3e MoveIt execute: "
                         f"{pipeline_id}/{planner_id} returned empty trajectory.\n"
+                    )
+                    continue
+
+                soft_ok, soft_reason = self._trajectory_soft_joint_limits_ok(waypoints)
+                if not soft_ok:
+                    sys.stderr.write(
+                        "UR3e MoveIt execute: "
+                        f"{pipeline_id}/{planner_id} rejected ({soft_reason}).\n"
                     )
                     continue
 
@@ -3594,9 +3740,10 @@ class MoveItScanPlanner:
             "error": f"no collision-free path even via home ({n2})",
         }
 
-    def _fk_ee_position(
+    def _fk_ee_pose(
         self, joints: Sequence[float]
-    ) -> Optional[tuple[float, float, float]]:
+    ) -> Optional[tuple[float, float, float, float, float, float]]:
+        """Optical TCP pose (x,y,z,rx,ry,rz) from MoveIt FK — same frame as scan IK."""
         from moveit_msgs.msg import RobotState
         from sensor_msgs.msg import JointState
 
@@ -3620,7 +3767,6 @@ class MoveItScanPlanner:
         future = self._fk_client.call_async(request)
         response = self._wait_future(future, 5.0)
         if response is None or response.error_code.val != 1 or not response.pose_stamped:
-            # Older materialized URDFs may lack hyperfusion_tcp; try flange tip.
             if EE_LINK != "tool0":
                 request.fk_link_names = ["tool0"]
                 future = self._fk_client.call_async(request)
@@ -3634,8 +3780,56 @@ class MoveItScanPlanner:
             else:
                 return None
 
-        pos = response.pose_stamped[0].pose.position
-        return (float(pos.x), float(pos.y), float(pos.z))
+        pose = response.pose_stamped[0].pose
+        rx, ry, rz = quaternion_to_rotvec(
+            float(pose.orientation.x),
+            float(pose.orientation.y),
+            float(pose.orientation.z),
+            float(pose.orientation.w),
+        )
+        return (
+            float(pose.position.x),
+            float(pose.position.y),
+            float(pose.position.z),
+            rx,
+            ry,
+            rz,
+        )
+
+    def _fk_ee_position(
+        self, joints: Sequence[float]
+    ) -> Optional[tuple[float, float, float]]:
+        pose = self._fk_ee_pose(joints)
+        if pose is None:
+            return None
+        return pose[0], pose[1], pose[2]
+
+    def _apex_target_from_home(
+        self,
+        target: ScanPoseTarget,
+        home_joints: Sequence[float],
+    ) -> ScanPoseTarget:
+        """Apex = home optical TCP XY/orientation with dome-radius Z (MoveIt FK)."""
+        home_pose = self._fk_ee_pose(home_joints)
+        if home_pose is None:
+            return target
+        hx, hy, _hz, hrx, hry, hrz = home_pose
+        return ScanPoseTarget(
+            index=target.index,
+            x_m=float(hx),
+            y_m=float(hy),
+            z_m=float(target.z_m),
+            rx=float(hrx),
+            ry=float(hry),
+            rz=float(hrz),
+            tool_z_x=0.0,
+            tool_z_y=0.0,
+            tool_z_z=-1.0,
+            camera_up_x=target.camera_up_x,
+            camera_up_y=target.camera_up_y,
+            camera_up_z=target.camera_up_z,
+            require_perpendicular=True,
+        )
 
     def execute_single_waypoint(
         self,

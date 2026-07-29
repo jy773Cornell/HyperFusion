@@ -66,8 +66,8 @@ struct PersistedBfsCameraSettings
     QString cameraId;
     QString acquisitionMode = QStringLiteral("Continuous");
     bool acquisitionFrameRateEnable = true;
-    double acquisitionFrameRateHz = 7.44;
-    int deviceLinkThroughputLimit = 94776971;
+    double acquisitionFrameRateHz = 5.0;
+    int deviceLinkThroughputLimit = 125000000;
     double evCompensation = 0.0;
     QString exposureMode = QStringLiteral("Timed");
     QString exposureAuto = QStringLiteral("Continuous");

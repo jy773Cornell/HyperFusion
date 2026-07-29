@@ -110,6 +110,28 @@ bool setStreamModeTeledyneGigE(CameraPtr cam)
     ptrStreamMode->SetIntValue(entry->GetValue());
     return true;
 }
+
+void configureGigEStreamForGrab(CameraPtr cam)
+{
+    INodeMap &streamMap = cam->GetTLStreamNodeMap();
+    // Drop stale buffers so GetNextImage sees fresh frames after restart.
+    setEnumByName(streamMap, "StreamBufferHandlingMode", "NewestOnly", nullptr);
+
+    CIntegerPtr packetSize = streamMap.GetNode("StreamPacketSize");
+    if (!IsAvailable(packetSize) || !IsWritable(packetSize))
+        packetSize = cam->GetNodeMap().GetNode("GevSCPSPacketSize");
+    if (IsAvailable(packetSize) && IsWritable(packetSize))
+        packetSize->SetValue(packetSize->GetMax());
+}
+
+bool configureFreeRunAcquisition(INodeMap &nodeMap, std::string *detail)
+{
+    // Some firmwares require selector before TriggerMode.
+    setEnumByName(nodeMap, "TriggerSelector", "FrameStart", detail);
+    const bool triggerOff = setEnumByName(nodeMap, "TriggerMode", "Off", detail);
+    const bool continuous = setEnumByName(nodeMap, "AcquisitionMode", "Continuous", detail);
+    return triggerOff && continuous;
+}
 #endif
 } // namespace
 
@@ -256,6 +278,7 @@ bool BfsSpinnakerCamera::connect(const QString &cameraId, BfsError &error)
 
         chosen->Init();
         setStreamModeTeledyneGigE(chosen);
+        configureGigEStreamForGrab(chosen);
         // Bayer color cameras need demosaic before RGB8 convert.
         impl_->processor.SetColorProcessing(SPINNAKER_COLOR_PROCESSING_ALGORITHM_HQ_LINEAR);
         impl_->camera = chosen;
@@ -298,14 +321,23 @@ bool BfsSpinnakerCamera::applySettings(const BfsCameraSettings &settings, BfsErr
         INodeMap &nodeMap = impl_->camera->GetNodeMap();
         std::string detail;
 
-        // Prefer Continuous for live preview.
-        setEnumByName(nodeMap, "AcquisitionMode", "Continuous", &detail);
+        configureFreeRunAcquisition(nodeMap, &detail);
 
         setBoolNode(nodeMap, "AcquisitionFrameRateEnable", settings.acquisitionFrameRateEnable);
         if (settings.acquisitionFrameRateEnable)
             setFloatNode(nodeMap, "AcquisitionFrameRate", settings.acquisitionFrameRateHz);
 
-        setIntNode(nodeMap, "DeviceLinkThroughputLimit", settings.deviceLinkThroughputLimit);
+        // Prefer max link throughput unless UI asks for less (12MP needs headroom).
+        {
+            CIntegerPtr thr = nodeMap.GetNode("DeviceLinkThroughputLimit");
+            if (IsAvailable(thr) && IsWritable(thr))
+            {
+                const int64_t want = static_cast<int64_t>(settings.deviceLinkThroughputLimit);
+                const int64_t lo = thr->GetMin();
+                const int64_t hi = thr->GetMax();
+                thr->SetValue(clampValue(want > 0 ? want : hi, lo, hi));
+            }
+        }
 
         setEnumByName(nodeMap, "ExposureMode", settings.exposureMode.toUtf8().constData(), &detail);
         setEnumByName(nodeMap, "ExposureAuto", settings.exposureAuto.toUtf8().constData(), &detail);
@@ -369,6 +401,11 @@ bool BfsSpinnakerCamera::startStreaming(BfsError &error)
     }
     try
     {
+        INodeMap &nodeMap = impl_->camera->GetNodeMap();
+        std::string detail;
+        configureFreeRunAcquisition(nodeMap, &detail);
+        configureGigEStreamForGrab(impl_->camera);
+
         impl_->camera->BeginAcquisition();
         impl_->state = BfsCameraState::Streaming;
         return true;
@@ -424,6 +461,18 @@ bool BfsSpinnakerCamera::pollFrame(BfsRgbFrame &frame, const std::uint32_t timeo
     }
     catch (const Spinnaker::Exception &ex)
     {
+        // GenTL -1011: wait for NEW_BUFFER_DATA timed out (no frame in timeoutMs).
+        const bool bufferTimeout =
+            ex.GetError() == SPINNAKER_ERR_TIMEOUT
+            || std::string(ex.what()).find("-1011") != std::string::npos
+            || std::string(ex.what()).find("NEW_BUFFER_DATA") != std::string::npos;
+        if (bufferTimeout)
+        {
+            error = {BfsErrorCode::Timeout,
+                     std::string("GetNextImage timed out (no buffer): ") + ex.what(),
+                     false};
+            return false;
+        }
         error = {BfsErrorCode::SdkError, std::string("GetNextImage failed: ") + ex.what(), false};
         return false;
     }

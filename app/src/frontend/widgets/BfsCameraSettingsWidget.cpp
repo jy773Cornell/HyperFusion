@@ -148,14 +148,14 @@ BfsCameraSettingsWidget::BfsCameraSettingsWidget(QWidget *parent)
     acquisitionFrameRateSpin_->setDecimals(2);
     acquisitionFrameRateSpin_->setSingleStep(0.1);
     acquisitionFrameRateSpin_->setSuffix(QStringLiteral(" Hz"));
-    acquisitionFrameRateSpin_->setValue(7.44);
+    acquisitionFrameRateSpin_->setValue(5.0);
     compactSpin(acquisitionFrameRateSpin_);
     acqForm->addRow(QStringLiteral("Acquisition Frame Rate"), acquisitionFrameRateSpin_);
 
     deviceLinkThroughputLimitSpin_ = new QSpinBox(acqBox);
     deviceLinkThroughputLimitSpin_->setRange(1, 125000000);
     deviceLinkThroughputLimitSpin_->setSingleStep(100000);
-    deviceLinkThroughputLimitSpin_->setValue(94776971);
+    deviceLinkThroughputLimitSpin_->setValue(125000000);
     compactSpin(deviceLinkThroughputLimitSpin_);
     acqForm->addRow(QStringLiteral("Device Link Throughput Limit"),
                     deviceLinkThroughputLimitSpin_);

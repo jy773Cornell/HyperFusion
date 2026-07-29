@@ -9,7 +9,7 @@ Endpoints:
   GET  /connect/status -> poll async connect progress
   POST /connect/cancel -> cancel async connect
   POST /disconnect  -> safe disconnect
-  GET  /pose        -> current TCP pose [x,y,z,rx,ry,rz]
+  GET  /pose        -> base_link→hyperfusion_tcp [x,y,z,rx,ry,rz] (UR rotvec)
   GET  /joints      -> current joint names + positions (rad)
   POST /move_l      -> linear move in TCP frame
   POST /move_j      -> joint-space move
@@ -170,7 +170,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--ceiling-mount-height-mm",
         type=float,
         default=float(cfg.get("ceiling_mount_height_m", 0.65)) * 1000.0,
-        help="Ceiling mount height in mm (world Z of robot base; tray stays at Z=0).",
+        help="Ceiling mount height in mm (world Z of robot base; tray surface is Z=0).",
     )
     parser.add_argument(
         "--mount-roll-deg",

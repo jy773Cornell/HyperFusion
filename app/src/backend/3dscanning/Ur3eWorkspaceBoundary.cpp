@@ -61,13 +61,18 @@ double maxHemisphereRadiusM(const Ur3eWorkspaceBoundary &boundary)
     if (!boundary.enabled)
         return 5.0;
 
-    const double boundaryHorizontal =
-        std::min(boundary.halfLengthM(), boundary.halfWidthM());
-    const double trayHorizontal =
-        std::min(kSampleTrayLengthM * 0.5, kSampleTrayWidthM * 0.5);
-    const double horizontalLimit = std::min(boundaryHorizontal, trayHorizontal);
+    double centerXM = 0.0;
+    double centerYM = 0.0;
+    scanCenterOffsetM(centerXM, centerYM);
+
+    // Workspace box stays fixed on the robot/tray origin; scan center may be offset.
+    const double limitX = std::max(0.01, boundary.halfLengthM() - std::abs(centerXM));
+    const double limitY = std::max(0.01, boundary.halfWidthM() - std::abs(centerYM));
+    const double horizontalLimit = std::min(limitX, limitY);
+
+    // Apex height = tray surface (Z=0) + radius; must stay under the collision-box top.
     const double verticalLimit =
-        std::max(0.01, boundary.mountHeightM() - kSampleTrayHeightM);
+        std::max(0.01, boundary.topZM() - kSampleTrayHeightM);
     return std::max(0.01, std::min(horizontalLimit, verticalLimit));
 }
 

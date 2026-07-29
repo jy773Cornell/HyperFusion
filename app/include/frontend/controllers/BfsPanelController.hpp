@@ -5,6 +5,7 @@
 #include "frontend/streaming/StreamFpsTracker.hpp"
 
 #include <QObject>
+#include <QTimer>
 
 #include <memory>
 #include <mutex>
@@ -38,6 +39,7 @@ private:
     void onDisconnectClicked();
     void onCaptureClicked();
     void onSettingsEdited();
+    void applySettingsFromUi();
     void onStateChanged(BfsCameraState state);
     void onError(const BfsError &error);
     void onDevices(const std::vector<BfsDeviceInfo> &devices);
@@ -57,5 +59,6 @@ private:
     mutable std::mutex lastFrameMutex_;
     std::optional<BfsRgbFrame> lastFrame_;
     ui::StreamFpsTracker streamFps_;
+    QTimer *settingsApplyTimer_ = nullptr;
 };
 } // namespace hf::bfs

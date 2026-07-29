@@ -88,7 +88,10 @@ Ur3eHemisphereScanPreviewWidget::Vec3 Ur3eHemisphereScanPreviewWidget::sceneCent
     if (workspaceBoundary_.enabled)
         maxZ = std::max(maxZ, workspaceBoundary_.topZM());
 
-    const Vec3 nominalCenter{0.0, 0.0, (minZ + maxZ) * 0.5};
+    double centerXM = 0.0;
+    double centerYM = 0.0;
+    hf::ur3e::scanCenterOffsetM(centerXM, centerYM);
+    const Vec3 nominalCenter{centerXM, centerYM, (minZ + maxZ) * 0.5};
     return mapScenePoint(nominalCenter);
 }
 
@@ -593,16 +596,19 @@ void Ur3eHemisphereScanPreviewWidget::drawTray(QPainter &painter,
 {
     const double halfLength = kTrayLengthM * 0.5;
     const double halfWidth = kTrayWidthM * 0.5;
+    double centerXM = 0.0;
+    double centerYM = 0.0;
+    hf::ur3e::scanCenterOffsetM(centerXM, centerYM);
 
     const std::array<Vec3, 8> vertices = {
-        Vec3{-halfLength, -halfWidth, 0.0},
-        Vec3{halfLength, -halfWidth, 0.0},
-        Vec3{halfLength, halfWidth, 0.0},
-        Vec3{-halfLength, halfWidth, 0.0},
-        Vec3{-halfLength, -halfWidth, kTrayHeightM},
-        Vec3{halfLength, -halfWidth, kTrayHeightM},
-        Vec3{halfLength, halfWidth, kTrayHeightM},
-        Vec3{-halfLength, halfWidth, kTrayHeightM},
+        Vec3{centerXM - halfLength, centerYM - halfWidth, 0.0},
+        Vec3{centerXM + halfLength, centerYM - halfWidth, 0.0},
+        Vec3{centerXM + halfLength, centerYM + halfWidth, 0.0},
+        Vec3{centerXM - halfLength, centerYM + halfWidth, 0.0},
+        Vec3{centerXM - halfLength, centerYM - halfWidth, kTrayHeightM},
+        Vec3{centerXM + halfLength, centerYM - halfWidth, kTrayHeightM},
+        Vec3{centerXM + halfLength, centerYM + halfWidth, kTrayHeightM},
+        Vec3{centerXM - halfLength, centerYM + halfWidth, kTrayHeightM},
     };
 
     struct Face
@@ -665,6 +671,9 @@ void Ur3eHemisphereScanPreviewWidget::drawHemisphere(QPainter &painter,
     const double radius = params_.sphereRadiusM;
     const int latitudeSteps = 14;
     const int longitudeSteps = 24;
+    double centerXM = 0.0;
+    double centerYM = 0.0;
+    hf::ur3e::scanCenterOffsetM(centerXM, centerYM);
 
     struct Triangle
     {
@@ -690,7 +699,8 @@ void Ur3eHemisphereScanPreviewWidget::drawHemisphere(QPainter &painter,
 
     for (int latIndex = 0; latIndex < latitudeSteps; ++latIndex)
     {
-        const double thetaMinRad = params_.thetaMinDeg * kPi / 180.0;
+        // Always draw from the apex so the fixed top pin sits on the dome mesh.
+        const double thetaMinRad = 0.0;
         const double thetaMaxRad = params_.thetaMaxDeg * kPi / 180.0;
         const double thetaA =
             thetaMinRad
@@ -710,8 +720,8 @@ void Ur3eHemisphereScanPreviewWidget::drawHemisphere(QPainter &painter,
 
             const auto spherePoint = [&](const double theta, const double phi) -> Vec3 {
                 const double sinTheta = std::sin(theta);
-                return Vec3{radius * sinTheta * std::cos(phi),
-                          radius * sinTheta * std::sin(phi),
+                return Vec3{centerXM + radius * sinTheta * std::cos(phi),
+                          centerYM + radius * sinTheta * std::sin(phi),
                           kTrayHeightM + radius * std::cos(theta)};
             };
 
@@ -751,15 +761,15 @@ void Ur3eHemisphereScanPreviewWidget::drawHemisphere(QPainter &painter,
         bool first = true;
         for (int latIndex = 0; latIndex <= latitudeSteps; ++latIndex)
         {
-            const double thetaMinRad = params_.thetaMinDeg * kPi / 180.0;
+            const double thetaMinRad = 0.0;
             const double thetaMaxRad = params_.thetaMaxDeg * kPi / 180.0;
             const double theta =
                 thetaMinRad
                 + (thetaMaxRad - thetaMinRad) * static_cast<double>(latIndex)
                       / static_cast<double>(latitudeSteps);
             const double sinTheta = std::sin(theta);
-            const Vec3 point{radius * sinTheta * std::cos(phi),
-                             radius * sinTheta * std::sin(phi),
+            const Vec3 point{centerXM + radius * sinTheta * std::cos(phi),
+                             centerYM + radius * sinTheta * std::sin(phi),
                              kTrayHeightM + radius * std::cos(theta)};
             const QPointF screen = projectPoint(point, bounds, scale).screen;
             if (first)
@@ -841,7 +851,10 @@ void Ur3eHemisphereScanPreviewWidget::drawScanPin(QPainter &painter,
         lineWidth = 3.0;
     }
 
-    const Vec3 sphereCenter = mapScenePoint(Vec3{0.0, 0.0, kTrayHeightM});
+    double centerXM = 0.0;
+    double centerYM = 0.0;
+    hf::ur3e::scanCenterOffsetM(centerXM, centerYM);
+    const Vec3 sphereCenter = mapScenePoint(Vec3{centerXM, centerYM, kTrayHeightM});
     const Vec3 surface{entry.point.xM, entry.point.yM, entry.point.zM};
     const Vec3 mappedSurface = mapScenePoint(surface);
     double dirX = mappedSurface.x - sphereCenter.x;
