@@ -69,6 +69,8 @@ private:
         hf::ur3e::Ur3eHemisphereScanPoint point;
         bool reachabilityKnown = false;
         bool reachable = false;
+        /// Reachable but only via previous→pin chain (no home→pin at plan).
+        bool homePathOk = true;
         bool executionCompleted = false;
         bool executionFailed = false;
     };

@@ -1690,10 +1690,16 @@ class Ur3eRosBridge:
     payload_results = []
     reachable_count = 0
     unreachable_count = 0
+    home_path_ok_count = 0
+    chain_only_count = 0
     failure_summary: Dict[str, int] = {}
     for item in results:
       if item.reachable:
         reachable_count += 1
+        if item.home_path_ok:
+          home_path_ok_count += 1
+        else:
+          chain_only_count += 1
       else:
         unreachable_count += 1
         reason = item.error or "unknown"
@@ -1704,6 +1710,7 @@ class Ur3eRosBridge:
         "joints": item.joint_positions,
         "error": item.error or None,
         "cone_tip_deg": float(item.cone_tip_deg),
+        "home_path_ok": bool(item.home_path_ok) if item.reachable else False,
       }
       if item.reachable and item.tcp_rx is not None:
         entry["tcp"] = {
@@ -1724,6 +1731,8 @@ class Ur3eRosBridge:
       "results": payload_results,
       "reachable_count": reachable_count,
       "unreachable_count": unreachable_count,
+      "home_path_ok_count": home_path_ok_count,
+      "chain_only_count": chain_only_count,
       "failure_summary": failure_summary,
       "planner": "moveit",
     }

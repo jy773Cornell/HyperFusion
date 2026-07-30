@@ -14,7 +14,7 @@ namespace hf::ur3e
 namespace
 {
 
-constexpr int kCacheSchemaVersion = 3; // tray surface at Z=0 (no 20 mm thickness)
+constexpr int kCacheSchemaVersion = 4; // home_path_ok / chain-only marking
 
 QJsonObject matPoseToJson(const Ur3eScanTcpPose &tcp)
 {
@@ -120,6 +120,8 @@ bool saveUr3eScanPlanCache(const QString &path,
     root.insert(QStringLiteral("fingerprint"), fingerprint);
     root.insert(QStringLiteral("reachable_count"), plan.reachableCount);
     root.insert(QStringLiteral("unreachable_count"), plan.unreachableCount);
+    root.insert(QStringLiteral("home_path_ok_count"), plan.homePathOkCount);
+    root.insert(QStringLiteral("chain_only_count"), plan.chainOnlyCount);
     root.insert(QStringLiteral("moveit_used"), plan.moveItUsed);
     root.insert(QStringLiteral("error_message"), plan.errorMessage);
 
@@ -136,6 +138,7 @@ bool saveUr3eScanPlanCache(const QString &path,
         entry.insert(QStringLiteral("grid"), grid);
         entry.insert(QStringLiteral("tcp"), matPoseToJson(pt.tcp));
         entry.insert(QStringLiteral("reachable"), pt.reachable);
+        entry.insert(QStringLiteral("home_path_ok"), pt.homePathOk);
         entry.insert(QStringLiteral("planning_error"), pt.planningError);
 
         QJsonArray joints;
@@ -213,11 +216,15 @@ bool loadUr3eScanPlanCache(const QString &path,
 
     planOut.reachableCount = root.value(QStringLiteral("reachable_count")).toInt();
     planOut.unreachableCount = root.value(QStringLiteral("unreachable_count")).toInt();
+    planOut.homePathOkCount = root.value(QStringLiteral("home_path_ok_count")).toInt(-1);
+    planOut.chainOnlyCount = root.value(QStringLiteral("chain_only_count")).toInt(-1);
     planOut.moveItUsed = root.value(QStringLiteral("moveit_used")).toBool(true);
     planOut.errorMessage = root.value(QStringLiteral("error_message")).toString();
 
     const QJsonArray points = root.value(QStringLiteral("points")).toArray();
     planOut.points.reserve(points.size());
+    int recomputedHomeOk = 0;
+    int recomputedChain = 0;
     for (const QJsonValue &value : points)
     {
         if (!value.isObject())
@@ -232,13 +239,28 @@ bool loadUr3eScanPlanCache(const QString &path,
         pt.gridPoint.zM = grid.value(QStringLiteral("z_m")).toDouble();
         matPoseFromJson(entry.value(QStringLiteral("tcp")).toObject(), pt.tcp);
         pt.reachable = entry.value(QStringLiteral("reachable")).toBool();
+        // Schema 4+: explicit field. Older caches default true when reachable.
+        pt.homePathOk =
+            pt.reachable && entry.value(QStringLiteral("home_path_ok")).toBool(true);
         pt.planningError = entry.value(QStringLiteral("planning_error")).toString();
         const QJsonArray joints = entry.value(QStringLiteral("joints_rad")).toArray();
         pt.jointPositionsRad.reserve(joints.size());
         for (const QJsonValue &j : joints)
             pt.jointPositionsRad.push_back(j.toDouble());
+        if (pt.reachable)
+        {
+            if (pt.homePathOk)
+                ++recomputedHomeOk;
+            else
+                ++recomputedChain;
+        }
         planOut.points.push_back(std::move(pt));
     }
+
+    if (planOut.homePathOkCount < 0)
+        planOut.homePathOkCount = recomputedHomeOk;
+    if (planOut.chainOnlyCount < 0)
+        planOut.chainOnlyCount = recomputedChain;
 
     if (planOut.points.empty())
     {

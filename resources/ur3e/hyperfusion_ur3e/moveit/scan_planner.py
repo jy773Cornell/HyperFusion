@@ -243,6 +243,8 @@ class ScanPoseResult:
     tool_z_y: Optional[float] = None
     tool_z_z: Optional[float] = None
     cone_tip_deg: float = 0.0
+    # True when a home→pin path+unwrap exists; False = previous→pin chain only.
+    home_path_ok: bool = False
 
 
 def _normalize(x: float, y: float, z: float) -> tuple[float, float, float]:
@@ -2621,11 +2623,19 @@ class MoveItScanPlanner:
         last_pin_joints: Optional[Sequence[float]] = None,
         desired_tool_z: Optional[Sequence[float]] = None,
         prefer_collision_free_ik: bool = True,
-    ) -> tuple[Optional[List[float]], str, bool]:
-        """Collect IK candidates; green if home→pin or last-pin→pin path+unwrap OK.
+        allow_previous_pin_path: bool = True,
+    ) -> tuple[Optional[List[float]], str, bool, bool]:
+        """Collect IK candidates; prefer any home→pin path before previous→pin.
 
-        Prefers solutions farther from MoveIt hard limits (soft margin) so the
-        teach pendant is less likely to protective-stop External Control mid-move.
+        Returns (joints, error, recovered, home_path_ok).
+
+        Two-pass pick (critical for hemisphere rings):
+        1) Scan *all* IK candidates for a home→pin path+unwrap.
+        2) Only if none work, accept previous→pin (plan-order chain).
+
+        Prefers the home elbow sign so mirror azimuths keep the same arm family
+        instead of an elbow-flip branch. Soft joint-limit clearance still ranks
+        within each family.
         """
         solutions, ik_error = self._collect_ik_solutions(
             pose,
@@ -2636,18 +2646,23 @@ class MoveItScanPlanner:
             prefer_collision_free_ik=prefer_collision_free_ik,
         )
         if not solutions:
-            return None, ik_error or "no IK solution", False
+            return None, ik_error or "no IK solution", False, False
 
-        def rank_key(joints: Sequence[float]) -> tuple[float, float]:
-            # Larger clearance first, then closer to home.
+        home_elbow = float(home_joints[2])
+
+        def rank_key(joints: Sequence[float]) -> tuple[float, float, float]:
+            elbow_flip = 1.0 if home_elbow * float(joints[2]) < 0.0 else 0.0
             clearance = joint_limit_clearance_rad(joints)
-            return (-clearance, self._joint_distance_rad(home_joints, joints))
+            return (
+                elbow_flip,
+                -clearance,
+                self._joint_distance_rad(home_joints, joints),
+            )
 
         ranked = sorted(solutions, key=rank_key)
         soft_ok = [
             j for j in ranked if not near_soft_joint_limit(j, margin_rad=SOFT_JOINT_LIMIT_MARGIN_RAD)
         ]
-        # Soft-clear goals first; near-limit IK only if none of those have a path.
         ordered: List[Sequence[float]] = list(soft_ok) + [
             j for j in ranked if j not in soft_ok
         ]
@@ -2657,51 +2672,80 @@ class MoveItScanPlanner:
                 f"≥{math.degrees(SOFT_JOINT_LIMIT_MARGIN_RAD):.0f}° from joint limits.\n"
             )
 
-        last_path_error = "no collision-free path from home or previous pin"
-        for rank_index, joints in enumerate(ordered):
+        def normalize_candidate(
+            joints: Sequence[float],
+        ) -> Optional[List[float]]:
             normalized = self._normalize_joint_solution_to_reference(home_joints, joints)
             if not self._ik_joint_angles_are_sane(normalized):
+                return None
+            return normalized
+
+        last_path_error = "no collision-free path from home or previous pin"
+
+        # Pass 1: home→pin for every candidate (do not early-accept previous→pin).
+        for rank_index, joints in enumerate(ordered):
+            normalized = normalize_candidate(joints)
+            if normalized is None:
                 last_path_error = "invalid IK joint angles"
                 continue
 
-            goal_near_soft = near_soft_joint_limit(normalized)
             home_ok, home_error = self._start_to_goal_path_ok(
                 home_joints, normalized, move_client, label="home"
             )
-            if home_ok:
-                if goal_near_soft:
-                    sys.stderr.write(
-                        "UR3e MoveIt: accepted pin IK within soft joint-limit margin "
-                        f"(clearance {math.degrees(joint_limit_clearance_rad(normalized)):.1f}°) "
-                        "— no ≥"
-                        f"{math.degrees(SOFT_JOINT_LIMIT_MARGIN_RAD):.0f}° alternative "
-                        "with a clear path.\n"
-                    )
-                return normalized, "", rank_index > 0
+            if not home_ok:
+                last_path_error = home_error or last_path_error
+                continue
 
-            prev_ok = False
-            prev_error = ""
-            if last_pin_joints is not None and len(last_pin_joints) == 6:
-                prev_start = self._normalize_joint_solution_to_reference(
-                    last_pin_joints, last_pin_joints
+            if near_soft_joint_limit(normalized):
+                sys.stderr.write(
+                    "UR3e MoveIt: accepted pin IK within soft joint-limit margin "
+                    f"(clearance {math.degrees(joint_limit_clearance_rad(normalized)):.1f}°) "
+                    "— no ≥"
+                    f"{math.degrees(SOFT_JOINT_LIMIT_MARGIN_RAD):.0f}° alternative "
+                    "with a clear home→pin path.\n"
                 )
-                goal_from_prev = coalesce_joints_for_moveit(prev_start, normalized)
-                prev_ok, prev_error = self._start_to_goal_path_ok(
-                    prev_start, goal_from_prev, move_client, label="previous pin"
+            return normalized, "", rank_index > 0, True
+
+        if (
+            not allow_previous_pin_path
+            or last_pin_joints is None
+            or len(last_pin_joints) != 6
+        ):
+            return None, last_path_error, False, False
+
+        # Pass 2: previous→pin only after no home→pin candidate existed.
+        prev_start = self._normalize_joint_solution_to_reference(
+            last_pin_joints, last_pin_joints
+        )
+        for rank_index, joints in enumerate(ordered):
+            normalized = normalize_candidate(joints)
+            if normalized is None:
+                last_path_error = "invalid IK joint angles"
+                continue
+
+            goal_from_prev = coalesce_joints_for_moveit(prev_start, normalized)
+            prev_ok, prev_error = self._start_to_goal_path_ok(
+                prev_start, goal_from_prev, move_client, label="previous pin"
+            )
+            if not prev_ok:
+                last_path_error = prev_error or last_path_error
+                continue
+
+            sys.stderr.write(
+                "UR3e MoveIt: pin IK has previous→pin path only "
+                "(no home→pin among candidates) — execute may need live IK "
+                "recovery if the ring sweep approaches from home.\n"
+            )
+            if near_soft_joint_limit(normalized):
+                sys.stderr.write(
+                    "UR3e MoveIt: accepted pin IK within soft joint-limit margin "
+                    f"(clearance {math.degrees(joint_limit_clearance_rad(normalized)):.1f}°) "
+                    "via previous-pin path — no ≥"
+                    f"{math.degrees(SOFT_JOINT_LIMIT_MARGIN_RAD):.0f}° alternative.\n"
                 )
-                if prev_ok:
-                    if goal_near_soft:
-                        sys.stderr.write(
-                            "UR3e MoveIt: accepted pin IK within soft joint-limit margin "
-                            f"(clearance {math.degrees(joint_limit_clearance_rad(normalized)):.1f}°) "
-                            "via previous-pin path — no ≥"
-                            f"{math.degrees(SOFT_JOINT_LIMIT_MARGIN_RAD):.0f}° alternative.\n"
-                        )
-                    return normalized, "", True
+            return normalized, "", True, False
 
-            last_path_error = home_error or prev_error or last_path_error
-
-        return None, last_path_error, False
+        return None, last_path_error, False, False
     def _state_is_valid(
         self,
         joints: Sequence[float],
@@ -2752,7 +2796,7 @@ class MoveItScanPlanner:
                 )
 
             results: List[ScanPoseResult] = []
-            # Home-centric IK seeds; path OK if home→pin OR last-reachable→pin.
+            # Home-centric IK seeds; prefer home→pin, fall back to last-reachable→pin.
             plan_start_seed = [float(v) for v in self.home_joints_rad()]
             self._last_plan_start_seed = list(plan_start_seed)
             initial_robot = [float(v) for v in initial_seed]
@@ -2760,13 +2804,14 @@ class MoveItScanPlanner:
             multi_seed_recoveries = 0
             path_rejected = 0
             cone_recoveries = 0
+            chain_only_count = 0
             total = len(targets)
             move_client = self._ensure_move_client()
             tolerance_deg = max(0.0, float(pin_pose_tolerance_deg))
             sys.stderr.write(
                 "UR3e MoveIt: planning "
-                f"{total} scan pose(s) (multi-IK closest-to-home; "
-                "home→pin or previous→pin path+unwrap"
+                f"{total} scan pose(s) (multi-IK; home→pin preferred, "
+                "previous→pin fallback"
                 + (
                     f"; pin cone ±{tolerance_deg:.1f}°"
                     if tolerance_deg > 1.0e-6
@@ -2824,7 +2869,7 @@ class MoveItScanPlanner:
                                 lock_camera_up=lock_camera_up,
                             )
                         pose = pose_target_to_ur_pose(sample_target)
-                        joints, pick_error, recovered = (
+                        joints, pick_error, recovered, home_path_ok = (
                             self._pick_ik_closest_to_home_with_path(
                                 pose,
                                 plan_start_seed,
@@ -2855,7 +2900,10 @@ class MoveItScanPlanner:
                             multi_seed_recoveries += 1
                         if tip_deg > 1.0e-9:
                             cone_recoveries += 1
+                        if not home_path_ok:
+                            chain_only_count += 1
                         result.reachable = True
+                        result.home_path_ok = bool(home_path_ok)
                         result.joint_positions = joints
                         result.cone_tip_deg = float(tip_deg)
                         result.tcp_x_m = float(sample_target.x_m)
@@ -2890,9 +2938,19 @@ class MoveItScanPlanner:
                     "UR3e MoveIt: path+unwrap check rejected "
                     f"{path_rejected} pose(s) (had IK, no home→pin or previous→pin path).\n"
                 )
+            if chain_only_count > 0:
+                sys.stderr.write(
+                    "UR3e MoveIt: "
+                    f"{chain_only_count} reachable pose(s) are previous→pin only "
+                    "(no home→pin) — preview marks them chain-only.\n"
+                )
             reachable = sum(1 for item in results if item.reachable)
+            home_ok_count = sum(
+                1 for item in results if item.reachable and item.home_path_ok
+            )
             sys.stderr.write(
-                f"UR3e MoveIt: plan complete — {reachable}/{total} reachable.\n"
+                f"UR3e MoveIt: plan complete — {reachable}/{total} reachable "
+                f"({home_ok_count} home→pin, {chain_only_count} chain-only).\n"
             )
 
             return results
@@ -3714,6 +3772,19 @@ class MoveItScanPlanner:
             lock_camera_up=lock_camera_up,
         )
         if goal2 is None:
+            # Planned joints invalid from home — try live cone IK before giving up.
+            recovered = self._try_home_cone_ik_execute(
+                current2,
+                move_client,
+                tcp_target=tcp_target,
+                motion_scale=motion_scale,
+                stop_event=stop_event,
+                pin_pose_tolerance_deg=pin_pose_tolerance_deg,
+                lock_camera_up=lock_camera_up,
+                skip_joints=None,
+            )
+            if recovered.get("ok"):
+                return recovered
             return {
                 "ok": False,
                 "skipped": True,
@@ -3734,11 +3805,143 @@ class MoveItScanPlanner:
             sys.stderr.write("UR3e MoveIt execute: reached pin via home pose.\n")
             return {"ok": True, "executed": 1, "via_home": True}
 
+        # Cached / resolved joints failed from home — re-IK with cone and retry.
+        recovered = self._try_home_cone_ik_execute(
+            current2,
+            move_client,
+            tcp_target=tcp_target,
+            motion_scale=motion_scale,
+            stop_event=stop_event,
+            pin_pose_tolerance_deg=pin_pose_tolerance_deg,
+            lock_camera_up=lock_camera_up,
+            skip_joints=goal2,
+        )
+        if recovered.get("ok"):
+            return recovered
+
         return {
             "ok": False,
             "skipped": True,
             "error": f"no collision-free path even via home ({n2})",
         }
+
+    def _try_home_cone_ik_execute(
+        self,
+        at_home_joints: Sequence[float],
+        move_client: Any,
+        *,
+        tcp_target: Optional[Dict[str, Any]],
+        motion_scale: Optional[float],
+        stop_event: Optional[threading.Event],
+        pin_pose_tolerance_deg: float,
+        lock_camera_up: bool,
+        skip_joints: Optional[Sequence[float]],
+    ) -> Dict[str, Any]:
+        """After via-home planned joints fail: cone IK from home, home→pin only."""
+        if not isinstance(tcp_target, dict):
+            return {"ok": False}
+
+        sys.stderr.write(
+            "UR3e MoveIt execute: via-home planned joints failed — "
+            "trying live cone IK from home.\n"
+        )
+        home = [float(v) for v in at_home_joints]
+        plan_start = (
+            self._last_plan_start_seed
+            if len(self._last_plan_start_seed) == 6
+            else self.home_joints_rad()
+        )
+        ik_seeds = self._generate_ik_seeds(plan_start, current_pin=home)
+        base = ScanPoseTarget(
+            index=0,
+            x_m=float(tcp_target.get("x_m", tcp_target.get("x", 0.0))),
+            y_m=float(tcp_target.get("y_m", tcp_target.get("y", 0.0))),
+            z_m=float(tcp_target.get("z_m", tcp_target.get("z", 0.0))),
+            rx=float(tcp_target.get("rx", 0.0)),
+            ry=float(tcp_target.get("ry", 0.0)),
+            rz=float(tcp_target.get("rz", 0.0)),
+            tool_z_x=float(tcp_target.get("tool_z_x", 0.0)),
+            tool_z_y=float(tcp_target.get("tool_z_y", 0.0)),
+            tool_z_z=float(tcp_target.get("tool_z_z", -1.0)),
+            camera_up_x=float(tcp_target.get("camera_up_x", 0.0)),
+            camera_up_y=float(tcp_target.get("camera_up_y", 0.0)),
+            camera_up_z=float(tcp_target.get("camera_up_z", 1.0)),
+            require_perpendicular=bool(
+                tcp_target.get("require_perpendicular", False)
+            ),
+        )
+        tolerance_deg = max(0.0, float(pin_pose_tolerance_deg))
+        if base.require_perpendicular:
+            tolerance_deg = 0.0
+
+        skip_key = None
+        if skip_joints is not None and len(skip_joints) == 6:
+            skip_key = tuple(round(float(v), 4) for v in skip_joints)
+
+        tried = 0
+        for tip_deg, tool_z in iter_tool_z_cone_directions(
+            base.tool_z_x,
+            base.tool_z_y,
+            base.tool_z_z,
+            tolerance_deg,
+        ):
+            if tip_deg <= 1.0e-9:
+                sample = base
+            else:
+                sample = scan_pose_target_with_tool_z(
+                    base, tool_z, lock_camera_up=lock_camera_up
+                )
+            pose = pose_target_to_ur_pose(sample)
+            joints, _err, _rec, home_ok = self._pick_ik_closest_to_home_with_path(
+                pose,
+                home,
+                ik_seeds,
+                move_client,
+                last_pin_joints=None,
+                desired_tool_z=(sample.tool_z_x, sample.tool_z_y, sample.tool_z_z),
+                prefer_collision_free_ik=not base.require_perpendicular,
+                allow_previous_pin_path=False,
+            )
+            if joints is None or not home_ok:
+                continue
+            key = tuple(round(float(v), 4) for v in joints)
+            if skip_key is not None and key == skip_key:
+                continue
+
+            tried += 1
+            scale = motion_scale
+            if scale is None:
+                scale = self._motion_scale_for(home, joints)
+            ok, _code, name = self._plan_and_execute_move(
+                joints,
+                move_client,
+                motion_scale=scale,
+                stop_event=stop_event,
+                recovery=True,
+            )
+            if ok:
+                tip_note = (
+                    f" (cone tip={tip_deg:.1f}°)" if tip_deg > 1.0e-9 else ""
+                )
+                sys.stderr.write(
+                    "UR3e MoveIt execute: reached pin via home + live cone IK"
+                    f"{tip_note}.\n"
+                )
+                return {
+                    "ok": True,
+                    "executed": 1,
+                    "via_home": True,
+                    "live_ik_recovery": True,
+                }
+            sys.stderr.write(
+                f"UR3e MoveIt execute: live cone IK candidate failed ({name}).\n"
+            )
+
+        if tried == 0:
+            sys.stderr.write(
+                "UR3e MoveIt execute: no alternate home→pin IK found in cone.\n"
+            )
+        return {"ok": False}
 
     def _fk_ee_pose(
         self, joints: Sequence[float]

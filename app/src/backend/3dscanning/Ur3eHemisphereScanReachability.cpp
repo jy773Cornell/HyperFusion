@@ -250,6 +250,11 @@ Ur3eHemisphereScanPlan evaluateHemisphereScanPlanMoveIt(const QString &serverUrl
 
         planned.reachable = entry.value(QStringLiteral("reachable")).toBool(false);
 
+        // Default true for older sidecar payloads that omit the field.
+        planned.homePathOk =
+            planned.reachable
+            && entry.value(QStringLiteral("home_path_ok")).toBool(true);
+
         planned.planningError = entry.value(QStringLiteral("error")).toString();
 
 
@@ -282,12 +287,17 @@ Ur3eHemisphereScanPlan evaluateHemisphereScanPlanMoveIt(const QString &serverUrl
         }
 
         if (planned.reachable)
-
+        {
             ++plan.reachableCount;
-
+            if (planned.homePathOk)
+                ++plan.homePathOkCount;
+            else
+                ++plan.chainOnlyCount;
+        }
         else
-
+        {
             ++plan.unreachableCount;
+        }
 
     }
 

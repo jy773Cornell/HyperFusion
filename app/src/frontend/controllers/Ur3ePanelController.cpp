@@ -1110,10 +1110,13 @@ void Ur3ePanelController::finishScanPlan(const Ur3eHemisphereScanPlan &plan,
         host_->ur3eHemisphereScanSettings_->setPlannedReachablePins(plan.reachableCount);
 
     host_->appendLog(
-        QStringLiteral("UR3e scan plan (MoveIt): %1 points — %2 reachable, %3 unreachable"
-                       " (pin cone ±%4°).")
+        QStringLiteral("UR3e scan plan (MoveIt): %1 points — %2 reachable "
+                       "(%3 home→pin, %4 chain-only), %5 unreachable"
+                       " (pin cone ±%6°).")
             .arg(plan.points.size())
             .arg(plan.reachableCount)
+            .arg(plan.homePathOkCount)
+            .arg(plan.chainOnlyCount)
             .arg(plan.unreachableCount)
             .arg(hf::hardwareConfig().ur3e.pinPoseToleranceDeg, 0, 'f', 1));
 
@@ -1200,9 +1203,12 @@ void Ur3ePanelController::tryLoadCachedScanPlan()
         host_->ur3eHemisphereScanSettings_->setPlannedReachablePins(plan.reachableCount);
 
     host_->appendLog(
-        QStringLiteral("UR3e scan plan cache: loaded %1 points (%2 reachable, %3 unreachable).")
+        QStringLiteral("UR3e scan plan cache: loaded %1 points (%2 reachable: "
+                       "%3 home→pin, %4 chain-only; %5 unreachable).")
             .arg(plan.points.size())
             .arg(plan.reachableCount)
+            .arg(plan.homePathOkCount)
+            .arg(plan.chainOnlyCount)
             .arg(plan.unreachableCount));
 
     if (host_->ur3eScanRoutePlanWidget_ != nullptr)

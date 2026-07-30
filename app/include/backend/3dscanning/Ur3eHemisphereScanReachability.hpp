@@ -64,6 +64,9 @@ struct Ur3ePlannedScanPoint
 
     bool reachable = false;
 
+    /// True when MoveIt verified a home→pin path; false = previous→pin chain only.
+    bool homePathOk = false;
+
     std::vector<double> jointPositionsRad;
 
     QString planningError;
@@ -81,6 +84,12 @@ struct Ur3eHemisphereScanPlan
     int reachableCount = 0;
 
     int unreachableCount = 0;
+
+    /// Subset of reachableCount with a verified home→pin path.
+    int homePathOkCount = 0;
+
+    /// reachableCount − homePathOkCount (previous→pin only).
+    int chainOnlyCount = 0;
 
     bool moveItUsed = false;
 

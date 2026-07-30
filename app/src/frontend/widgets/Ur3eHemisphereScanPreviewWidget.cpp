@@ -205,6 +205,7 @@ void Ur3eHemisphereScanPreviewWidget::setScanPlan(const hf::ur3e::Ur3eHemisphere
         preview.point = offsetScanPoint(planned.gridPoint);
         preview.reachabilityKnown = true;
         preview.reachable = planned.reachable;
+        preview.homePathOk = planned.homePathOk;
         preview.executionCompleted = false;
         preview.executionFailed = false;
         scanPoints_.push_back(preview);
@@ -435,7 +436,8 @@ void Ur3eHemisphereScanPreviewWidget::drawLegend(QPainter &painter) const
         }
         else
         {
-            entries.push_back({QColor(60, 180, 75), QStringLiteral("Reachable")});
+            entries.push_back({QColor(60, 180, 75), QStringLiteral("Reachable (home)")});
+            entries.push_back({QColor(230, 150, 40), QStringLiteral("Chain-only")});
             entries.push_back({QColor(70, 130, 220), QStringLiteral("Unreachable")});
         }
     }
@@ -831,6 +833,10 @@ void Ur3eHemisphereScanPreviewWidget::drawScanPin(QPainter &painter,
                 pinColor = QColor(60, 180, 75);
             else
                 pinColor = QColor(220, 190, 40);
+        }
+        else if (!entry.homePathOk)
+        {
+            pinColor = QColor(230, 150, 40);
         }
         else
         {
