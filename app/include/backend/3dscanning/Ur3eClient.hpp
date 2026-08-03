@@ -155,7 +155,7 @@ Ur3eScanWaypointMoveResult ur3eExecuteScanWaypoint(const QString &serverUrl,
 Ur3eScanWaypointMoveResult ur3eExecuteMoveHome(const QString &serverUrl,
                                                QString *errorMessage = nullptr);
 
-/// After a pin: if wrist_3 completed ≥1 turn from home, retreat home and unwind.
+/// After a pin: if wrist_3 is ≥½ turn from home, retreat home and unwind.
 Ur3eWrist3RewindResult ur3eRewindWrist3Cable(const QString &serverUrl,
                                             QString *errorMessage = nullptr);
 

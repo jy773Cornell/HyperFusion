@@ -22,7 +22,7 @@ cd resources\ur3e
 .\scripts\setup_wsl_robot_network.ps1 -ShutdownWsl
 ```
 
-This writes `%USERPROFILE%\.wslconfig` (`networkingMode=mirrored`) and adds inbound firewall rules for TCP **50001–50004**. Or use `.\install_env.ps1 -SetupRobotNetwork -ShutdownWsl`.
+This writes `%USERPROFILE%\.wslconfig` (`networkingMode=mirrored`), adds inbound firewall rules for TCP **50001–50004**, and **removes** stale `netsh portproxy` rules to `127.0.0.1` (those break mirrored WSL — the robot must reach `reverse_ip:50002` on the shared LAN IP). Or use `.\install_env.ps1 -SetupRobotNetwork -ShutdownWsl`.
 
 ---
 

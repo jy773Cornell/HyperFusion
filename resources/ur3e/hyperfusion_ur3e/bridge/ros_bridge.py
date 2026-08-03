@@ -436,15 +436,19 @@ class Ur3eRosBridge:
     )
 
   def driver_ready_for_connect(self) -> bool:
-    """True when prestart/warmup finished and the UR driver subprocess is idle."""
+    """True when the UR driver can accept Connect (External Control / mock)."""
     with self._lock:
       if self._connecting:
         return False
-      if self._driver is None or not self._driver.running:
+      driver = self._driver
+      if driver is None or not driver.running:
         return False
       if self._status.fault:
         return False
-      return self._status.driver_state == "idle"
+      if self._status.driver_state != "idle":
+        return False
+    # Outside lock: port/controller probes may take seconds.
+    return driver.connect_ready()
 
   def status(self) -> RobotStatus:
     with self._lock:
@@ -1851,7 +1855,7 @@ class Ur3eRosBridge:
     )
 
   def maybe_rewind_wrist3_cable(self, body: Dict[str, Any]) -> Dict[str, Any]:
-    """Between scan pins: unwind wrist_3 at home if ≥1 full turn from home ref."""
+    """Between scan pins: unwind wrist_3 at home if ≥½ turn from home ref."""
     from hyperfusion_ur3e.moveit.scan_planner import get_scan_planner, workspace_from_dict
 
     if not self._status.connected:

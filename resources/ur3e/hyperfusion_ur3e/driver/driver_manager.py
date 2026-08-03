@@ -22,6 +22,7 @@ HYPERFUSION_RSP_LAUNCH = PKG_ROOT / "launch" / "hyperfusion_ur_rsp.launch.py"
 HYPERFUSION_CONTROL_LAUNCH = PKG_ROOT / "launch" / "hyperfusion_ur_control.launch.py"
 HYPERFUSION_CONTROLLERS_PATH = PKG_ROOT / "config" / "ur_controllers_hyperfusion.yaml"
 KILL_STALE_SCRIPT = PKG_ROOT / "scripts" / "kill_stale_ur_ros.sh"
+DRIVER_STDERR_LOG = PKG_ROOT / "logs" / "ur_robot_driver_stderr.log"
 
 CANONICAL_JOINT_NAMES = [
     "shoulder_pan_joint",
@@ -96,6 +97,10 @@ class Ur3eRosDriverManager:
         self.tool_payload_config = ToolPayloadConfig.from_env()
         self._process: Optional[subprocess.Popen] = None
         self._stamper_process: Optional[subprocess.Popen] = None
+        self._stderr_log_path = DRIVER_STDERR_LOG
+        self._stderr_file = None
+        self._stderr_read_offset = 0
+        self._rtde_conflict_warned = False
 
     @staticmethod
     def write_initial_positions_yaml(joint_deg: List[float]) -> None:
@@ -122,6 +127,17 @@ class Ur3eRosDriverManager:
             return True
         except Exception:
             return False
+
+    def connect_ready(self) -> bool:
+        """True when Connect may proceed (mock controllers up, or :50002 listening)."""
+        if not self.running:
+            return False
+        if self.use_mock_hardware:
+            return self.controller_manager_ready()
+        # Reverse script port is what the pendant External Control dials.
+        if self._script_sender_port_listening():
+            return True
+        return self.controller_manager_ready()
 
     def start(
         self,
@@ -191,10 +207,25 @@ class Ur3eRosDriverManager:
                 f"(External Control URCap), reverse_ip={self.reverse_ip}.\n"
             )
 
+        self._stderr_log_path.parent.mkdir(parents=True, exist_ok=True)
+        # Never use an unread PIPE for launch stderr — the buffer fills and
+        # ros2_control_node can block/abort before reverse ports (50002) open.
+        if self._stderr_file is not None:
+            try:
+                self._stderr_file.close()
+            except Exception:
+                pass
+        self._stderr_file = open(self._stderr_log_path, "w", encoding="utf-8", buffering=1)
+        self._stderr_read_offset = 0
+        sys.stderr.write(
+            f"UR3e driver: logging launch output to {self._stderr_log_path.as_posix()}\n"
+        )
+        sys.stderr.flush()
+
         self._process = subprocess.Popen(
             ["bash", "-lc", launch_cmd],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stdout=self._stderr_file,
+            stderr=subprocess.STDOUT,
             preexec_fn=os.setsid,
         )
 
@@ -291,7 +322,16 @@ class Ur3eRosDriverManager:
         )
         time.sleep(0.5)
         if self._stamper_process.poll() is not None:
-            stderr_tail = self._read_stderr_tail(self._stamper_process)
+            stderr_tail = ""
+            if self._stamper_process.stderr is not None:
+                try:
+                    stderr_tail = (
+                        self._stamper_process.stderr.read()
+                        .decode("utf-8", errors="replace")
+                        .strip()[-2000:]
+                    )
+                except Exception:
+                    stderr_tail = ""
             self._stamper_process = None
             detail = "joint_states_stamper exited during startup."
             if stderr_tail:
@@ -320,6 +360,12 @@ class Ur3eRosDriverManager:
     def stop(self) -> None:
         self.stop_joint_states_stamper()
         if self._process is None:
+            if self._stderr_file is not None:
+                try:
+                    self._stderr_file.close()
+                except Exception:
+                    pass
+                self._stderr_file = None
             return
         if self._process.poll() is None:
             try:
@@ -334,6 +380,12 @@ class Ur3eRosDriverManager:
                 except ProcessLookupError:
                     pass
         self._process = None
+        if self._stderr_file is not None:
+            try:
+                self._stderr_file.close()
+            except Exception:
+                pass
+            self._stderr_file = None
 
     def stop_joint_states_stamper(self) -> None:
         if self._stamper_process is not None and self._stamper_process.poll() is None:
@@ -445,6 +497,24 @@ class Ur3eRosDriverManager:
                 sys.stderr.write(f"UR3e driver: still waiting for controller manager ({elapsed}s)…\n")
             time.sleep(2.0)
 
+        # Hardware: leave the driver running so Connect can enable and the Connect
+        # dialog can wait for External Control Play. Killing the process here made
+        # Connect stay disabled forever after a prestart timeout.
+        if not self.use_mock_hardware and self.running:
+            if self._script_sender_port_listening():
+                sys.stderr.write(
+                    "UR3e driver: port 50002 listening after wait — press Play on "
+                    f"External Control URCap (remote PC {self.reverse_ip}:50002).\n"
+                )
+                return
+            sys.stderr.write(
+                "UR3e driver: controller manager / port 50002 not ready yet — leaving "
+                "driver process running. Connect stays disabled until reverse port "
+                f"50002 is listening (remote PC {self.reverse_ip}). "
+                "If ros2_control_node died, check RTDE/fieldbus conflicts and restart.\n"
+            )
+            return
+
         detail = "Timed out waiting for ros2_control controller manager."
         stderr_tail = self._read_stderr_tail(self._process) if self._process else ""
         if stderr_tail:
@@ -453,22 +523,43 @@ class Ur3eRosDriverManager:
 
     def _raise_if_driver_stderr_fatal(self) -> None:
         """Fail fast when the driver subprocess logs a known fatal ROS error."""
-        if self._process is None or self._process.stderr is None:
+        text = self._read_new_stderr()
+        if not text:
             return
-        try:
-            import select
-
-            ready, _, _ = select.select([self._process.stderr], [], [], 0.0)
-            if not ready:
-                return
-            chunk = self._process.stderr.read(8192)
-        except Exception:
-            return
-        if not chunk:
-            return
-        text = chunk.decode("utf-8", errors="replace")
         if "undefined symbol" in text or "symbol lookup error" in text:
             raise RuntimeError(self._format_ros_abi_error(text))
+        # RTDE conflicts often clear after a dying client releases inputs — do not
+        # abort on the first error; _wait_for_controller_manager times out instead.
+        if "another RTDE client" in text or "speed_slider_mask" in text:
+            if not getattr(self, "_rtde_conflict_warned", False):
+                self._rtde_conflict_warned = True
+                sys.stderr.write(
+                    "UR3e driver: RTDE inputs claimed by another client "
+                    "(fieldbus Ethernet/IP/Modbus/Profinet, second PC, or leftover External Control). "
+                    "Driver will keep retrying; free RTDE on the pendant if this persists.\n"
+                )
+                sys.stderr.flush()
+            return
+        if "process has died" in text and "ros2_control_node" in text:
+            raise RuntimeError(
+                "ur ros2_control_node exited during startup — reverse ports "
+                f"(50002) will not open.\nSee {self._stderr_log_path.as_posix()}\n"
+                f"{text[-1500:]}"
+            )
+
+    def _read_new_stderr(self) -> str:
+        path = self._stderr_log_path
+        if not path.is_file():
+            return ""
+        try:
+            data = path.read_bytes()
+        except Exception:
+            return ""
+        if len(data) <= self._stderr_read_offset:
+            return ""
+        chunk = data[self._stderr_read_offset :]
+        self._stderr_read_offset = len(data)
+        return chunk.decode("utf-8", errors="replace")
 
     @staticmethod
     def _format_ros_abi_error(detail: str) -> str:
@@ -486,7 +577,12 @@ class Ur3eRosDriverManager:
         """True when External Control script port (50002) is accepting connections."""
         try:
             proc = subprocess.run(
-                ["bash", "-lc", "ss -tln | grep -q ':50002 '"],
+                [
+                    "bash",
+                    "-lc",
+                    # Match *:50002 / 0.0.0.0:50002 / [::]:50002 (ss column layouts vary).
+                    "ss -tlnH 2>/dev/null | awk '{print $4}' | grep -Eq '(:|\\.)50002$'",
+                ],
                 capture_output=True,
                 timeout=3.0,
             )
@@ -572,11 +668,12 @@ class Ur3eRosDriverManager:
             return False
         raise RuntimeError(f"UR controller manager is not available.\n{detail[-2000:]}")
 
-    @staticmethod
-    def _read_stderr_tail(process: subprocess.Popen) -> str:
-        if process.stderr is None:
+    def _read_stderr_tail(self, process: Optional[subprocess.Popen] = None) -> str:
+        del process  # kept for call-site compatibility
+        path = self._stderr_log_path
+        if not path.is_file():
             return ""
         try:
-            return process.stderr.read().decode("utf-8", errors="replace").strip()[-2000:]
+            return path.read_text(encoding="utf-8", errors="replace").strip()[-2000:]
         except Exception:
             return ""

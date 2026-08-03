@@ -73,18 +73,20 @@ function Ensure-WslMirroredNetworking {
     return $true
 }
 
-function Ensure-UrPortProxyRules {
+function Remove-UrPortProxyRules {
     param(
         [int[]]$Ports,
-        [string]$ListenAddress = "0.0.0.0",
-        [string]$ConnectAddress = "127.0.0.1"
+        [string]$ListenAddress = "0.0.0.0"
     )
 
+    # Mirrored WSL shares the Windows LAN IP with the ROS driver. Portproxy to
+    # 127.0.0.1 steals :50001-50004 on the LAN NIC and never reaches reverse_ip
+    # listeners — External Control / controller manager hang and Connect stays disabled.
     if (-not (Test-IsAdministrator)) {
         Write-Warning @'
-Port proxy rules were not added (requires Administrator PowerShell).
-Mirrored WSL alone does not expose driver ports on the LAN IP. Re-run as admin, or run:
-  netsh interface portproxy add v4tov4 listenaddress=0.0.0.0 listenport=50002 connectaddress=127.0.0.1 connectport=50002
+Cannot remove stale portproxy rules (needs Administrator PowerShell).
+If Connect never enables with mirrored WSL, run as admin:
+  netsh interface portproxy delete v4tov4 listenaddress=0.0.0.0 listenport=50002
 (repeat for 50001, 50003, 50004)
 '@
         return
@@ -92,16 +94,13 @@ Mirrored WSL alone does not expose driver ports on the LAN IP. Re-run as admin, 
 
     foreach ($port in $Ports) {
         $existing = netsh interface portproxy show v4tov4 | Select-String -Pattern "^\s*$ListenAddress\s+$port\s+"
-        if ($existing) {
-            Write-Host "==> Port proxy already exists: ${ListenAddress}:$port -> ${ConnectAddress}:$port"
+        if (-not $existing) {
             continue
         }
-        netsh interface portproxy add v4tov4 `
+        netsh interface portproxy delete v4tov4 `
             listenaddress=$ListenAddress `
-            listenport=$port `
-            connectaddress=$ConnectAddress `
-            connectport=$port | Out-Null
-        Write-Host "==> Added port proxy: ${ListenAddress}:$port -> ${ConnectAddress}:$port"
+            listenport=$port | Out-Null
+        Write-Host "==> Removed stale port proxy: ${ListenAddress}:$port (not used with mirrored WSL)"
     }
 }
 
@@ -143,7 +142,8 @@ Re-run as admin, or run manually for each port (50001-50004):
 Write-Host "==> HyperFusion UR3e - WSL robot network setup"
 $wslConfigChanged = Ensure-WslMirroredNetworking
 Ensure-UrReverseFirewallRules -Ports $ReversePorts
-Ensure-UrPortProxyRules -Ports $ReversePorts
+# Mirrored mode: driver binds reverse_ip directly — do not add portproxy.
+Remove-UrPortProxyRules -Ports $ReversePorts
 
 if ($ShutdownWsl -and $wslConfigChanged) {
     Write-Host "==> Shutting down WSL (applies .wslconfig changes)..."

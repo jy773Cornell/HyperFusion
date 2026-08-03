@@ -581,12 +581,13 @@ void Ur3ePanelController::updateRobotUi()
 {
     const bool sidecarRunning = isSidecarRunning();
     const bool captureActive = host_->isCaptureSessionActive();
+    const auto &urCfg = hf::hardwareConfig().ur3e;
 
     if (host_->ur3eRobotIpEdit_ != nullptr)
         host_->ur3eRobotIpEdit_->setEnabled(!robotConnected_ && !busy_ && !captureActive);
 
-    const bool driverReady =
-        !hf::hardwareConfig().ur3e.prestartDriver || driverPrestartReady_;
+    // Connect only when the UR driver prestart reports ready (port 50002 / controllers).
+    const bool driverReady = !urCfg.prestartDriver || driverPrestartReady_;
 
     if (host_->ur3eConnectBtn_ != nullptr)
     {
@@ -600,10 +601,12 @@ void Ur3ePanelController::updateRobotUi()
         else if (!driverReady)
         {
             host_->ur3eConnectBtn_->setToolTip(
-                hf::hardwareConfig().ur3e.useMockHardware
+                urCfg.useMockHardware
                     ? QStringLiteral(
                           "Waiting for simulation driver warmup in WSL (up to ~2 min after sidecar starts).")
-                    : QStringLiteral("Waiting for UR robot driver warmup in WSL."));
+                    : QStringLiteral(
+                          "Waiting for UR robot driver (reverse port 50002 / controller manager). "
+                          "Check the Log tab."));
         }
         else
         {
@@ -1590,6 +1593,53 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
             bool returnHomeAfterScan = true;
             const auto scanStartedAt = std::chrono::steady_clock::now();
 
+            // Clear wrist_3 wind at home when |live−home|≥180°. Used before and after pins
+            // so we never approach a pin already multi-turn wound (BFS USB cable risk).
+            const auto runWrist3CableRewind = [&](const QString &whenLabel) -> bool {
+                if (!sessionActive() || stopRequested_.load(std::memory_order_acquire))
+                    return false;
+                const Ur3eWrist3RewindResult rewind = ur3eRewindWrist3Cable(serverUrl);
+                if (rewind.stopped)
+                {
+                    if (stopRequested_.load(std::memory_order_acquire))
+                        ur3eStopMotion(serverUrl);
+                    return false;
+                }
+                if (rewind.ok && rewind.rewound)
+                {
+                    const int turns = rewind.turns;
+                    QMetaObject::invokeMethod(
+                        this,
+                        [this, turns, whenLabel]() {
+                            host_->appendLog(
+                                QStringLiteral(
+                                    "UR3e scan: wrist_3 cable rewind (%1 turn(s), "
+                                    "threshold ±180°) at home %2.")
+                                    .arg(turns > 0 ? QStringLiteral("+%1").arg(turns)
+                                                   : QString::number(turns))
+                                    .arg(whenLabel));
+                            syncHomeJointTargetSliders();
+                        },
+                        Qt::QueuedConnection);
+                }
+                else if (!rewind.ok)
+                {
+                    const QString reason = rewind.errorMessage.isEmpty()
+                                              ? QStringLiteral("rewind failed")
+                                              : rewind.errorMessage;
+                    QMetaObject::invokeMethod(
+                        this,
+                        [this, reason]() {
+                            host_->appendLog(
+                                QStringLiteral(
+                                    "UR3e scan warning: wrist_3 cable rewind — %1")
+                                    .arg(reason));
+                        },
+                        Qt::QueuedConnection);
+                }
+                return true;
+            };
+
             for (int step = 0; step < total; ++step)
             {
                 if (!sessionActive() || stopRequested_.load(std::memory_order_acquire))
@@ -1618,6 +1668,9 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
 
                 if (!sessionActive())
                     break;
+
+                if (!runWrist3CableRewind(QStringLiteral("before pin move")))
+                    goto scan_execute_loop_done;
 
                 QMetaObject::invokeMethod(
                     this,
@@ -1873,49 +1926,9 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                     Qt::QueuedConnection,
                     Q_ARG(int, pointIndex));
 
-                // Leave MoveIt pin paths alone; if wrist_3 completed ≥1 turn from home,
-                // retreat home and unwind before the next pin (or final home).
-                if (sessionActive() && !stopRequested_.load(std::memory_order_acquire))
-                {
-                    const Ur3eWrist3RewindResult rewind = ur3eRewindWrist3Cable(serverUrl);
-                    if (rewind.stopped)
-                    {
-                        if (stopRequested_.load(std::memory_order_acquire))
-                            ur3eStopMotion(serverUrl);
-                        goto scan_execute_loop_done;
-                    }
-                    if (rewind.ok && rewind.rewound)
-                    {
-                        const int turns = rewind.turns;
-                        QMetaObject::invokeMethod(
-                            this,
-                            [this, turns]() {
-                                host_->appendLog(
-                                    QStringLiteral(
-                                        "UR3e scan: wrist_3 cable rewind (%1 turn(s)) "
-                                        "at home before next move.")
-                                        .arg(turns > 0 ? QStringLiteral("+%1").arg(turns)
-                                                       : QString::number(turns)));
-                                syncHomeJointTargetSliders();
-                            },
-                            Qt::QueuedConnection);
-                    }
-                    else if (!rewind.ok)
-                    {
-                        const QString reason = rewind.errorMessage.isEmpty()
-                                                  ? QStringLiteral("rewind failed")
-                                                  : rewind.errorMessage;
-                        QMetaObject::invokeMethod(
-                            this,
-                            [this, reason]() {
-                                host_->appendLog(
-                                    QStringLiteral(
-                                        "UR3e scan warning: wrist_3 cable rewind — %1")
-                                        .arg(reason));
-                            },
-                            Qt::QueuedConnection);
-                    }
-                }
+                // After pin (+ wrist sweep): clear any wind accumulated on this pin.
+                if (!runWrist3CableRewind(QStringLiteral("before next move")))
+                    goto scan_execute_loop_done;
             }
 
         scan_execute_loop_done:
@@ -2279,7 +2292,8 @@ void Ur3ePanelController::onConnectRequested()
                 ? QStringLiteral(
                       "UR3e: simulation driver still warming up — wait for \"simulation driver ready\" in the log.")
                 : QStringLiteral(
-                      "UR3e: robot driver still warming up — wait for \"robot driver ready\" in the log."));
+                      "UR3e: robot driver still warming up — wait for \"robot driver ready\" in the log "
+                      "(reverse port 50002 must be listening)."));
         return;
     }
 

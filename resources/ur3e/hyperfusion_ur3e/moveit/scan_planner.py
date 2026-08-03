@@ -24,6 +24,7 @@ from hyperfusion_ur3e.joint_angles import (
     coalesce_joints_for_execute,
     coalesce_joints_for_moveit,
     joint_delta_rad,
+    joint_distance_continuous_rad,
     joint_distance_rad,
     joint_limit_clearance_rad,
     moveit_joint_limit_violations,
@@ -31,7 +32,10 @@ from hyperfusion_ur3e.joint_angles import (
     normalize_joint_solution_to_reference,
     pick_joint_branch,
     unwrap_joint_continuous,
+    unwrap_joint_toward_preferred,
     wrap_to_pi,
+    wrist3_needs_rewind,
+    wrist3_on_home_branch,
     wrist3_unwind_target_rad,
 )
 
@@ -2147,7 +2151,11 @@ class MoveItScanPlanner:
         *,
         quiet: bool = False,
     ) -> bool:
-        """Reject trajectories whose numeric joint samples still jump by ≥90° after unwrap."""
+        """Reject trajectories whose numeric joint samples still jump by ≥90° after unwrap.
+
+        wrist_3 may take up to ~1 full turn when we intentionally bias toward the
+        home cable branch; timing stretch handles the slower spin.
+        """
         indices = self._trajectory_joint_indices(trajectory)
         joint_traj = getattr(trajectory, "joint_trajectory", None)
         if indices is None or joint_traj is None or len(joint_traj.points) < 2:
@@ -2161,21 +2169,104 @@ class MoveItScanPlanner:
                 continue
             positions = [float(point.positions[index]) for index in indices]
             if prev_positions is not None:
-                for joint_index, (prev, curr) in enumerate(zip(prev_positions, positions)):
+                for joint_index, (prev, curr) in enumerate(
+                    zip(prev_positions, positions)
+                ):
                     raw_deg = math.degrees(abs(curr - prev))
-                    if raw_deg > max_raw_deg:
+                    limit_deg = 370.0 if joint_index == 5 else 90.0
+                    if raw_deg >= limit_deg and raw_deg > max_raw_deg:
                         max_raw_deg = raw_deg
                         worst_joint = CANONICAL_JOINT_NAMES[joint_index]
             prev_positions = positions
 
-        if max_raw_deg >= 90.0:
-            if not quiet:
+        if not worst_joint:
+            return True
+
+        if not quiet:
+            detail = (
+                "(cable unwrap exceeded one turn)."
+                if worst_joint == "wrist_3_joint"
+                else "(branch unwrap failed; UR would see >100 deg/s)."
+            )
+            sys.stderr.write(
+                "UR3e MoveIt execute: rejecting trajectory — numeric "
+                f"{worst_joint} step {max_raw_deg:.0f}° between samples "
+                f"{detail}\n"
+            )
+        return False
+
+    def _bias_trajectory_wrist3_toward_home(self, trajectory: Any) -> bool:
+        """Optionally nudge wrist_3 toward home — never by a full ±360° spin.
+
+        Full-turn home bias was yanking the BFS USB cable. When the only way to
+        get closer to home is ±2π, leave the short unwrap and let post-pin
+        cable rewind clear the wind at home instead.
+        """
+        indices = self._trajectory_joint_indices(trajectory)
+        joint_traj = getattr(trajectory, "joint_trajectory", None)
+        if (
+            indices is None
+            or joint_traj is None
+            or len(joint_traj.points) < 2
+            or len(indices) < 6
+        ):
+            return False
+
+        hardware = self._ensure_hardware_joint_positions(timeout_s=0.5)
+        if hardware is None or len(hardware) != 6:
+            return False
+
+        home = self.home_joints_rad()
+        w3_traj = indices[5]
+        last = joint_traj.points[-1]
+        if len(last.positions) <= w3_traj:
+            return False
+
+        live_w3 = float(hardware[5])
+        final_w3 = float(last.positions[w3_traj])
+        preferred = unwrap_joint_toward_preferred(
+            live_w3,
+            final_w3,
+            float(home[5]),
+            max_extra_turns=1,
+            max_travel_rad=math.pi,  # cable-safe: no full-turn path on pin trajs
+        )
+        offset = preferred - final_w3
+        if abs(offset) < math.radians(1.0):
+            # Would a full-turn bias have been “closer” to home? Log once for debug.
+            full_turn_pref = unwrap_joint_toward_preferred(
+                live_w3,
+                final_w3,
+                float(home[5]),
+                max_extra_turns=1,
+                max_travel_rad=1.5 * TWO_PI,
+            )
+            full_offset = full_turn_pref - final_w3
+            if abs(full_offset) >= math.pi - 1.0e-6:
                 sys.stderr.write(
-                    "UR3e MoveIt execute: rejecting trajectory — numeric "
-                    f"{worst_joint} step {max_raw_deg:.0f}° between samples "
-                    "(branch unwrap failed; UR would see >100 deg/s).\n"
+                    "UR3e MoveIt execute: wrist_3 skip full-turn home bias "
+                    f"({math.degrees(final_w3):.0f}° ↛ {math.degrees(full_turn_pref):.0f}°); "
+                    f"live {math.degrees(live_w3):.0f}° vs home {math.degrees(home[5]):.0f}° — "
+                    "post-pin cable rewind will clear if |Δ|≥180°.\n"
                 )
             return False
+
+        if abs(offset) >= math.pi - 1.0e-6:
+            sys.stderr.write(
+                "UR3e MoveIt execute: wrist_3 refuse full-turn home bias "
+                f"({math.degrees(final_w3):.0f}° → {math.degrees(preferred):.0f}°).\n"
+            )
+            return False
+
+        for point in joint_traj.points[1:]:
+            if len(point.positions) > w3_traj:
+                point.positions[w3_traj] = float(point.positions[w3_traj]) + offset
+
+        sys.stderr.write(
+            "UR3e MoveIt execute: wrist_3 home-branch unwrap "
+            f"{math.degrees(final_w3):.0f}° → {math.degrees(preferred):.0f}° "
+            f"(home ref {math.degrees(home[5]):.0f}°, Δ {math.degrees(offset):+.0f}°).\n"
+        )
         return True
 
     def _prepare_trajectory_from_start(
@@ -2296,6 +2387,7 @@ class MoveItScanPlanner:
             return False
 
         self._ensure_trajectory_hardware_start(trajectory)
+        self._bias_trajectory_wrist3_toward_home(trajectory)
         self._strip_trajectory_derivatives(trajectory)
         self._stretch_trajectory_segment_times(trajectory)
 
@@ -4247,11 +4339,16 @@ class MoveItScanPlanner:
                 <= HOME_JOINT_TOLERANCE_RAD
             )
             # MoveIt stamper can look "at home" on a wrapped branch while RTDE is not.
+            # wrist_3 is continuous: coalesce+wrap would treat −450° as −90° and skip
+            # cable unwind — compare absolute home wrist_3 on the hardware vector.
             near_hardware = True
             if hardware is not None:
-                home_hw = coalesce_joints_for_execute(hardware, self.home_joints_rad())
+                home_cfg = self.home_joints_rad()
+                home_hw = coalesce_joints_for_execute(hardware, home_cfg)
+                home_hw_cable = list(home_hw)
+                home_hw_cable[5] = float(home_cfg[5])
                 near_hardware = (
-                    self._joint_distance_rad(hardware, home_hw)
+                    joint_distance_continuous_rad(hardware, home_hw_cable)
                     <= HOME_JOINT_TOLERANCE_RAD
                 )
             if near_moveit and near_hardware:
@@ -4320,7 +4417,8 @@ class MoveItScanPlanner:
 
         start = [float(v) for v in start_joints]
         goal = [float(v) for v in goal_joints]
-        if self._joint_distance_rad(start, goal) <= HOME_JOINT_TOLERANCE_RAD:
+        # Continuous wrist_3: wrapped distance treats −450°≈−90° and skips cable unwind.
+        if joint_distance_continuous_rad(start, goal) <= HOME_JOINT_TOLERANCE_RAD:
             return True, ""
 
         trajectory = RobotTrajectory()
@@ -4365,10 +4463,11 @@ class MoveItScanPlanner:
         workspace: Optional[WorkspaceBox] = None,
         stop_event: Optional[threading.Event] = None,
     ) -> Dict[str, Any]:
-        """If wrist_3 completed ≥1 full turn from home, retreat home then unwind.
+        """If wrist_3 is ≥½ turn from home, retreat home then unwind.
 
-        MoveIt pin trajectories are left unchanged. Detection uses live RTDE wrist_3
-        vs configured home. Unwind is a hardware-controller wrist_3 spin (MoveIt only
+        MoveIt pin trajectories are left unchanged except home-branch unwrap on
+        wrist_3. Detection uses live RTDE wrist_3 vs configured home (half-turn
+        threshold). Unwind is a hardware-controller wrist_3 spin (MoveIt only
         sees ±π and cannot plan multi-turn cable recovery).
         """
         if stop_event is not None and stop_event.is_set():
@@ -4386,8 +4485,8 @@ class MoveItScanPlanner:
         home = self.home_joints_rad()
         live_w3 = float(hardware[5])
         ref_w3 = float(home[5])
-        _target, turns = wrist3_unwind_target_rad(live_w3, ref_w3)
-        if abs(turns) < 1:
+        # Continuous |Δ|≥180° is the cable-risk gate (not only integer turn peel).
+        if not wrist3_needs_rewind(live_w3, ref_w3):
             return {
                 "ok": True,
                 "rewound": False,
@@ -4396,12 +4495,16 @@ class MoveItScanPlanner:
                 "ref_wrist3_deg": math.degrees(ref_w3),
             }
 
-        detected_turns = int(turns)
+        _target, turns = wrist3_unwind_target_rad(live_w3, ref_w3)
+        detected_turns = int(turns) if abs(turns) >= 1 else (
+            1 if (live_w3 - ref_w3) > 0.0 else -1
+        )
         sys.stderr.write(
             "UR3e MoveIt: wrist_3 cable rewind — "
             f"{detected_turns:+d} turn(s) "
             f"(live {math.degrees(live_w3):.0f}°, "
-            f"home ref {math.degrees(ref_w3):.0f}°). "
+            f"home ref {math.degrees(ref_w3):.0f}°, "
+            f"|Δ|={math.degrees(abs(live_w3 - ref_w3)):.0f}°, threshold ±180°). "
             "Retreating home, then hardware wrist_3 unwind.\n"
         )
         sys.stderr.flush()
@@ -4433,8 +4536,13 @@ class MoveItScanPlanner:
                 "error": "lost hardware joints after home retreat",
             }
 
-        target_w3, turns_left = wrist3_unwind_target_rad(float(hardware[5]), ref_w3)
-        if abs(turns_left) < 1:
+        # At home pose, drive wrist_3 exactly to the configured home angle
+        # (continuous multi-turn target — not the nearest wrapped equivalent).
+        live_after = float(hardware[5])
+        target_w3 = float(ref_w3)
+        if wrist3_on_home_branch(
+            live_after, target_w3, tolerance_rad=HOME_JOINT_TOLERANCE_RAD
+        ):
             sys.stderr.write(
                 "UR3e MoveIt: wrist_3 cable already near home branch after retreat — "
                 "no extra unwind needed.\n"
@@ -4454,7 +4562,10 @@ class MoveItScanPlanner:
             hardware,
             unwind_goal,
             stop_event=stop_event,
-            label=f"wrist_3 cable unwind ({turns_left:+d} turn(s))",
+            label=(
+                f"wrist_3 cable unwind to home "
+                f"({math.degrees(live_after):.0f}° → {math.degrees(target_w3):.0f}°)"
+            ),
         )
         if not ok_spin:
             if spin_err == "stopped" or (
@@ -4468,9 +4579,34 @@ class MoveItScanPlanner:
                 "error": f"wrist_3 unwind failed ({spin_err})",
             }
 
+        # Confirm RTDE actually left the wound branch (spin must not no-op on wrap).
+        hardware = self._ensure_hardware_joint_positions(timeout_s=1.5)
+        if hardware is None or len(hardware) != 6:
+            return {
+                "ok": False,
+                "rewound": False,
+                "turns": detected_turns,
+                "error": "lost hardware joints after wrist_3 unwind",
+            }
+        live_final = float(hardware[5])
+        if not wrist3_on_home_branch(
+            live_final, target_w3, tolerance_rad=HOME_JOINT_TOLERANCE_RAD
+        ):
+            return {
+                "ok": False,
+                "rewound": False,
+                "turns": detected_turns,
+                "error": (
+                    "wrist_3 unwind did not reach home branch "
+                    f"(live {math.degrees(live_final):.0f}°, "
+                    f"target {math.degrees(target_w3):.0f}°)"
+                ),
+            }
+
         sys.stderr.write(
             "UR3e MoveIt: wrist_3 cable rewind complete "
-            f"({detected_turns:+d} turn(s) cleared).\n"
+            f"({detected_turns:+d} turn(s) cleared; "
+            f"live {math.degrees(live_final):.0f}°).\n"
         )
         sys.stderr.flush()
         return {
@@ -4478,6 +4614,7 @@ class MoveItScanPlanner:
             "rewound": True,
             "turns": detected_turns,
             "live_wrist3_deg": math.degrees(live_w3),
+            "final_wrist3_deg": math.degrees(live_final),
             "target_wrist3_deg": math.degrees(target_w3),
             "ref_wrist3_deg": math.degrees(ref_w3),
         }

@@ -103,13 +103,100 @@ def unwrap_joint_continuous(reference: float, raw: float) -> float:
     return float(reference) + joint_delta_rad(reference, raw)
 
 
+def unwrap_joint_toward_preferred(
+    live: float,
+    raw: float,
+    preferred: float,
+    *,
+    max_extra_turns: int = 1,
+    max_travel_rad: float = math.pi,
+) -> float:
+    """Place *raw* near *live*, preferring the 2π branch closer to *preferred*.
+
+    Cable-safe: never pick a branch that requires more than *max_travel_rad*
+    (default ±180°) of wrist travel from *live*. Full-turn “home bias” spins
+    yank the tool/USB cable even when the numeric distance to home shrinks.
+    """
+    nearest = unwrap_joint_continuous(live, raw)
+    best = nearest
+    best_pref = abs(best - float(preferred))
+    max_k = max(0, int(max_extra_turns))
+    max_travel = max(0.0, float(max_travel_rad))
+    for k in range(-max_k, max_k + 1):
+        candidate = nearest + float(k) * TWO_PI
+        travel = abs(candidate - float(live))
+        if travel > max_travel + 1.0e-6:
+            continue
+        pref_dist = abs(candidate - float(preferred))
+        if pref_dist + 1.0e-9 < best_pref:
+            best = candidate
+            best_pref = pref_dist
+        elif abs(pref_dist - best_pref) <= 1.0e-9 and travel + 1.0e-9 < abs(
+            best - float(live)
+        ):
+            best = candidate
+            best_pref = pref_dist
+    return best
+
+
+def wrist3_needs_rewind(live_rad: float, ref_rad: float) -> bool:
+    """True when continuous |live−home| is ≥ half a turn (cable-risk threshold)."""
+    return abs(float(live_rad) - float(ref_rad)) >= math.pi - 1.0e-9
+
+
+def wrist3_on_home_branch(
+    live_rad: float,
+    ref_rad: float,
+    *,
+    tolerance_rad: float = 0.05,
+) -> bool:
+    """True when continuous wrist_3 is within *tolerance* of the home reference."""
+    return abs(float(live_rad) - float(ref_rad)) <= float(tolerance_rad)
+
+
+def joint_delta_for_distance(index: int, reference: float, candidate: float) -> float:
+    """Signed joint delta for distance checks.
+
+    Continuous joints (URDF limits None, e.g. wrist_3) use absolute multi-turn
+    difference so one full cable turn is not treated as already-at-goal.
+    Limited joints use the shortest wrapped delta.
+    """
+    if 0 <= index < len(UR3E_JOINT_LIMITS_RAD) and UR3E_JOINT_LIMITS_RAD[index] is None:
+        return float(candidate) - float(reference)
+    return joint_delta_rad(reference, candidate)
+
+
+def joint_distance_continuous_rad(
+    reference: Sequence[float], candidate: Sequence[float]
+) -> float:
+    """L2 joint distance with continuous (non-wrapped) deltas for unlimited joints."""
+    if len(reference) != 6 or len(candidate) != 6:
+        return float("inf")
+    total_sq = 0.0
+    for index, (ref, cand) in enumerate(zip(reference, candidate)):
+        delta = joint_delta_for_distance(index, ref, cand)
+        total_sq += delta * delta
+    return math.sqrt(total_sq)
+
+
 def wrist3_completed_turns(live_rad: float, ref_rad: float) -> int:
-    """Full ±2π turns of wrist_3 from *ref* to *live* (truncated toward zero)."""
-    return int((float(live_rad) - float(ref_rad)) / TWO_PI)
+    """Signed turns to peel so remainder (live−ref) lies in (−π, π).
+
+    Half-turn policy: rewind when |live−home| ≥ 180° (not only after a full turn).
+    """
+    rem = float(live_rad) - float(ref_rad)
+    turns = 0
+    while rem >= math.pi - 1.0e-9:
+        rem -= TWO_PI
+        turns += 1
+    while rem < -math.pi - 1.0e-9:
+        rem += TWO_PI
+        turns -= 1
+    return turns
 
 
 def wrist3_unwind_target_rad(live_rad: float, ref_rad: float) -> tuple[float, int]:
-    """Return (target_wrist_3, completed_turns). Target removes full turns toward *ref*."""
+    """Return (target_wrist_3, turns_to_remove). Target is live after peeling turns."""
     turns = wrist3_completed_turns(live_rad, ref_rad)
     return float(live_rad) - float(turns) * TWO_PI, turns
 
