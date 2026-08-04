@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <!-- Camera / sensor collision payload on tool0.
      mesh: real CAD STL (metres), flange-aligned — preferred.
-     hemisphere: legacy unit bowl scaled by radius_m.
+     hemisphere: unit bowl scaled by radius_m (flat on flange, dome +tool0 Z).
      sphere / box: simple primitives. -->
 <robot xmlns:xacro="http://wiki.ros.org/xacro">
 
@@ -18,7 +18,7 @@
           </geometry>
         </xacro:if>
         <xacro:if value="${shape == 'hemisphere'}">
-          <!-- Unit bowl: apex at flange, flat rim opens +tool0 Z. -->
+          <!-- Unit bowl (flat at z=1, apex at z=0): flat on flange, dome along +tool0 Z. -->
           <origin xyz="0 0 ${radius_m}" rpy="${pi} 0 0"/>
           <geometry>
             <mesh filename="file://${mesh_dir}tool_payload_hemisphere.stl"

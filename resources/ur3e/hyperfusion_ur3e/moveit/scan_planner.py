@@ -75,6 +75,11 @@ DEFAULT_HOME_JOINTS_RAD = [
 ]
 
 HOME_JOINT_TOLERANCE_RAD = 0.05
+# Connect/verify: treat wrap-space nearness as "already home" (avoids OMPL nudges
+# that soft-limit-reject when shoulder_lift/elbow sit near ±180°).
+HOME_ALREADY_NEAR_RAD = math.radians(10.0)
+# Prefer a direct RTDE joint nudge over OMPL when already this close to home.
+HOME_DIRECT_SPIN_MAX_RAD = math.radians(45.0)
 TRAJECTORY_START_TOLERANCE_RAD = 0.05
 JOINT_SETTLE_TIMEOUT_S = 3.0
 
@@ -102,6 +107,12 @@ EXECUTE_PLANNER_ATTEMPTS = (
     ("ompl", "RRTstar"),
     ("pilz_industrial_motion_planner", "PTP"),
 )
+# Home / cable-rewind: prefer short joint-space PTP before OMPL snakes.
+HOME_EXECUTE_PLANNER_ATTEMPTS = (
+    ("pilz_industrial_motion_planner", "PTP"),
+    ("ompl", "RRTConnect"),
+    ("ompl", "RRTstar"),
+)
 # Direct pin hops: fail fast. Via-home recovery gets a slightly larger budget.
 DIRECT_ALLOWED_PLANNING_TIME_S = 5.0
 DIRECT_NUM_PLANNING_ATTEMPTS = 5
@@ -118,6 +129,10 @@ PIN_POSE_CONE_OUTER_AZIMUTHS = 8
 # Trajectory scoring: sample pinch guard along planned paths before execute.
 TRAJECTORY_PINCH_MIN_GAP_M = 0.028
 TRAJECTORY_MAX_PINCH_SAMPLES = 48
+TRAJECTORY_MAX_COLLISION_SAMPLES = 24
+# Reject OMPL "snake" paths: travel may not exceed max(floor, ratio * start→goal).
+TRAJECTORY_MAX_TRAVEL_FLOOR_RAD = math.radians(150.0)
+TRAJECTORY_MAX_TRAVEL_RATIO = 2.0
 
 # UR3e external-control peak joint velocity (matches teach pendant safety).
 UR3E_HARDWARE_MAX_JOINT_VELOCITY_DEG_S = 190.0
@@ -1635,16 +1650,19 @@ class MoveItScanPlanner:
             self._acm_set_allowed(acm, link_name, BOUNDARY_CEILING_OBJECT_ID, True)
 
         # Re-assert SRDF tool/camera adjacent disables so a bad merge cannot re-enable them.
+        # wrist_2 ↔ payload must stay checked (BFS corner can strike wrist_2 / C157A4).
         for link_a, link_b in (
             ("tool0", TOOL_PAYLOAD_LINK),
             ("flange", TOOL_PAYLOAD_LINK),
             ("wrist_3_link", TOOL_PAYLOAD_LINK),
-            ("wrist_2_link", TOOL_PAYLOAD_LINK),
             ("tool0", "hyperfusion_tcp"),
             ("flange", "hyperfusion_tcp"),
             (TOOL_PAYLOAD_LINK, "hyperfusion_tcp"),
         ):
             self._acm_set_allowed(acm, link_a, link_b, True)
+
+        # Explicitly clear any leftover allow(wrist_2, payload) from older SRDF/ACM.
+        self._acm_set_allowed(acm, "wrist_2_link", TOOL_PAYLOAD_LINK, False)
 
         scene = PlanningScene()
         scene.is_diff = True
@@ -1812,7 +1830,11 @@ class MoveItScanPlanner:
                     if "forearm" in other:
                         return "tool payload near forearm (pinch / fold risk)"
                     if "wrist_2" in other:
-                        return "tool payload vs wrist_2 (mount overlap — restart MoveIt after SRDF update)"
+                        return "tool payload vs wrist_2 (BFS mesh corner / fold)"
+                    if "wrist_1" in other:
+                        return "tool payload vs wrist_1 (fold risk)"
+                    if "upper_arm" in other:
+                        return "tool payload vs upper arm (fold risk)"
                     if "hyperfusion_boundary_" in other:
                         return "tool payload outside workspace boundary"
                     return f"tool payload collision ({body1} vs {body2})"
@@ -3327,6 +3349,62 @@ class MoveItScanPlanner:
                 )
         return True, min_gap_m, ""
 
+    def _trajectory_mesh_collision_ok(
+        self,
+        waypoints: Sequence[Sequence[float]],
+    ) -> tuple[bool, str]:
+        """Re-check MoveIt mesh collisions on sampled waypoints after RTDE unwrap."""
+        if self._use_mock_hardware() or len(waypoints) < 2:
+            return True, ""
+
+        count = len(waypoints)
+        if count <= TRAJECTORY_MAX_COLLISION_SAMPLES:
+            sample_indices = list(range(count))
+        else:
+            step = max(1, count // TRAJECTORY_MAX_COLLISION_SAMPLES)
+            sample_indices = list(range(0, count, step))
+            if sample_indices[-1] != count - 1:
+                sample_indices.append(count - 1)
+
+        for index in sample_indices:
+            # Skip index 0: live start may already be slightly in collision after a stop.
+            if index == 0:
+                continue
+            ok, reason = self._state_is_valid(waypoints[index], check_pinch=False)
+            if not ok:
+                return False, f"trajectory mesh collision at sample {index}: {reason}"
+        return True, ""
+
+    def _trajectory_travel_ok(
+        self,
+        waypoints: Sequence[Sequence[float]],
+        *,
+        start_joints: Optional[Sequence[float]],
+        goal_joints: Sequence[float],
+    ) -> tuple[bool, float, str]:
+        """Reject long OMPL snakes relative to the straight start→goal joint distance."""
+        travel_rad = self._trajectory_joint_travel_rad(waypoints)
+        if start_joints is not None and len(start_joints) == 6:
+            straight_rad = self._joint_distance_rad(start_joints, goal_joints)
+        elif len(waypoints) >= 2:
+            straight_rad = self._joint_distance_rad(waypoints[0], waypoints[-1])
+        else:
+            straight_rad = travel_rad
+        max_travel_rad = max(
+            TRAJECTORY_MAX_TRAVEL_FLOOR_RAD,
+            TRAJECTORY_MAX_TRAVEL_RATIO * straight_rad,
+        )
+        if travel_rad > max_travel_rad + 1.0e-6:
+            return (
+                False,
+                travel_rad,
+                "trajectory too long "
+                f"({math.degrees(travel_rad):.1f}°·joint > "
+                f"{math.degrees(max_travel_rad):.1f}° limit; "
+                f"straight={math.degrees(straight_rad):.1f}°)",
+            )
+        return True, travel_rad, ""
+
     def _log_moveit_joint_issues(self, joints: Sequence[float], *, label: str) -> None:
         issues = moveit_joint_limit_violations(joints)
         if issues:
@@ -3558,6 +3636,7 @@ class MoveItScanPlanner:
         motion_scale: float,
         stop_event: Optional[threading.Event] = None,
         recovery: bool = False,
+        planner_attempts: Optional[Sequence[tuple[str, str]]] = None,
     ) -> tuple[bool, int, str]:
         """Try planners in order; execute the first valid trajectory (no collect-all)."""
         from moveit_msgs.msg import MoveItErrorCodes
@@ -3604,6 +3683,12 @@ class MoveItScanPlanner:
             allowed_planning_time = DIRECT_ALLOWED_PLANNING_TIME_S
             num_planning_attempts = DIRECT_NUM_PLANNING_ATTEMPTS
 
+        attempts = (
+            list(planner_attempts)
+            if planner_attempts is not None
+            else list(EXECUTE_PLANNER_ATTEMPTS)
+        )
+
         last_code = MoveItErrorCodes.FAILURE
         last_name = "failure"
 
@@ -3628,7 +3713,7 @@ class MoveItScanPlanner:
                 sys.stderr.flush()
                 return False, MoveItErrorCodes.GOAL_STATE_INVALID, detail
 
-            for pipeline_id, planner_id in EXECUTE_PLANNER_ATTEMPTS:
+            for pipeline_id, planner_id in attempts:
                 try:
                     error_code, planned = self._plan_move_group_joint_goal(
                         plan_goal,
@@ -3670,11 +3755,31 @@ class MoveItScanPlanner:
                     )
                     continue
 
+                travel_ok, travel_rad, travel_reason = self._trajectory_travel_ok(
+                    waypoints,
+                    start_joints=moveit_start,
+                    goal_joints=plan_goal,
+                )
+                if not travel_ok:
+                    sys.stderr.write(
+                        "UR3e MoveIt execute: "
+                        f"{pipeline_id}/{planner_id} rejected ({travel_reason}).\n"
+                    )
+                    continue
+
                 soft_ok, soft_reason = self._trajectory_soft_joint_limits_ok(waypoints)
                 if not soft_ok:
                     sys.stderr.write(
                         "UR3e MoveIt execute: "
                         f"{pipeline_id}/{planner_id} rejected ({soft_reason}).\n"
+                    )
+                    continue
+
+                mesh_ok, mesh_reason = self._trajectory_mesh_collision_ok(waypoints)
+                if not mesh_ok:
+                    sys.stderr.write(
+                        "UR3e MoveIt execute: "
+                        f"{pipeline_id}/{planner_id} rejected ({mesh_reason}).\n"
                     )
                     continue
 
@@ -3686,7 +3791,6 @@ class MoveItScanPlanner:
                     )
                     continue
 
-                travel_rad = self._trajectory_joint_travel_rad(waypoints)
                 sys.stderr.write(
                     "UR3e MoveIt execute: "
                     f"{pipeline_id}/{planner_id} candidate "
@@ -4332,29 +4436,19 @@ class MoveItScanPlanner:
             current_joints if current_joints is not None else self.home_joints_rad()
         )
         home_joints = coalesce_joints_for_moveit(home_ref, self.home_joints_rad())
+        home_cfg = self.home_joints_rad()
 
         if current_joints is not None:
-            near_moveit = (
-                self._joint_distance_rad(current_joints, home_joints)
-                <= HOME_JOINT_TOLERANCE_RAD
-            )
-            # MoveIt stamper can look "at home" on a wrapped branch while RTDE is not.
-            # wrist_3 is continuous: coalesce+wrap would treat −450° as −90° and skip
-            # cable unwind — compare absolute home wrist_3 on the hardware vector.
-            near_hardware = True
-            if hardware is not None:
-                home_cfg = self.home_joints_rad()
-                home_hw = coalesce_joints_for_execute(hardware, home_cfg)
-                home_hw_cable = list(home_hw)
-                home_hw_cable[5] = float(home_cfg[5])
-                near_hardware = (
-                    joint_distance_continuous_rad(hardware, home_hw_cable)
-                    <= HOME_JOINT_TOLERANCE_RAD
-                )
-            if near_moveit and near_hardware:
+            wrap_dist = self._joint_distance_rad(current_joints, home_joints)
+            # Wrap-space nearness matches what the UI shows. Continuous wrist_3 cable
+            # turns are unwound during scans — do not block connect home verify.
+            if wrap_dist <= HOME_ALREADY_NEAR_RAD:
                 current_valid, current_reason = self._state_is_valid(current_joints)
                 if current_valid:
-                    sys.stderr.write("UR3e MoveIt execute: already at scan home pose.\n")
+                    sys.stderr.write(
+                        "UR3e MoveIt execute: already at scan home pose "
+                        f"(Δ={math.degrees(wrap_dist):.1f}°·joint wrap).\n"
+                    )
                     sys.stderr.flush()
                     return {"ok": True, "already_at_home": True}
                 return {
@@ -4365,12 +4459,6 @@ class MoveItScanPlanner:
                         f"({current_reason or 'collision or limits'})"
                     ),
                 }
-            if near_moveit and not near_hardware:
-                sys.stderr.write(
-                    "UR3e MoveIt execute: MoveIt joints look like home but RTDE does not — "
-                    "commanding home motion on the hardware branch.\n"
-                )
-                sys.stderr.flush()
 
         home_valid, home_reason = self._state_is_valid(home_joints)
         if not home_valid:
@@ -4380,6 +4468,36 @@ class MoveItScanPlanner:
                 "error": f"home pose invalid ({home_reason or 'collision or limits'})",
             }
 
+        # Near home: direct RTDE nudge — OMPL often snakes through soft joint-limit
+        # keep-out (e.g. elbow ±180°) and rejects with "could not move to home".
+        if (
+            current_joints is not None
+            and hardware is not None
+            and self._joint_distance_rad(current_joints, home_joints)
+            <= HOME_DIRECT_SPIN_MAX_RAD
+        ):
+            home_hw = coalesce_joints_for_execute(hardware, home_cfg)
+            sys.stderr.write(
+                "UR3e MoveIt execute: near scan home — direct joint nudge "
+                f"(Δ={math.degrees(self._joint_distance_rad(current_joints, home_joints)):.1f}°·joint).\n"
+            )
+            sys.stderr.flush()
+            spun, spin_err = self._execute_hardware_joint_spin(
+                hardware,
+                home_hw,
+                stop_event=stop_event,
+                label="scan home nudge",
+            )
+            if spun:
+                sys.stderr.write("UR3e MoveIt execute: reached scan home pose.\n")
+                sys.stderr.flush()
+                return {"ok": True}
+            sys.stderr.write(
+                "UR3e MoveIt execute: home nudge failed "
+                f"({spin_err or 'unknown'}) — falling back to MoveIt.\n"
+            )
+            sys.stderr.flush()
+
         motion_scale = self._motion_scale_for(current_joints, home_joints)
         ok, _code, error_name = self._plan_and_execute_move(
             home_joints,
@@ -4387,6 +4505,7 @@ class MoveItScanPlanner:
             motion_scale=motion_scale,
             stop_event=stop_event,
             recovery=True,
+            planner_attempts=HOME_EXECUTE_PLANNER_ATTEMPTS,
         )
         if ok:
             sys.stderr.write("UR3e MoveIt execute: reached scan home pose.\n")

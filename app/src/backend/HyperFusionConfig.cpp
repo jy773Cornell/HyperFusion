@@ -1444,7 +1444,7 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "max_linear_speed_m_per_s = 0.05\n"
         << "max_linear_accel_m_per_s2 = 0.3\n"
         << "max_joint_velocity_deg_s = 60\n"
-        << "# Real BFS tool collision mesh on tool0 (urdf/meshes/). Pinch radius is C403A0 only.\n"
+        << "# Real BFS tool collision mesh on tool0 (urdf/meshes/). Pinch uses flange-flat hemisphere of this radius.\n"
         << "tool_payload_shape = mesh\n"
         << "tool_payload_mesh = ur_bfs_tool_payload.stl\n"
         << "tool_payload_radius_mm = 77\n"

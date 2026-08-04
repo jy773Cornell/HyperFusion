@@ -8,12 +8,12 @@
 
   <xacro:ur_srdf/>
 
-  <!-- Payload is bolted to tool0; ignore mount overlap (pinch guard checks forearm separately). -->
+  <!-- Payload is bolted to tool0; ignore only true mount-adjacent overlaps.
+       Do NOT ignore wrist_2 ↔ payload: the BFS mesh corner can strike wrist_2
+       when wrist_3 folds (pendant C157A4). Pinch guard covers forearm separately. -->
   <disable_collisions link1="tool0" link2="hyperfusion_tool_payload" reason="Fixed"/>
   <disable_collisions link1="flange" link2="hyperfusion_tool_payload" reason="Fixed"/>
   <disable_collisions link1="wrist_3_link" link2="hyperfusion_tool_payload" reason="Adjacent"/>
-  <!-- BFS CAD body sits beside wrist_2; mesh overlap is mount geometry, not a real pinch. -->
-  <disable_collisions link1="wrist_2_link" link2="hyperfusion_tool_payload" reason="Adjacent"/>
   <disable_collisions link1="tool0" link2="hyperfusion_tcp" reason="Fixed"/>
   <disable_collisions link1="flange" link2="hyperfusion_tcp" reason="Fixed"/>
   <disable_collisions link1="hyperfusion_tool_payload" link2="hyperfusion_tcp" reason="Adjacent"/>
