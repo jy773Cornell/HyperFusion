@@ -78,8 +78,6 @@ HOME_JOINT_TOLERANCE_RAD = 0.05
 # Connect/verify: treat wrap-space nearness as "already home" (avoids OMPL nudges
 # that soft-limit-reject when shoulder_lift/elbow sit near ±180°).
 HOME_ALREADY_NEAR_RAD = math.radians(10.0)
-# Prefer a direct RTDE joint nudge over OMPL when already this close to home.
-HOME_DIRECT_SPIN_MAX_RAD = math.radians(45.0)
 TRAJECTORY_START_TOLERANCE_RAD = 0.05
 JOINT_SETTLE_TIMEOUT_S = 3.0
 
@@ -129,10 +127,12 @@ PIN_POSE_CONE_OUTER_AZIMUTHS = 8
 # Trajectory scoring: sample pinch guard along planned paths before execute.
 TRAJECTORY_PINCH_MIN_GAP_M = 0.028
 TRAJECTORY_MAX_PINCH_SAMPLES = 48
-TRAJECTORY_MAX_COLLISION_SAMPLES = 24
+TRAJECTORY_MAX_COLLISION_SAMPLES = 48
 # Reject OMPL "snake" paths: travel may not exceed max(floor, ratio * start→goal).
 TRAJECTORY_MAX_TRAVEL_FLOOR_RAD = math.radians(150.0)
 TRAJECTORY_MAX_TRAVEL_RATIO = 2.0
+# Hardware-only spins (cable unwind): sample this often and MoveIt-validate each pose.
+HARDWARE_SPIN_MAX_STEP_RAD = math.radians(8.0)
 
 # UR3e external-control peak joint velocity (matches teach pendant safety).
 UR3E_HARDWARE_MAX_JOINT_VELOCITY_DEG_S = 190.0
@@ -1650,7 +1650,8 @@ class MoveItScanPlanner:
             self._acm_set_allowed(acm, link_name, BOUNDARY_CEILING_OBJECT_ID, True)
 
         # Re-assert SRDF tool/camera adjacent disables so a bad merge cannot re-enable them.
-        # wrist_2 ↔ payload must stay checked (BFS corner can strike wrist_2 / C157A4).
+        # Only true fixed/adjacent mount pairs are ignored. Arm links must stay checked
+        # (BFS mesh corner vs wrist_2 caused pendant C157A4 when ignored).
         for link_a, link_b in (
             ("tool0", TOOL_PAYLOAD_LINK),
             ("flange", TOOL_PAYLOAD_LINK),
@@ -1661,8 +1662,22 @@ class MoveItScanPlanner:
         ):
             self._acm_set_allowed(acm, link_a, link_b, True)
 
-        # Explicitly clear any leftover allow(wrist_2, payload) from older SRDF/ACM.
-        self._acm_set_allowed(acm, "wrist_2_link", TOOL_PAYLOAD_LINK, False)
+        # Force-check payload vs arm (clear any leftover allow=* from older SRDF/ACM).
+        for arm_link in (
+            "shoulder_link",
+            "upper_arm_link",
+            "forearm_link",
+            "wrist_1_link",
+            "wrist_2_link",
+        ):
+            self._acm_set_allowed(acm, arm_link, TOOL_PAYLOAD_LINK, False)
+
+        sys.stderr.write(
+            "UR3e MoveIt: ACM — tool payload collision CHECKING vs "
+            "shoulder/upper_arm/forearm/wrist_1/wrist_2 "
+            "(only tool0/flange/wrist_3 ignored as mount-adjacent).\n"
+        )
+        sys.stderr.flush()
 
         scene = PlanningScene()
         scene.is_diff = True
@@ -4436,7 +4451,6 @@ class MoveItScanPlanner:
             current_joints if current_joints is not None else self.home_joints_rad()
         )
         home_joints = coalesce_joints_for_moveit(home_ref, self.home_joints_rad())
-        home_cfg = self.home_joints_rad()
 
         if current_joints is not None:
             wrap_dist = self._joint_distance_rad(current_joints, home_joints)
@@ -4468,36 +4482,7 @@ class MoveItScanPlanner:
                 "error": f"home pose invalid ({home_reason or 'collision or limits'})",
             }
 
-        # Near home: direct RTDE nudge — OMPL often snakes through soft joint-limit
-        # keep-out (e.g. elbow ±180°) and rejects with "could not move to home".
-        if (
-            current_joints is not None
-            and hardware is not None
-            and self._joint_distance_rad(current_joints, home_joints)
-            <= HOME_DIRECT_SPIN_MAX_RAD
-        ):
-            home_hw = coalesce_joints_for_execute(hardware, home_cfg)
-            sys.stderr.write(
-                "UR3e MoveIt execute: near scan home — direct joint nudge "
-                f"(Δ={math.degrees(self._joint_distance_rad(current_joints, home_joints)):.1f}°·joint).\n"
-            )
-            sys.stderr.flush()
-            spun, spin_err = self._execute_hardware_joint_spin(
-                hardware,
-                home_hw,
-                stop_event=stop_event,
-                label="scan home nudge",
-            )
-            if spun:
-                sys.stderr.write("UR3e MoveIt execute: reached scan home pose.\n")
-                sys.stderr.flush()
-                return {"ok": True}
-            sys.stderr.write(
-                "UR3e MoveIt execute: home nudge failed "
-                f"({spin_err or 'unknown'}) — falling back to MoveIt.\n"
-            )
-            sys.stderr.flush()
-
+        # Always use MoveIt (Pilz-first) — never RTDE-only nudge (that bypassed mesh checks).
         motion_scale = self._motion_scale_for(current_joints, home_joints)
         ok, _code, error_name = self._plan_and_execute_move(
             home_joints,
@@ -4518,6 +4503,27 @@ class MoveItScanPlanner:
             "error": f"could not move to home ({error_name})",
         }
 
+    def _interpolate_joint_waypoints(
+        self,
+        start_joints: Sequence[float],
+        goal_joints: Sequence[float],
+        *,
+        max_step_rad: float = HARDWARE_SPIN_MAX_STEP_RAD,
+    ) -> List[List[float]]:
+        """Dense linear interpolation in continuous joint space (for validity sampling)."""
+        start = [float(v) for v in start_joints]
+        goal = [float(v) for v in goal_joints]
+        deltas = [goal[i] - start[i] for i in range(6)]
+        max_abs = max(abs(d) for d in deltas)
+        if max_abs <= 1.0e-9:
+            return [start, goal]
+        steps = max(2, int(math.ceil(max_abs / max(1.0e-6, float(max_step_rad)))) + 1)
+        waypoints: List[List[float]] = []
+        for index in range(steps):
+            t = index / float(steps - 1)
+            waypoints.append([start[i] + deltas[i] * t for i in range(6)])
+        return waypoints
+
     def _execute_hardware_joint_spin(
         self,
         start_joints: Sequence[float],
@@ -4526,7 +4532,11 @@ class MoveItScanPlanner:
         stop_event: Optional[threading.Event] = None,
         label: str = "hardware joint move",
     ) -> tuple[bool, str]:
-        """Send a 2-point joint trajectory on the RTDE branch (bypass MoveIt planning)."""
+        """Send a multi-point RTDE trajectory after MoveIt-validating every sample.
+
+        Used only for continuous wrist_3 cable unwind (MoveIt ±π cannot plan multi-turn).
+        Still refuses to move if any interpolated pose collides (tool mesh vs arm).
+        """
         from builtin_interfaces.msg import Duration
         from moveit_msgs.msg import MoveItErrorCodes, RobotTrajectory
         from trajectory_msgs.msg import JointTrajectory, JointTrajectoryPoint
@@ -4540,19 +4550,32 @@ class MoveItScanPlanner:
         if joint_distance_continuous_rad(start, goal) <= HOME_JOINT_TOLERANCE_RAD:
             return True, ""
 
+        samples = self._interpolate_joint_waypoints(start, goal)
+        for index, sample in enumerate(samples):
+            # Validity uses principalized joints for FCL; geometry matches continuous pose
+            # for limited joints and wrist_3 within a few turns.
+            check_joints = coalesce_joints_for_moveit(sample, sample)
+            ok, reason = self._state_is_valid(check_joints, check_pinch=True)
+            if not ok:
+                detail = reason or "collision or limits"
+                sys.stderr.write(
+                    f"UR3e MoveIt: {label} blocked — MoveIt collision at sample "
+                    f"{index}/{len(samples) - 1}: {detail}\n"
+                )
+                sys.stderr.flush()
+                return False, f"collision along spin ({detail})"
+
         trajectory = RobotTrajectory()
         joint_traj = JointTrajectory()
         joint_traj.joint_names = list(CANONICAL_JOINT_NAMES)
 
-        p0 = JointTrajectoryPoint()
-        p0.positions = list(start)
-        p0.time_from_start = Duration(sec=0, nanosec=0)
-
-        p1 = JointTrajectoryPoint()
-        p1.positions = list(goal)
-        # Duration filled by stretch helper from joint deltas + speed cap.
-        p1.time_from_start = Duration(sec=1, nanosec=0)
-        joint_traj.points = [p0, p1]
+        points: List[Any] = []
+        for sample in samples:
+            point = JointTrajectoryPoint()
+            point.positions = list(sample)
+            point.time_from_start = Duration(sec=0, nanosec=0)
+            points.append(point)
+        joint_traj.points = points
         trajectory.joint_trajectory = joint_traj
 
         self._strip_trajectory_derivatives(trajectory)
@@ -4560,7 +4583,8 @@ class MoveItScanPlanner:
 
         sys.stderr.write(
             f"UR3e MoveIt: {label} "
-            f"[{self._joints_deg_csv(start)}] → [{self._joints_deg_csv(goal)}].\n"
+            f"[{self._joints_deg_csv(start)}] → [{self._joints_deg_csv(goal)}] "
+            f"({len(samples)} MoveIt-validated samples).\n"
         )
         sys.stderr.flush()
 
@@ -4586,8 +4610,8 @@ class MoveItScanPlanner:
 
         MoveIt pin trajectories are left unchanged except home-branch unwrap on
         wrist_3. Detection uses live RTDE wrist_3 vs configured home (half-turn
-        threshold). Unwind is a hardware-controller wrist_3 spin (MoveIt only
-        sees ±π and cannot plan multi-turn cable recovery).
+        threshold). Unwind is an RTDE wrist_3 spin with MoveIt collision samples
+        every ≤8° (MoveIt ±π cannot plan multi-turn cable recovery).
         """
         if stop_event is not None and stop_event.is_set():
             return {"ok": False, "stopped": True, "rewound": False, "error": "stopped"}

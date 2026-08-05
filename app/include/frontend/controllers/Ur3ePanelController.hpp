@@ -170,7 +170,8 @@ private:
                            qint64 elapsedMs = 0,
                            bool stopped = false);
     void tryLoadCachedScanPlan();
-    void saveCachedScanPlan() const;
+    void saveCachedScanPlan();
+    void onLoadScanRouteRequested(const QString &routePath);
 
     void dismissConnectWaitDialog();
     void applyConnectAsyncStatus(const Ur3eConnectAsyncStatus &status);

@@ -43,7 +43,7 @@ HfFusionSessionResult runSessionFusion(const QString &sessionDirectory,
                                        const QStringList &modes = {});
 QString resolveHfFusionDirectory();
 
-/// {app}/hf_fusion/.venv/Scripts/python.exe (run setup_venv.ps1 once).
+/// resources/hf_fusion/.venv/Scripts/python.exe (run setup_venv.ps1 once there).
 QString resolveHfFusionPythonExecutable();
 
 /// Both cameras have FFC + GSAM segmentation under {session}/{mode}/.

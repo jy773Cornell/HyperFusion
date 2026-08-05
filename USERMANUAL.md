@@ -333,7 +333,7 @@ Offline **spatial registration** and **spectral fusion** of FX10e + SWIR3 (Pytho
 | `fusion_margin_mm` | Crop margin around chip masks when fusing (default **5.0** mm) |
 | `fusion_timeout_ms` | Max wait for one fusion subprocess (default 3600000 ms) |
 
-Pipeline and Python venv are always `{app}/hf_fusion/` and `{app}/hf_fusion/.venv/` (run `setup_venv.ps1` once).
+Pipeline and Python venv are always `resources/hf_fusion/` and `resources/hf_fusion/.venv/` (run `setup_venv.ps1` once there).
 
 
 Spatial scales for alignment come from `[camera_calibration]` (`fx10e_spatial_mm_per_pixel`, `swir3_spatial_mm_per_pixel`).
@@ -433,8 +433,8 @@ Use **Run fusion on session…** in the Preprocessing group to pick a session fo
 | Symptom | Check |
 | ------- | ----- |
 | Fusion checkbox greyed out | Both cameras connected and selected; preprocessing enabled; staged scan mode. |
-| `fusion_cli.py not found` | Rebuild/deploy app — `hf_fusion/` must sit beside `app.exe`. |
-| Python / venv missing | Run `{app}/hf_fusion/setup_venv.ps1` once beside `app.exe`. |
+| `fusion_cli.py not found` | Ensure the repo has `resources/hf_fusion/fusion_cli.py` (app resolves that path). |
+| Python / venv missing | Run `resources/hf_fusion/setup_venv.ps1` once. |
 | `Object count mismatch` | FX10e and SWIR3 must detect the **same number** of chips (sorted left-to-right pairing). |
 | Prerequisites error in log | Missing RGB, FFC, or segmentation under one or both cameras for that mode. |
 

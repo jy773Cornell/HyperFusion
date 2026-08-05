@@ -446,12 +446,14 @@ cd resources\hf_fusion
 python fusion_cli.py --session E:\chiptest --mode reflectance
 ```
 
-For a deployed build, the fusion environment is copied beside the app:
+For the Python environment:
 
 ```powershell
-cd app\build\Release\hf_fusion
+cd resources\hf_fusion
 .\setup_venv.ps1
 ```
+
+The app always uses `resources/hf_fusion/` (code + `.venv`).
 
 ## Current Default Parameters
 

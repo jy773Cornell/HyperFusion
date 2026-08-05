@@ -1418,7 +1418,7 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "sam2_device = cuda\n"
         << "\n"
         << "[fusion]\n"
-        << "# Offline FX10e + SWIR3 fusion. Run hf_fusion/setup_venv.ps1 beside app.exe once.\n"
+        << "# Offline FX10e + SWIR3 fusion. Venv: resources/hf_fusion/.venv (run setup_venv.ps1 once there).\n"
         << "fusion_margin_mm = 5.0\n"
         << "fusion_timeout_ms = 3600000\n"
         << "\n"

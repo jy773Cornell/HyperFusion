@@ -141,17 +141,6 @@ if (-not (Test-Path -LiteralPath $exe)) {
     Write-Error "Expected binary not found: $exe"
 }
 
-$hfFusionDir = Join-Path $exeDir "hf_fusion"
-$hfFusionVenvPython = Join-Path $hfFusionDir ".venv\Scripts\python.exe"
-$hfFusionSetup = Join-Path $hfFusionDir "setup_venv.ps1"
-if ((Test-Path -LiteralPath $hfFusionSetup) -and -not (Test-Path -LiteralPath $hfFusionVenvPython)) {
-    Write-Host "==> Creating hf_fusion Python venv (first-time setup)"
-    & $hfFusionSetup
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warning "hf_fusion venv setup failed. Run manually: $hfFusionSetup"
-    }
-}
-
 $windeployqt = Join-Path $QtPrefixPath "bin\windeployqt.exe"
 if (Test-Path -LiteralPath $windeployqt) {
     Write-Host "==> Deploying Qt runtime DLLs (windeployqt)"

@@ -22,8 +22,6 @@ resources/hf_fusion/
     utils/                       # types, masks, config, envi, resample, dataset, viz, ...
 ```
 
-
-
 ## CLI
 
 ```powershell
@@ -38,8 +36,6 @@ On success, prints one JSON line to stdout:
 {"ok": true, "alignment_json": "...", "roi_count": 3, "pipeline_complete": true}
 ```
 
-
-
 ### Prerequisites
 
 Per camera under `{session}/{mode}/{camera}/preprocessed/`:
@@ -47,8 +43,6 @@ Per camera under `{session}/{mode}/{camera}/preprocessed/`:
 - `*_rgb.png` (from capture post-process)
 - `*_ffc.hdr` / `.raw` (from capture post-process)
 - `segmentation/segmentation_results.json` + `segmentation/masks/` (from GSAM)
-
-
 
 ## Programmatic use
 
@@ -66,8 +60,6 @@ result = run_fusion_pipeline(
 
 print(result.alignment_json)
 ```
-
-
 
 ## Outputs
 
@@ -88,18 +80,16 @@ print(result.alignment_json)
     roi_spectra_plot.png               # single-ROI mean ± 1σ vs wavelength
 ```
 
-
-
 ## Environment
 
-One venv beside the deployed app (not in git — too large):
+One venv in the repo (not in git — too large):
 
 ```powershell
-cd app\build\Release\hf_fusion
+cd resources\hf_fusion
 .\setup_venv.ps1
 ```
 
-
+The app always uses `resources/hf_fusion/` (code + `.venv`), not a copy beside `app.exe`.
 
 ## App integration (`hyperfusion.cfg`)
 
@@ -108,5 +98,3 @@ cd app\build\Release\hf_fusion
 fusion_margin_mm = 5.0
 fusion_timeout_ms = 3600000
 ```
-
-After a Release build, scripts land in `{app}/hf_fusion/`. Run `setup_venv.ps1` there once (`build_app.ps1` does this automatically when `.venv` is missing).

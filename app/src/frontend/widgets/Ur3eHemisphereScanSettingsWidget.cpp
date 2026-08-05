@@ -8,6 +8,7 @@
 #include "frontend/settings/AppSettingsStore.hpp"
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QGroupBox>
@@ -15,6 +16,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QSizePolicy>
 #include <QSpinBox>
 #include <QVBoxLayout>
 
@@ -28,6 +30,23 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
 
   auto *group = new QGroupBox(QStringLiteral("Scanning"), this);
   auto *form = new QFormLayout(group);
+
+  routeCombo_ = new QComboBox(group);
+  routeCombo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  routeCombo_->setToolTip(
+      QStringLiteral("Saved scan routes that match the current robot cfg "
+                     "(hyperfusion.cfg). Changing sphere/grid does not hide them — "
+                     "Load applies that route's grid + planned joints."));
+  loadRouteBtn_ = new QPushButton(QStringLiteral("Load"), group);
+  loadRouteBtn_->setEnabled(false);
+  loadRouteBtn_->setToolTip(QStringLiteral("Load the selected route (cfg must match)."));
+  auto *routeRow = new QWidget(group);
+  auto *routeLayout = new QHBoxLayout(routeRow);
+  routeLayout->setContentsMargins(0, 0, 0, 0);
+  routeLayout->setSpacing(6);
+  routeLayout->addWidget(routeCombo_, 1);
+  routeLayout->addWidget(loadRouteBtn_, 0);
+  form->addRow(QStringLiteral("Scan route"), routeRow);
 
   sphereRadiusSpin_ = new QDoubleSpinBox(group);
   sphereRadiusSpin_->setRange(10.0, 5000.0);
@@ -173,12 +192,19 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
           [this]() { emit planScanRequested(); });
   connect(executeBtn_, &QPushButton::clicked, this,
           [this]() { emit executeScanRequested(); });
+  connect(loadRouteBtn_, &QPushButton::clicked, this,
+          &Ur3eHemisphereScanSettingsWidget::onLoadRouteClicked);
+  connect(routeCombo_, qOverload<int>(&QComboBox::currentIndexChanged), this,
+          [this](const int index) {
+              loadRouteBtn_->setEnabled(index >= 0 && !routeCombo_->currentData().toString().isEmpty());
+          });
 
   loadFromSettings();
   applyBoundaryLimits(
       hf::ur3e::workspaceBoundaryFromConfig(hf::hardwareConfig().ur3e));
   syncWristSweepEnabledState();
   updateImageEstimateLabel();
+  refreshAvailableRoutes();
   saveToSettings();
 }
 
@@ -290,6 +316,34 @@ bool Ur3eHemisphereScanSettingsWidget::rememberLastPlan() const
     return hf::hardwareConfig().ur3e.rememberLastScanPlan;
 }
 
+void Ur3eHemisphereScanSettingsWidget::setParams(const hf::ur3e::Ur3eHemisphereScanParams &params)
+{
+    hf::ur3e::Ur3eHemisphereScanParams normalized = params;
+    hf::ur3e::normalizeHemisphereScanParams(normalized);
+    hf::ur3e::clampHemisphereScanParamsToBoundary(normalized, boundaryLimits_);
+
+    const QSignalBlocker blockRadius(sphereRadiusSpin_);
+    const QSignalBlocker blockHorizontal(horizontalPointsSpin_);
+    const QSignalBlocker blockVertical(verticalPointsSpin_);
+    const QSignalBlocker blockThetaMin(thetaMinSpin_);
+    const QSignalBlocker blockThetaMax(thetaMaxSpin_);
+
+    if (sphereRadiusSpin_ != nullptr)
+        sphereRadiusSpin_->setValue(normalized.sphereRadiusM * 1000.0);
+    if (horizontalPointsSpin_ != nullptr)
+        horizontalPointsSpin_->setValue(normalized.horizontalPoints);
+    if (verticalPointsSpin_ != nullptr)
+        verticalPointsSpin_->setValue(normalized.verticalPoints);
+    if (thetaMinSpin_ != nullptr)
+        thetaMinSpin_->setValue(normalized.thetaMinDeg);
+    if (thetaMaxSpin_ != nullptr)
+        thetaMaxSpin_->setValue(normalized.thetaMaxDeg);
+
+    plannedReachablePins_ = -1;
+    updateImageEstimateLabel();
+    saveToSettings();
+}
+
 void Ur3eHemisphereScanSettingsWidget::setPlanEnabled(const bool enabled) {
   if (planBtn_ != nullptr)
     planBtn_->setEnabled(enabled);
@@ -298,6 +352,69 @@ void Ur3eHemisphereScanSettingsWidget::setPlanEnabled(const bool enabled) {
 void Ur3eHemisphereScanSettingsWidget::setExecuteEnabled(const bool enabled) {
   if (executeBtn_ != nullptr)
     executeBtn_->setEnabled(enabled);
+}
+
+void Ur3eHemisphereScanSettingsWidget::setLoadRouteEnabled(const bool enabled)
+{
+  if (routeCombo_ != nullptr)
+    routeCombo_->setEnabled(enabled);
+  if (loadRouteBtn_ != nullptr)
+  {
+    const bool hasRoute =
+        routeCombo_ != nullptr && routeCombo_->currentIndex() >= 0
+        && !routeCombo_->currentData().toString().isEmpty();
+    loadRouteBtn_->setEnabled(enabled && hasRoute);
+  }
+}
+
+void Ur3eHemisphereScanSettingsWidget::refreshAvailableRoutes()
+{
+  if (routeCombo_ == nullptr)
+    return;
+
+  const QString previousPath = routeCombo_->currentData().toString();
+  const QSignalBlocker block(routeCombo_);
+  routeCombo_->clear();
+
+  const QString robotFp = hf::ur3e::ur3eScanRobotCfgFingerprint(hf::hardwareConfig().ur3e);
+  const auto routes =
+      hf::ur3e::listUr3eScanRoutesMatchingCfg(hf::ur3e::defaultUr3eScanRoutesDir(), robotFp);
+
+  if (routes.isEmpty())
+  {
+    routeCombo_->addItem(QStringLiteral("(no matching routes)"), QString());
+    if (loadRouteBtn_ != nullptr)
+      loadRouteBtn_->setEnabled(false);
+    return;
+  }
+
+  int selectIndex = 0;
+  for (int i = 0; i < routes.size(); ++i)
+  {
+    const hf::ur3e::Ur3eScanRouteInfo &route = routes[i];
+    const QString label =
+        QStringLiteral("%1 — %2 reachable / %3 pins")
+            .arg(route.displayName)
+            .arg(route.reachableCount)
+            .arg(route.pointCount);
+    routeCombo_->addItem(label, route.path);
+    if (!previousPath.isEmpty() && route.path == previousPath)
+      selectIndex = i;
+  }
+  routeCombo_->setCurrentIndex(selectIndex);
+  if (loadRouteBtn_ != nullptr)
+    loadRouteBtn_->setEnabled(routeCombo_->isEnabled()
+                              && !routeCombo_->currentData().toString().isEmpty());
+}
+
+void Ur3eHemisphereScanSettingsWidget::onLoadRouteClicked()
+{
+  if (routeCombo_ == nullptr)
+    return;
+  const QString path = routeCombo_->currentData().toString();
+  if (path.isEmpty())
+    return;
+  emit loadScanRouteRequested(path);
 }
 
 void Ur3eHemisphereScanSettingsWidget::setParamsEnabled(const bool enabled) {
@@ -313,6 +430,7 @@ void Ur3eHemisphereScanSettingsWidget::setParamsEnabled(const bool enabled) {
     thetaMaxSpin_->setEnabled(enabled);
   if (wristSweepEnabledCheck_ != nullptr)
     wristSweepEnabledCheck_->setEnabled(enabled);
+  setLoadRouteEnabled(enabled);
   syncWristSweepEnabledState();
   if (!enabled) {
     if (wristSweepStepSpin_ != nullptr)

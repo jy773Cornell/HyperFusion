@@ -77,42 +77,32 @@ QString findHyperFusionCfgPath()
     return {};
 }
 
-QString resolveDevTreeHfFusionDirectory()
+QString resolveRepoHfFusionDirectory()
 {
+#ifdef HF_APP_SOURCE_DIR
+    {
+        const QString fromSource =
+            QDir(QString::fromUtf8(HF_APP_SOURCE_DIR))
+                .filePath(QStringLiteral("../resources/hf_fusion"));
+        if (QFileInfo::exists(QDir(fromSource).filePath(QStringLiteral("fusion_cli.py"))))
+            return QFileInfo(fromSource).absoluteFilePath();
+    }
+#endif
+
     if (QCoreApplication::instance() == nullptr)
         return {};
 
+    // Walk up from app.exe (e.g. app/build/Release → repo root).
     QDir dir(QCoreApplication::applicationDirPath());
     for (int depth = 0; depth < 8; ++depth)
     {
-        const QString direct = dir.filePath(QStringLiteral("hf_fusion"));
-        if (QFileInfo::exists(QDir(direct).filePath(QStringLiteral("fusion_cli.py"))))
-            return QFileInfo(direct).absoluteFilePath();
-
         const QString resources = dir.filePath(QStringLiteral("resources/hf_fusion"));
         if (QFileInfo::exists(QDir(resources).filePath(QStringLiteral("fusion_cli.py"))))
             return QFileInfo(resources).absoluteFilePath();
 
-        const QString sibling = dir.filePath(QStringLiteral("../resources/hf_fusion"));
-        if (QFileInfo::exists(QDir(sibling).filePath(QStringLiteral("fusion_cli.py"))))
-            return QFileInfo(sibling).absoluteFilePath();
-
         if (!dir.cdUp())
             break;
     }
-
-    return {};
-}
-
-QString resolveBundledHfFusionDirectory()
-{
-    if (QCoreApplication::instance() == nullptr)
-        return {};
-
-    const QString bundled =
-        QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("hf_fusion"));
-    if (QFileInfo::exists(QDir(bundled).filePath(QStringLiteral("fusion_cli.py"))))
-        return QFileInfo(bundled).absoluteFilePath();
 
     return {};
 }
@@ -150,11 +140,8 @@ bool parseFusionCliJson(const QByteArray &stdoutPayload, HfFusionRunResult *resu
 
 QString resolveHfFusionDirectory()
 {
-    const QString bundled = resolveBundledHfFusionDirectory();
-    if (!bundled.isEmpty())
-        return bundled;
-
-    return resolveDevTreeHfFusionDirectory();
+    // Always use repo resources/hf_fusion (code + .venv live there).
+    return resolveRepoHfFusionDirectory();
 }
 
 QString resolveHfFusionPythonExecutable()
@@ -637,8 +624,8 @@ HfFusionRunResult runHfFusion(const HfFusionRunRequest &request)
     {
         result.errorMessage =
             QStringLiteral("hf_fusion Python venv not found at %1/.venv. "
-                           "Run hf_fusion/setup_venv.ps1 beside app.exe.")
-                .arg(fusionDir.isEmpty() ? QStringLiteral("hf_fusion") : fusionDir);
+                           "Run: cd resources\\hf_fusion ; .\\setup_venv.ps1")
+                .arg(fusionDir.isEmpty() ? QStringLiteral("resources/hf_fusion") : fusionDir);
         result.logLines.push_back(QStringLiteral("Capture fusion: %1").arg(result.errorMessage));
         return result;
     }
@@ -710,7 +697,7 @@ HfFusionRunResult runHfFusion(const HfFusionRunRequest &request)
         {
             result.logLines.push_back(
                 QStringLiteral("Capture fusion: OpenCV (cv2) not found. "
-                               "Re-run hf_fusion/setup_venv.ps1 beside app.exe."));
+                               "Re-run: cd resources\\hf_fusion ; .\\setup_venv.ps1"));
         }
         result.logLines.push_back(QStringLiteral("Capture fusion: failed."));
         return result;

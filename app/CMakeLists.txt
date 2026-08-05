@@ -437,29 +437,5 @@ if(EXISTS "${HF_PROCESSING_REFERENCE_DIR}")
         COMMENT "Copying preprocessing illuminant reference tables")
 endif()
 
-# Ship hf_fusion Python pipeline beside app.exe (excludes .venv — create locally).
-set(HF_FUSION_REPO_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../resources/hf_fusion")
-if(EXISTS "${HF_FUSION_REPO_DIR}/fusion_cli.py")
-    add_custom_command(
-        TARGET app POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:app>/hf_fusion"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${HF_FUSION_REPO_DIR}/fusion_cli.py"
-                "$<TARGET_FILE_DIR:app>/hf_fusion/fusion_cli.py"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${HF_FUSION_REPO_DIR}/requirements.txt"
-                "$<TARGET_FILE_DIR:app>/hf_fusion/requirements.txt"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${HF_FUSION_REPO_DIR}/setup_venv.ps1"
-                "$<TARGET_FILE_DIR:app>/hf_fusion/setup_venv.ps1"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${HF_FUSION_REPO_DIR}/README.md"
-                "$<TARGET_FILE_DIR:app>/hf_fusion/README.md"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${HF_FUSION_REPO_DIR}/src"
-                "$<TARGET_FILE_DIR:app>/hf_fusion/src"
-        COMMENT "Copying hf_fusion pipeline to output directory")
-endif()
-
 file(TO_CMAKE_PATH "${CMAKE_CURRENT_SOURCE_DIR}" HF_APP_SOURCE_DIR)
 target_compile_definitions(app PRIVATE "HF_APP_SOURCE_DIR=\"${HF_APP_SOURCE_DIR}\"")

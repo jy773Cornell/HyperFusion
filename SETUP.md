@@ -141,27 +141,20 @@ At this point you can operate the **full-spectrum module** (FX10e + SWIR3) for s
 
 ## 5. Fusion — Dual-camera fusion
 
-Offline **FX10e + SWIR3** pipeline: spatial registration (centroid match + phase correction) and spectral fusion into unified ENVI cubes per chip ROI. Implemented in `resources/hf_fusion/`; copied to `{app}/hf_fusion/` on build (without `.venv`).
+Offline **FX10e + SWIR3** pipeline: spatial registration (centroid match + phase correction) and spectral fusion into unified ENVI cubes per chip ROI. Lives in `resources/hf_fusion/`.
 
 ### 5.1 Python environment
 
-The app uses **one venv only**: `{folder containing app.exe}/hf_fusion/.venv/Scripts/python.exe`.
+The app uses **one venv only**: `resources/hf_fusion/.venv/Scripts/python.exe`.
 
-- Pipeline code is copied to `{app}/hf_fusion/` on build (from `resources/hf_fusion/`).
-- The `.venv` **is not copied**  — create it once per deploy folder.
-
-**First-time setup** (after `.\build_app.ps1` or any Release build):
+**First-time setup:**
 
 ```powershell
-cd app\build\Release\hf_fusion
+cd resources\hf_fusion
 .\setup_venv.ps1
 ```
 
-`build_app.ps1` runs this automatically when `.venv` is missing.
-
-On a **lab PC**, copy the whole Release folder (including `hf_fusion/` scripts) and run `hf_fusion\setup_venv.ps1` once on that machine.
-
-Verify in the app Log: `Capture fusion: python=…\hf_fusion\.venv\Scripts\python.exe`
+Verify in the app Log: `Capture fusion: python=…\resources\hf_fusion\.venv\Scripts\python.exe`
 
 Dependencies: `numpy`, `Pillow`, `opencv-python` (see `requirements.txt`).
 
@@ -176,7 +169,7 @@ Add or edit `[fusion]` in `hyperfusion.cfg` beside `app.exe`:
 | `fusion_timeout_ms` | Subprocess timeout (default 3600000 ms)            |
 
 
-Pipeline path and Python venv are fixed at `{app}/hf_fusion/` and `{app}/hf_fusion/.venv/` (not configurable).
+Pipeline path and Python venv are fixed at `resources/hf_fusion/` and `resources/hf_fusion/.venv/` (not configurable).
 
 Alignment uses `fx10e_spatial_mm_per_pixel` and `swir3_spatial_mm_per_pixel` from `[camera_calibration]`.
 
@@ -192,7 +185,7 @@ The app can run fusion automatically after capture (Capture tab → **Run spectr
 ### 5.4 Manual CLI (debugging)
 
 ```powershell
-cd app\build\Release\hf_fusion
+cd resources\hf_fusion
 .\.venv\Scripts\Activate.ps1
 python fusion_cli.py --session E:\path\to\session --mode reflectance
 ```
@@ -337,7 +330,7 @@ Common variants:
 .\build_app.ps1 -NoClean                  # reuse existing build directory
 ```
 
-The script configures CMake, builds **Release**, runs `windeployqt`, and copies Lumo / MCC / Zaber runtime DLLs, `hyperfusion.cfg`, calibration packs, and the `hf_fusion` Python pipeline next to the executable.
+The script configures CMake, builds **Release**, runs `windeployqt`, and copies Lumo / MCC / Zaber runtime DLLs, `hyperfusion.cfg`, and calibration packs next to the executable. Fusion uses `resources/hf_fusion/` in the repo (not copied beside `app.exe`).
 
 **Output folder:** `build\Release\` (under `app\`)
 

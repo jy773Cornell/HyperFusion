@@ -415,6 +415,10 @@ void Ur3ePanelController::wireSettingsTabConnections()
                 this,
                 [this]() { onExecuteHemisphereScanRequested(); });
         connect(host_->ur3eHemisphereScanSettings_,
+                &ui::Ur3eHemisphereScanSettingsWidget::loadScanRouteRequested,
+                this,
+                &Ur3ePanelController::onLoadScanRouteRequested);
+        connect(host_->ur3eHemisphereScanSettings_,
                 &ui::Ur3eHemisphereScanSettingsWidget::paramsChanged,
                 this,
                 [this]() {
@@ -1159,34 +1163,112 @@ void Ur3ePanelController::finishScanPlan(const Ur3eHemisphereScanPlan &plan,
         host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
 }
 
-void Ur3ePanelController::saveCachedScanPlan() const
+void Ur3ePanelController::saveCachedScanPlan()
 {
     if (host_ == nullptr || host_->ur3eHemisphereScanSettings_ == nullptr)
-        return;
-    if (!host_->ur3eHemisphereScanSettings_->rememberLastPlan())
         return;
     if (plannedScanPlan_.points.empty())
         return;
 
-    const QString fingerprint = ur3eScanPlanFingerprint(hf::hardwareConfig().ur3e,
-                                                        host_->ur3eHemisphereScanSettings_->params());
+    const auto &ur3eCfg = hf::hardwareConfig().ur3e;
+    const Ur3eHemisphereScanParams params = host_->ur3eHemisphereScanSettings_->params();
+    const QString fingerprint = ur3eScanPlanFingerprint(ur3eCfg, params);
+    const QString robotFp = ur3eScanRobotCfgFingerprint(ur3eCfg);
+
+    // Always persist last plan + named route after a successful Plan.
     QString error;
     if (!saveUr3eScanPlanCache(defaultUr3eScanPlanCachePath(), fingerprint, plannedScanPlan_,
                                &error))
     {
         host_->appendLog(QStringLiteral("UR3e scan plan cache: save failed — %1").arg(error));
+    }
+    else
+    {
+        host_->appendLog(QStringLiteral("UR3e scan plan cache: saved (%1 points).")
+                             .arg(plannedScanPlan_.points.size()));
+    }
+
+    // Named library entry (loadable when robot cfg still matches).
+    const QString displayName = defaultUr3eScanRouteDisplayName(params);
+    const QString safeStem =
+        QStringLiteral("R%1_%2x%3_t%4-%5")
+            .arg(qRound(params.sphereRadiusM * 1000.0))
+            .arg(params.horizontalPoints)
+            .arg(params.verticalPoints)
+            .arg(qRound(params.thetaMinDeg))
+            .arg(qRound(params.thetaMaxDeg));
+    const QString routePath =
+        QDir(defaultUr3eScanRoutesDir()).filePath(safeStem + QStringLiteral(".json"));
+    QString routeError;
+    if (!saveUr3eNamedScanRoute(routePath,
+                                displayName,
+                                fingerprint,
+                                robotFp,
+                                params,
+                                plannedScanPlan_,
+                                &routeError))
+    {
+        host_->appendLog(QStringLiteral("UR3e scan route: save failed — %1").arg(routeError));
+    }
+    else
+    {
+        host_->appendLog(QStringLiteral("UR3e scan route: saved \"%1\".").arg(displayName));
+        host_->ur3eHemisphereScanSettings_->refreshAvailableRoutes();
+    }
+}
+
+void Ur3ePanelController::onLoadScanRouteRequested(const QString &routePath)
+{
+    if (host_ == nullptr || host_->ur3eHemisphereScanSettings_ == nullptr)
+        return;
+    if (routePath.trimmed().isEmpty())
+        return;
+
+    const QString robotFp = ur3eScanRobotCfgFingerprint(hf::hardwareConfig().ur3e);
+    Ur3eHemisphereScanPlan plan;
+    Ur3eHemisphereScanParams routeParams;
+    QString displayName;
+    QString error;
+    if (!loadUr3eNamedScanRoute(routePath, robotFp, plan, &routeParams, &displayName, &error))
+    {
+        host_->appendLog(QStringLiteral("UR3e scan route: not loaded — %1").arg(error));
         return;
     }
-    host_->appendLog(QStringLiteral("UR3e scan plan cache: saved (%1 points).")
-                         .arg(plannedScanPlan_.points.size()));
+
+    // Apply route grid to UI, then install planned joints.
+    host_->ur3eHemisphereScanSettings_->setParams(routeParams);
+    plannedScanPlan_ = plan;
+    scanPlanReady_ = plan.reachableCount > 0;
+    host_->ur3eHemisphereScanSettings_->setPlannedReachablePins(plan.reachableCount);
+
+    host_->appendLog(
+        QStringLiteral("UR3e scan route: loaded \"%1\" — %2 points (%3 reachable: "
+                       "%4 home→pin, %5 chain-only; %6 unreachable).")
+            .arg(displayName)
+            .arg(plan.points.size())
+            .arg(plan.reachableCount)
+            .arg(plan.homePathOkCount)
+            .arg(plan.chainOnlyCount)
+            .arg(plan.unreachableCount));
+
+    if (host_->ur3eScanRoutePlanWidget_ != nullptr)
+    {
+        host_->ur3eScanRoutePlanWidget_->setScanParams(routeParams);
+        host_->ur3eScanRoutePlanWidget_->setScanPlan(plan);
+    }
+
+    host_->ur3eHemisphereScanSettings_->refreshAvailableRoutes();
+    updateRobotUi();
+    if (host_->capturePanel() != nullptr)
+        host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
 }
 
 void Ur3ePanelController::tryLoadCachedScanPlan()
 {
     if (host_ == nullptr || host_->ur3eHemisphereScanSettings_ == nullptr)
         return;
-    if (!host_->ur3eHemisphereScanSettings_->rememberLastPlan())
-        return;
+
+    host_->ur3eHemisphereScanSettings_->refreshAvailableRoutes();
 
     const QString fingerprint = ur3eScanPlanFingerprint(hf::hardwareConfig().ur3e,
                                                         host_->ur3eHemisphereScanSettings_->params());

@@ -2,10 +2,12 @@
 #pragma once
 
 #include "backend/3dscanning/Ur3eHemisphereScan.hpp"
+#include "backend/3dscanning/Ur3eScanPlanCache.hpp"
 #include "backend/3dscanning/Ur3eWorkspaceBoundary.hpp"
 
 #include <QWidget>
 
+class QComboBox;
 class QDoubleSpinBox;
 class QPushButton;
 class QSpinBox;
@@ -24,16 +26,21 @@ public:
     [[nodiscard]] hf::ur3e::Ur3eHemisphereScanParams params() const;
     [[nodiscard]] hf::ur3e::Ur3eWristSweepParams wristSweepParams() const;
     [[nodiscard]] bool rememberLastPlan() const;
+    void setParams(const hf::ur3e::Ur3eHemisphereScanParams &params);
     void applyBoundaryLimits(const hf::ur3e::Ur3eWorkspaceBoundary &boundary);
     void setPlanEnabled(bool enabled);
     void setExecuteEnabled(bool enabled);
     void setParamsEnabled(bool enabled);
+    void setLoadRouteEnabled(bool enabled);
+    /// Refresh combo from disk (routes matching current robot cfg only).
+    void refreshAvailableRoutes();
     /// After Plan: use reachable pin count for total-image estimate (−1 = grid estimate).
     void setPlannedReachablePins(int reachablePins);
 
 signals:
     void planScanRequested();
     void executeScanRequested();
+    void loadScanRouteRequested(const QString &routePath);
     void paramsChanged();
 
 private:
@@ -43,9 +50,12 @@ private:
     void loadFromSettings();
     void saveToSettings() const;
     void syncWristSweepEnabledState();
+    void onLoadRouteClicked();
 
     hf::ur3e::Ur3eWorkspaceBoundary boundaryLimits_;
     int plannedReachablePins_ = -1;
+    QComboBox *routeCombo_ = nullptr;
+    QPushButton *loadRouteBtn_ = nullptr;
     QDoubleSpinBox *sphereRadiusSpin_ = nullptr;
     QSpinBox *horizontalPointsSpin_ = nullptr;
     QSpinBox *verticalPointsSpin_ = nullptr;
