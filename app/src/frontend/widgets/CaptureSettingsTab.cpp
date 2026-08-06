@@ -227,7 +227,7 @@ QWidget *MainWindow::createCaptureSettingsTab()
     auto *targetLengthRowLayout = new QHBoxLayout();
     targetLengthRowLayout->setSpacing(6);
     auto *targetLengthLabel = new QLabel(QStringLiteral("Target length"), capturePositionContent_);
-    targetLengthLabel->setMinimumWidth(120);
+    targetLengthLabel->setMinimumWidth(96);
     captureTargetLengthSpin_ = new QDoubleSpinBox(capturePositionContent_);
     captureTargetLengthSpin_->setRange(0.0, zaber_stage::kTravelLengthMm);
     captureTargetLengthSpin_->setDecimals(2);
@@ -236,7 +236,6 @@ QWidget *MainWindow::createCaptureSettingsTab()
     captureTargetLengthSpin_->setValue(125.0);
     targetLengthRowLayout->addWidget(targetLengthLabel);
     targetLengthRowLayout->addWidget(captureTargetLengthSpin_, 1);
-    targetLengthRowLayout->addSpacing(40);
     positionContentLayout->addLayout(targetLengthRowLayout);
 
     const auto configureEditableSpeedSpin = [](QDoubleSpinBox *spin, const QString &tooltip) {
@@ -251,7 +250,7 @@ QWidget *MainWindow::createCaptureSettingsTab()
     scanningSpeedRowLayout->setSpacing(6);
     auto *scanningSpeedLabel =
         new QLabel(QStringLiteral("Scanning speed"), capturePositionContent_);
-    scanningSpeedLabel->setMinimumWidth(120);
+    scanningSpeedLabel->setMinimumWidth(96);
     captureScanningSpeedSpin_ = new QDoubleSpinBox(capturePositionContent_);
     configureEditableSpeedSpin(
         captureScanningSpeedSpin_,
@@ -303,48 +302,43 @@ QWidget *MainWindow::createCaptureSettingsTab()
         tr("Write flat-field corrected sample data as ENVI under preprocessed/ when post-processing runs."));
     preprocessingLayout->addWidget(captureSaveFfcImageCheck_);
 
-    captureRunGsamCheck_ =
-        new QCheckBox(QStringLiteral("Run GSAM segmentation"), preprocessingBox);
+    auto *gsamRow = new QWidget(preprocessingBox);
+    auto *gsamLayout = new QHBoxLayout(gsamRow);
+    gsamLayout->setContentsMargins(0, 0, 0, 0);
+    gsamLayout->setSpacing(6);
+
+    captureRunGsamCheck_ = new QCheckBox(QStringLiteral("GSAM"), gsamRow);
     captureRunGsamCheck_->setChecked(false);
     captureRunGsamCheck_->setEnabled(false);
     captureRunGsamCheck_->setToolTip(
         tr("After preprocessing, send the RGB preview to the GSAM2 WSL server and write masks "
            "and ROI spectra under preprocessed/segmentation/. "
            "Requires a connected GSAM2 server."));
+    gsamLayout->addWidget(captureRunGsamCheck_);
 
-    auto *gsamServerRow = new QWidget(preprocessingBox);
-    auto *gsamServerLayout = new QHBoxLayout(gsamServerRow);
-    gsamServerLayout->setContentsMargins(0, 0, 0, 0);
-    gsamServerLayout->setSpacing(8);
-    gsamServerLayout->addWidget(captureRunGsamCheck_);
-    gsamServerLayout->addSpacing(16);
-    captureGsamServerStatusLabel_ = new QLabel(QStringLiteral("GSAM server: not available"), gsamServerRow);
-    captureGsamServerStatusLabel_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
-    captureGsamServerStatusLabel_->setToolTip(
-        tr("GSAM2 sidecar status. The app tries to start the server automatically at launch."));
-    gsamServerLayout->addWidget(captureGsamServerStatusLabel_);
-    gsamServerLayout->addStretch(1);
-    preprocessingLayout->addWidget(gsamServerRow);
+    captureGsamPromptEdit_ = new QLineEdit(gsamRow);
+    captureGsamPromptEdit_->setPlaceholderText(QStringLiteral("prompt"));
+    captureGsamPromptEdit_->setToolTip(
+        tr("GroundingDINO text prompt (e.g. \"grape. leaf.\")."));
+    gsamLayout->addWidget(captureGsamPromptEdit_, 1);
 
-    auto *gsamPromptRow = new QWidget(preprocessingBox);
-    auto *gsamPromptLayout = new QHBoxLayout(gsamPromptRow);
-    gsamPromptLayout->setContentsMargins(0, 0, 0, 0);
-    gsamPromptLayout->setSpacing(6);
-    auto *gsamPromptLabel = new QLabel(QStringLiteral("GSAM prompt"), gsamPromptRow);
-    gsamPromptLabel->setMinimumWidth(88);
-    captureGsamPromptEdit_ = new QLineEdit(gsamPromptRow);
-    captureGsamPromptEdit_->setPlaceholderText(QStringLiteral("sample."));
-    captureGsamPromptEdit_->setToolTip(tr("GroundingDINO text prompt (e.g. \"grape. leaf.\")."));
-    auto *maxSamplesLabel = new QLabel(QStringLiteral("Max samples"), gsamPromptRow);
-    captureGsamSampleCountSpin_ = new QSpinBox(gsamPromptRow);
+    auto *roiLabel = new QLabel(QStringLiteral("ROI"), gsamRow);
+    captureGsamSampleCountSpin_ = new QSpinBox(gsamRow);
     captureGsamSampleCountSpin_->setRange(1, 100);
     captureGsamSampleCountSpin_->setValue(5);
-    captureGsamSampleCountSpin_->setToolTip(tr("Maximum number of detections (intended sample count)."));
-    gsamPromptLayout->addWidget(gsamPromptLabel);
-    gsamPromptLayout->addWidget(captureGsamPromptEdit_, 1);
-    gsamPromptLayout->addWidget(maxSamplesLabel);
-    gsamPromptLayout->addWidget(captureGsamSampleCountSpin_);
-    preprocessingLayout->addWidget(gsamPromptRow);
+    captureGsamSampleCountSpin_->setToolTip(
+        tr("Maximum number of detections / ROIs (intended sample count)."));
+    gsamLayout->addWidget(roiLabel);
+    gsamLayout->addWidget(captureGsamSampleCountSpin_);
+
+    captureGsamServerStatusLabel_ = new QLabel(QStringLiteral("\u25CF"), gsamRow);
+    captureGsamServerStatusLabel_->setAlignment(Qt::AlignCenter);
+    captureGsamServerStatusLabel_->setFixedWidth(16);
+    captureGsamServerStatusLabel_->setToolTip(
+        tr("GSAM2 sidecar status. The app tries to start the server automatically at launch."));
+    gsamLayout->addWidget(captureGsamServerStatusLabel_);
+
+    preprocessingLayout->addWidget(gsamRow);
 
     captureRunHfFusionCheck_ =
         new QCheckBox(QStringLiteral("Run spectral fusion (FX10e + SWIR3)"), preprocessingBox);
@@ -355,13 +349,6 @@ QWidget *MainWindow::createCaptureSettingsTab()
            "Requires GSAM segmentation on both cameras and the hf_fusion Python "
            "environment beside the app."));
     preprocessingLayout->addWidget(captureRunHfFusionCheck_);
-
-    captureRunFusionManualBtn_ =
-        new QPushButton(QStringLiteral("Run fusion on session\u2026"), preprocessingBox);
-    captureRunFusionManualBtn_->setToolTip(
-        tr("Re-run spectral fusion on a saved session (all illumination modes with "
-           "fx10e + swir3). Available anytime; does not require a new scan."));
-    preprocessingLayout->addWidget(captureRunFusionManualBtn_);
 
     auto *metadataBox = new QGroupBox(QStringLiteral("Metadata"), page);
     captureMetadataBox_ = metadataBox;

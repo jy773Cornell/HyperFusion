@@ -15,7 +15,6 @@
 #include "backend/camera/processing/CapturePostProcessor.hpp"
 #include "backend/camera/processing/CapturePostProcessorWorker.hpp"
 #include "backend/camera/processing/Gsam2ServerManager.hpp"
-#include "backend/camera/processing/HfFusionRunner.hpp"
 #include "backend/camera/processing/HfFusionWorker.hpp"
 #include "frontend/controllers/BfsPanelController.hpp"
 #include "frontend/controllers/CameraPanelController.hpp"
@@ -27,15 +26,16 @@
 #include "frontend/widgets/MainWindow.hpp"
 #include "frontend/widgets/OperationWaitDialog.hpp"
 #include "frontend/widgets/StreamPaneHelpers.hpp"
+#include "frontend/widgets/Ur3eHemisphereScanSettingsWidget.hpp"
 #include "frontend/widgets/WaterfallDisplayWidget.hpp"
 
 #include <QCheckBox>
 #include <QDir>
 #include <QDoubleSpinBox>
-#include <QFileDialog>
 #include <QFileInfo>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QAbstractButton>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -364,10 +364,6 @@ void CapturePanelController::wireSettingsTabConnections() {
   if (host_->captureRecorderRecordBtn_ != nullptr) {
     connect(host_->captureRecorderRecordBtn_, &QPushButton::clicked, this,
             &CapturePanelController::startRecord, Qt::UniqueConnection);
-  }
-  if (host_->captureRunFusionManualBtn_ != nullptr) {
-    connect(host_->captureRunFusionManualBtn_, &QPushButton::clicked, this,
-            &CapturePanelController::runManualFusion, Qt::UniqueConnection);
   }
 }
 
@@ -1067,6 +1063,9 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
              "and ROI spectra under preprocessed/segmentation/."));
     }
   }
+  const bool gsamChecked =
+      host_->captureRunGsamCheck_ != nullptr &&
+      host_->captureRunGsamCheck_->isChecked();
   const bool dualCameraReflectanceSelected =
       bothFx10eAndSwir3CaptureCamerasConnected() &&
       host_->captureCamera1Check_ != nullptr &&
@@ -1076,10 +1075,19 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
   const bool fusionChildEnabled =
       preprocessingEnabled && host_->capturePreprocessAfterScanCheck_ != nullptr &&
       host_->capturePreprocessAfterScanCheck_->isChecked();
-  const bool fusionEnabled = fusionChildEnabled && dualCameraReflectanceSelected;
+  const bool fusionEnabled = fusionChildEnabled && dualCameraReflectanceSelected &&
+                             gsamSegmentationEnabled && gsamChecked;
   if (host_->captureRunHfFusionCheck_ != nullptr) {
+    if (!fusionEnabled) {
+      const QSignalBlocker blocker(host_->captureRunHfFusionCheck_);
+      host_->captureRunHfFusionCheck_->setChecked(false);
+    }
     host_->captureRunHfFusionCheck_->setEnabled(fusionEnabled);
-    if (!dualCameraReflectanceSelected) {
+    if (!gsamChecked || !gsamSegmentationEnabled) {
+      host_->captureRunHfFusionCheck_->setToolTip(
+          tr("Enable GSAM segmentation first. Fusion needs chip ROIs from GSAM "
+             "on both FX10e and SWIR3."));
+    } else if (!dualCameraReflectanceSelected) {
       host_->captureRunHfFusionCheck_->setToolTip(
           tr("Requires FX10e and SWIR3 connected and both selected for capture."));
     } else {
@@ -1090,24 +1098,10 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
              "beside the app."));
     }
   }
-  if (host_->captureRunFusionManualBtn_ != nullptr) {
-    const bool fusionRunning =
-        hfFusionWorker_ != nullptr && hfFusionWorker_->isBusy();
-    host_->captureRunFusionManualBtn_->setEnabled(!fusionRunning);
-    host_->captureRunFusionManualBtn_->setText(
-        fusionRunning ? tr("Running\u2026")
-                      : tr("Run fusion on session\u2026"));
-    host_->captureRunFusionManualBtn_->setToolTip(
-        fusionRunning
-            ? tr("Spectral fusion is running in the background.")
-            : tr("Re-run spectral fusion on a saved capture session without scanning again. "
-                 "Runs fusion for every illumination folder that contains fx10e and swir3 "
-                 "(e.g. reflectance and transmittance)."));
-  }
   if (host_->captureGsamPromptEdit_ != nullptr)
-    host_->captureGsamPromptEdit_->setEnabled(true);
+    host_->captureGsamPromptEdit_->setEnabled(gsamSegmentationEnabled);
   if (host_->captureGsamSampleCountSpin_ != nullptr)
-    host_->captureGsamSampleCountSpin_->setEnabled(true);
+    host_->captureGsamSampleCountSpin_->setEnabled(gsamSegmentationEnabled);
 
   updateGsamServerUi();
 
@@ -1228,10 +1222,12 @@ void hf::capture::CapturePanelController::updateGsamServerUi() {
     break;
   }
 
-  host_->captureGsamServerStatusLabel_->setText(
+  host_->captureGsamServerStatusLabel_->setText(QStringLiteral("\u25CF"));
+  host_->captureGsamServerStatusLabel_->setToolTip(
       QStringLiteral("GSAM server: %1").arg(statusText));
   host_->captureGsamServerStatusLabel_->setStyleSheet(
-      QStringLiteral("color: %1; background: transparent;").arg(color));
+      QStringLiteral("color: %1; background: transparent; font-size: 14px;")
+          .arg(color));
 }
 
 void hf::capture::CapturePanelController::updateSessionUiLock() {
@@ -1492,7 +1488,7 @@ void hf::capture::CapturePanelController::updateRecorderStatus() {
 
 void hf::capture::CapturePanelController::notifyRecordComplete() {
   const CaptureWriterSessionSummary &summary = lastEndedCaptureSessionSummary_;
-  if (summary.sessionDirectory.isEmpty()) {
+  if (summary.sessionDirectory.isEmpty() && lastCapture3dSummaryText_.isEmpty()) {
     QMessageBox::information(host_, tr("Recording complete"),
                              tr("The capture scan sequence finished."));
     return;
@@ -1507,11 +1503,17 @@ void hf::capture::CapturePanelController::notifyRecordComplete() {
                               .arg(it->frameCount));
   }
 
-  const QString details = streamLines.isEmpty()
-                              ? summary.sessionDirectory
-                              : QStringLiteral("%1\n\n%2")
-                                    .arg(summary.sessionDirectory,
-                                         streamLines.join(QLatin1Char('\n')));
+  QStringList sections;
+  if (!summary.sessionDirectory.isEmpty()) {
+    sections.push_back(summary.sessionDirectory);
+    if (!streamLines.isEmpty())
+      sections.push_back(streamLines.join(QLatin1Char('\n')));
+  }
+  if (!lastCapture3dSummaryText_.isEmpty())
+    sections.push_back(lastCapture3dSummaryText_);
+
+  const QString details = sections.join(QStringLiteral("\n\n"));
+  lastCapture3dSummaryText_.clear();
 
   QMessageBox box(host_);
   box.setIcon(QMessageBox::Information);
@@ -1551,12 +1553,8 @@ void hf::capture::CapturePanelController::notifyPreviewComplete() {
 void hf::capture::CapturePanelController::beginRecordCompleteNotify() {
   pendingCaptureRecordCompleteNotify_ = true;
 
-  captureRecordCompletePostProcessPending_ =
-      host_->capturePreprocessAfterScanCheck_ != nullptr &&
-      host_->capturePreprocessAfterScanCheck_->isChecked() &&
-      useStageForCapture() &&
-      !lastEndedCaptureSessionSummary_.sessionDirectory.isEmpty() &&
-      capturePostProcessorWorker_ != nullptr;
+  // Post-process may already be running (started at HSI end) or already finished during 3D.
+  captureRecordCompletePostProcessPending_ = capturePostProcessInFlight_;
 
   captureRecordCompleteHomingPending_ =
       !host_->performingGracefulShutdown_ && host_->stageWorker() != nullptr &&
@@ -1806,47 +1804,137 @@ void hf::capture::CapturePanelController::initializeCaptureModeQueue() {
 
 bool hf::capture::CapturePanelController::confirmCaptureStart(
     const LighthouseControllerPowerStatus &powerStatus) const {
-  QStringList controllerLines;
-  controllerLines << lighthouseControllerAliveText(
-      powerStatus, 0, QStringLiteral("Reflectance 1"));
-  controllerLines << lighthouseControllerAliveText(
-      powerStatus, 1, QStringLiteral("Reflectance 2"));
-  controllerLines << lighthouseControllerAliveText(
-      powerStatus, 2, QStringLiteral("Transmittance 1"));
-  controllerLines << lighthouseControllerAliveText(
-      powerStatus, 3, QStringLiteral("Transmittance 2"));
-
-  QStringList modeLabels;
-  for (const CaptureIlluminationMode mode : capturePendingIlluminationModes_)
-    modeLabels.push_back(captureIlluminationFolderName(mode));
-
-  const QString modeText =
-      modeLabels.isEmpty() ? QStringLiteral("(no illumination mode selected)")
-                           : modeLabels.join(QStringLiteral(" \u2192 "));
-
   const bool record = captureRecorderMode_ == CaptureRecorderMode::Record;
   const QString action =
       record ? QStringLiteral("recording") : QStringLiteral("preview");
 
   QMessageBox box(host_);
   box.setIcon(QMessageBox::Information);
-  box.setWindowTitle(QStringLiteral("Lighthouse status"));
-  box.setText(QStringLiteral("Ready to start %1?").arg(action));
-  box.setInformativeText(
-      QStringLiteral(
-          "%1 sequence: %2\n\n"
-          "Illumination hoods are prepared manually during the scan \u2014 "
-          "follow the "
-          "on-screen prompts.\n\n"
-          "Lighthouse controller status:\n%3")
-          .arg(record ? QStringLiteral("Record") : QStringLiteral("Preview"),
-               modeText, controllerLines.join(QStringLiteral("\n"))));
+  box.setWindowTitle(tr("Scanning procedure"));
+  box.setText(tr("Ready to start %1?").arg(action));
+  box.setInformativeText(buildScanningProcedureSummary(&powerStatus));
   box.setStandardButtons(QMessageBox::Ok | QMessageBox::Cancel);
   box.setDefaultButton(QMessageBox::Ok);
   if (QAbstractButton *continueButton = box.button(QMessageBox::Ok))
     continueButton->setText(QStringLiteral("Continue"));
 
   return box.exec() == QMessageBox::Ok;
+}
+
+QString hf::capture::CapturePanelController::buildScanningProcedureSummary(
+    const LighthouseControllerPowerStatus *powerStatus) const {
+  QStringList sections;
+
+  QStringList modeLabels;
+  for (const CaptureIlluminationMode mode : capturePendingIlluminationModes_)
+    modeLabels.push_back(captureIlluminationFolderName(mode));
+
+  if (!modeLabels.isEmpty()) {
+    sections.push_back(
+        QStringLiteral("Hyperspectral: %1")
+            .arg(modeLabels.join(QStringLiteral(" \u2192 "))));
+  } else if (capture3dOnlySession_ || capture3dPending_) {
+    sections.push_back(QStringLiteral("Hyperspectral: (none — 3D only)"));
+  }
+
+  QStringList cameraLines;
+  std::vector<std::size_t> selectedCameras;
+  if (selectedCaptureCameraIndices(selectedCameras)) {
+    for (const std::size_t cameraIndex : selectedCameras) {
+      const LumoCameraUi &ui =
+          cameraIndex == 0 ? host_->camera1Ui_ : host_->camera2Ui_;
+      cameraLines.push_back(
+          host_->cameraPanel()->profileTabNameForUi(ui));
+    }
+  }
+  if (!cameraLines.isEmpty()) {
+    sections.push_back(
+        QStringLiteral("Cameras: %1")
+            .arg(cameraLines.join(QStringLiteral(", "))));
+  }
+
+  if (useStageForCapture() && captureScanPlan_.sampleScanTotalDistanceMm > 0.0) {
+    sections.push_back(
+        QStringLiteral(
+            "Stage HSI: sample origin %1 mm, length %2 mm @ %3 mm/s")
+            .arg(captureScanPlan_.sampleScanOriginMm, 0, 'f', 1)
+            .arg(captureScanPlan_.sampleScanLengthMm, 0, 'f', 1)
+            .arg(captureScanPlan_.recordScanSpeedMmPerSec, 0, 'f', 1));
+  }
+
+  if (capture3dPending_ && canRun3dRgbCapture()) {
+    QStringList threeDLines;
+    threeDLines.push_back(
+        QStringLiteral("3D RGB: UR3e / BFS hemisphere scan"));
+    threeDLines.push_back(
+        QStringLiteral("Stage 3D pose: %1 mm")
+            .arg(hf::hardwareConfig().sample3dScanningPositionMm, 0, 'f', 1));
+
+    if (host_->ur3eHemisphereScanSettings_ != nullptr) {
+      const auto params = host_->ur3eHemisphereScanSettings_->params();
+      threeDLines.push_back(
+          QStringLiteral("Route grid: R%1 mm, %2×%3, θ%4–%5°")
+              .arg(qRound(params.sphereRadiusM * 1000.0))
+              .arg(params.horizontalPoints)
+              .arg(params.verticalPoints)
+              .arg(qRound(params.thetaMinDeg))
+              .arg(qRound(params.thetaMaxDeg)));
+      if (host_->ur3ePanel() != nullptr && host_->ur3ePanel()->isScanPlanReady()) {
+        const int reachable =
+            host_->ur3eHemisphereScanSettings_->plannedReachablePins();
+        if (reachable > 0) {
+          threeDLines.push_back(
+              QStringLiteral("Reachable pins: %1").arg(reachable));
+        } else {
+          threeDLines.push_back(QStringLiteral("Plan: ready"));
+        }
+      }
+    }
+
+    if (!capture3dOnlySession_) {
+      threeDLines.push_back(
+          QStringLiteral(
+              "After HSI: stage moves to 3D pose, then you confirm Continue/Skip 3D"));
+    }
+    sections.push_back(threeDLines.join(QLatin1Char('\n')));
+  }
+
+  if (host_->capturePreprocessAfterScanCheck_ != nullptr &&
+      host_->capturePreprocessAfterScanCheck_->isChecked() &&
+      captureRecorderMode_ == CaptureRecorderMode::Record) {
+    QStringList pp;
+    pp.push_back(QStringLiteral("Post-process after scan: on"));
+    if (host_->captureSaveFfcImageCheck_ != nullptr &&
+        host_->captureSaveFfcImageCheck_->isChecked())
+      pp.push_back(QStringLiteral("FFC image"));
+    if (host_->captureRunGsamCheck_ != nullptr &&
+        host_->captureRunGsamCheck_->isChecked())
+      pp.push_back(QStringLiteral("GSAM"));
+    if (host_->captureRunHfFusionCheck_ != nullptr &&
+        host_->captureRunHfFusionCheck_->isChecked())
+      pp.push_back(QStringLiteral("spectral fusion"));
+    sections.push_back(pp.join(QStringLiteral(" · ")));
+  }
+
+  if (powerStatus != nullptr) {
+    QStringList controllerLines;
+    controllerLines << lighthouseControllerAliveText(
+        *powerStatus, 0, QStringLiteral("Reflectance 1"));
+    controllerLines << lighthouseControllerAliveText(
+        *powerStatus, 1, QStringLiteral("Reflectance 2"));
+    controllerLines << lighthouseControllerAliveText(
+        *powerStatus, 2, QStringLiteral("Transmittance 1"));
+    controllerLines << lighthouseControllerAliveText(
+        *powerStatus, 3, QStringLiteral("Transmittance 2"));
+    sections.push_back(
+        QStringLiteral(
+            "Illumination hoods are prepared manually during the scan — "
+            "follow the on-screen prompts.\n\n"
+            "Lighthouse controller status:\n%1")
+            .arg(controllerLines.join(QLatin1Char('\n'))));
+  }
+
+  return sections.join(QStringLiteral("\n\n"));
 }
 
 bool hf::capture::CapturePanelController::confirmCaptureHoodPreparation(
@@ -1905,6 +1993,50 @@ bool hf::capture::CapturePanelController::confirmContinuousCaptureWithoutStage()
     continueButton->setText(QStringLiteral("Continue"));
 
   return box.exec() == QMessageBox::Ok;
+}
+
+bool hf::capture::CapturePanelController::confirmContinueWith3dScanningAfterHsi()
+    const {
+  QMessageBox box(host_);
+  box.setIcon(QMessageBox::Question);
+  box.setWindowTitle(tr("Continue with 3D scanning?"));
+  box.setText(tr("Stage is at the 3D scanning position."));
+  box.setInformativeText(
+      tr("Hyperspectral acquisition is complete.\n\n"
+         "Continue to run the UR3e / BFS hemisphere scan?\n\n"
+         "Choose Skip 3D to keep only the hyperspectral data "
+         "(preprocessing already continues in the background when enabled)."));
+  box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+  box.setDefaultButton(QMessageBox::Yes);
+  if (QAbstractButton *yesButton = box.button(QMessageBox::Yes))
+    yesButton->setText(tr("Continue 3D"));
+  if (QAbstractButton *noButton = box.button(QMessageBox::No))
+    noButton->setText(tr("Skip 3D"));
+
+  return box.exec() == QMessageBox::Yes;
+}
+
+void hf::capture::CapturePanelController::finishRecordAfterSkipping3d() {
+  host_->appendLog(QStringLiteral(
+      "Capture record: 3D scanning skipped by operator — keeping "
+      "hyperspectral data only."));
+  capture3dAwaitingOperatorConfirm_ = false;
+  capture3dPending_ = false;
+  capture3dOnlySession_ = false;
+  capture3dInProgress_ = false;
+  capture3dSessionDirectory_.clear();
+  lastCapture3dSummaryText_.clear();
+
+  if (isStageRecordingEnabledInUi() && host_->stageWorker() != nullptr)
+    host_->stageWorker()->requestStopMotion();
+
+  captureRecorderMode_ = CaptureRecorderMode::Idle;
+  updateRecorderControls();
+  host_->lightPanel()->updateConnectionDisplay();
+  host_->lightPanel()->updateControlsEnabled();
+  host_->appendLog(QStringLiteral("Capture record: scan sequence finished."));
+  homeStageAfterCapture();
+  beginRecordCompleteNotify();
 }
 
 void hf::capture::CapturePanelController::startCurrentCaptureMode() {
@@ -2214,41 +2346,17 @@ void hf::capture::CapturePanelController::onCaptureAbsoluteMoveComplete(
   }
 
   if (completedPhase == CaptureScanPhase::MoveTo3dScanningPosition) {
-    if (host_->ur3ePanel() == nullptr) {
-      failCaptureSequence(QStringLiteral("%1: UR3e panel unavailable for 3D scan.")
-                              .arg(captureSequenceLogPrefix()));
-      return;
+    if (capture3dAwaitingOperatorConfirm_) {
+      capture3dAwaitingOperatorConfirm_ = false;
+      if (!confirmContinueWith3dScanningAfterHsi()) {
+        finishRecordAfterSkipping3d();
+        return;
+      }
+      host_->appendLog(QStringLiteral(
+          "Capture record: operator confirmed 3D — starting hemisphere capture…"));
     }
 
-    const QString outDir = capture3dScanningOutputDir();
-    if (outDir.isEmpty()) {
-      failCaptureSequence(QStringLiteral("%1: 3D scanning output directory is empty.")
-                              .arg(captureSequenceLogPrefix()));
-      return;
-    }
-    QDir().mkpath(outDir);
-
-    hf::ur3e::HemisphereScanExecuteOptions opts;
-    opts.captureOutputDir = outDir;
-    opts.stabilizeMs = hf::hardwareConfig().ur3e.scanCaptureStabilizeMs;
-    capture3dInProgress_ = true;
-    host_->appendLog(
-        QStringLiteral("%1: hemisphere 3D capture → %2 (%3 ms settle per pose; wrist sweep if enabled)…")
-            .arg(captureSequenceLogPrefix(), outDir)
-            .arg(opts.stabilizeMs));
-
-    connect(host_->ur3ePanel(),
-            &hf::ur3e::Ur3ePanelController::hemisphereScanExecuteFinished,
-            this,
-            &CapturePanelController::on3dScanningCaptureFinished,
-            Qt::UniqueConnection);
-
-    if (!host_->ur3ePanel()->startHemisphereScanExecute(opts)) {
-      capture3dInProgress_ = false;
-      failCaptureSequence(
-          QStringLiteral("%1: could not start UR3e 3D scan execute.")
-              .arg(captureSequenceLogPrefix()));
-    }
+    startHemisphere3dCaptureAfterStageMove();
     return;
   }
 }
@@ -2992,8 +3100,15 @@ void hf::capture::CapturePanelController::completeCaptureSequence() {
   captureCurrentModeIndex_ = 0;
 
   if (wasRecord && capture3dPending_ && canRun3dRgbCapture()) {
+    // Close HSI dump now so preprocessing can run while stage moves / 3D proceeds.
+    if (capture3dSessionDirectory_.isEmpty() && captureWriterWorker_ != nullptr)
+      capture3dSessionDirectory_ = captureWriterWorker_->sessionDirectory();
+    endCaptureRawDumpSession();
+    runCapturePostProcessingIfEnabled();
+
     host_->appendLog(QStringLiteral(
-        "Capture record: HSI finished — starting 3D scanning capture…"));
+        "Capture record: HSI finished — moving stage to 3D pose, then confirm…"));
+    capture3dAwaitingOperatorConfirm_ = true;
     begin3dScanningCapturePhase();
     return;
   }
@@ -3044,279 +3159,22 @@ void hf::capture::CapturePanelController::finishCaptureSequenceAfterOptional3d()
 
   if (wasRecord) {
     if (!threeDOnly)
-      endCaptureRawDumpSession();
+      endCaptureRawDumpSession(); // no-op if already closed after HSI
     else if (!threeDSessionDir.isEmpty())
       lastEndedCaptureSessionSummary_.sessionDirectory = threeDSessionDir;
-    runCapturePostProcessingIfEnabled();
+    // HSI+3D already started post-process at HSI end; 3D-only starts it here.
+    if (!capturePostProcessStartedForSession_)
+      runCapturePostProcessingIfEnabled();
     host_->appendLog(QStringLiteral("Capture record: scan sequence finished."));
     homeStageAfterCapture();
     beginRecordCompleteNotify();
   }
 }
 
-void hf::capture::CapturePanelController::runManualFusion() {
-  if (hfFusionWorker_ == nullptr)
-    return;
-
-  if (hfFusionWorker_->isBusy()) {
-    host_->appendLog(
-        QStringLiteral("Capture fusion: already running; wait for the current job to finish."));
-    return;
-  }
-
-  QString startDir = lastEndedCaptureSessionSummary_.sessionDirectory;
-  if (startDir.isEmpty() && host_->captureSaveFolderEdit_ != nullptr &&
-      host_->captureDatasetEdit_ != nullptr) {
-    const QString saveFolder = host_->captureSaveFolderEdit_->text().trimmed();
-    const QString dataset = host_->captureDatasetEdit_->text().trimmed();
-    if (!saveFolder.isEmpty() && !dataset.isEmpty())
-      startDir = QDir(saveFolder).filePath(dataset);
-  }
-
-  if (startDir.isEmpty() || !QDir(startDir).exists())
-    startDir = QDir::homePath();
-
-  const QString path = QFileDialog::getExistingDirectory(
-      host_, tr("Select capture session for fusion"), startDir);
-  if (path.isEmpty())
-    return;
-
-  const QStringList modes =
-      hf::processing::fusionIlluminationModesForSession(path);
-  if (modes.isEmpty()) {
-    QMessageBox::warning(
-        host_, tr("Spectral fusion"),
-        tr("No illumination folders with fx10e and swir3 were found under:\n%1")
-            .arg(path));
-    return;
-  }
-
-  auto preprocessedDirForCamera = [](const QString &sessionDirectory,
-                                      const QString &mode,
-                                      const QString &camera) -> QString {
-    return QDir(sessionDirectory).filePath(
-        mode + QLatin1Char('/') + camera + QStringLiteral("/preprocessed"));
-  };
-
-  auto hasRgbPng = [](const QString &preprocessedDir) -> bool {
-    const QDir dir(preprocessedDir);
-    if (!dir.exists())
-      return false;
-    const QStringList matches =
-        dir.entryList({QStringLiteral("*_rgb.png")}, QDir::Files, QDir::Name);
-    return !matches.isEmpty();
-  };
-
-  auto hasFfcHdr = [](const QString &preprocessedDir) -> bool {
-    const QDir dir(preprocessedDir);
-    if (!dir.exists())
-      return false;
-    const QStringList matches =
-        dir.entryList({QStringLiteral("*_ffc.hdr")}, QDir::Files, QDir::Name);
-    return !matches.isEmpty();
-  };
-
-  auto hasSegmentationManifest = [](const QString &preprocessedDir) -> bool {
-    const QString manifestPath =
-        QDir(preprocessedDir).filePath(QStringLiteral("segmentation/segmentation_results.json"));
-    return QFileInfo::exists(manifestPath);
-  };
-
-  auto needsPreprocessAndSeg = [&](const QString &sessionDir) -> bool {
-    for (const QString &mode : modes)
-    {
-      const QString fxPre = preprocessedDirForCamera(sessionDir, mode, QStringLiteral("fx10e"));
-      const QString swPre = preprocessedDirForCamera(sessionDir, mode, QStringLiteral("swir3"));
-
-      if (!hasRgbPng(fxPre) || !hasFfcHdr(fxPre) || !hasSegmentationManifest(fxPre))
-        return true;
-      if (!hasRgbPng(swPre) || !hasFfcHdr(swPre) || !hasSegmentationManifest(swPre))
-        return true;
-    }
-    return false;
-  };
-
-  const bool mustRunPostProcess = needsPreprocessAndSeg(path);
-
-  host_->appendLog(
-      QStringLiteral("Capture fusion: manual run started for %1 (%2)")
-          .arg(path, modes.join(QStringLiteral(", "))));
-
-  auto startFusion = [this, path, modes]() {
-    hfFusionWorker_->requestFusion(
-        path, modes,
-        [this](const hf::processing::HfFusionSessionResult &result) {
-          QMetaObject::invokeMethod(
-              this,
-              [this, result]() {
-                for (const QString &line : result.logLines)
-                  host_->appendLog(line);
-                updateRecorderControls();
-              },
-              Qt::QueuedConnection);
-        });
-  };
-
-  if (mustRunPostProcess)
-  {
-    if (capturePostProcessorWorker_ == nullptr)
-    {
-      QMessageBox::warning(
-          host_, tr("Spectral fusion"),
-          tr("Preprocessed data or segmentation results are missing for %1, "
-             "but post-processing worker is not available.")
-              .arg(path));
-      return;
-    }
-
-    if (capturePostProcessorWorker_->isBusy())
-    {
-      host_->appendLog(
-          QStringLiteral("Capture post-process already running; wait before starting fusion."));
-      return;
-    }
-
-    const QString lastSummaryDir =
-        lastEndedCaptureSessionSummary_.sessionDirectory;
-    const bool canUseLastSummary =
-        !lastSummaryDir.isEmpty() &&
-        QDir(lastSummaryDir).absolutePath().compare(QDir(path).absolutePath(),
-                                                    Qt::CaseInsensitive) == 0;
-
-    CaptureWriterSessionSummary sessionSummary;
-    if (canUseLastSummary)
-    {
-      sessionSummary = lastEndedCaptureSessionSummary_;
-    }
-    else
-    {
-      QStringList streamRoots;
-      for (const QString &mode : modes)
-      {
-        for (const QString &camera : {QStringLiteral("fx10e"), QStringLiteral("swir3")})
-          streamRoots.push_back(mode + QLatin1Char('/') + camera);
-      }
-
-      const hf::processing::CaptureSessionLoadResult loadResult =
-          hf::processing::loadCaptureSessionSummaryFromDisk(path, streamRoots);
-      if (!loadResult.success)
-      {
-        QMessageBox::warning(
-            host_, tr("Spectral fusion"),
-            tr("Could not load capture data for post-processing:\n%1")
-                .arg(loadResult.errorMessage));
-        return;
-      }
-      sessionSummary = loadResult.summary;
-    }
-
-    // Run preprocessing + GSAM segmentation so HfFusion can find *_ffc.hdr and
-    // segmentation/segmentation_results.json for both cameras.
-    hf::processing::CapturePostProcessOptions options;
-    options.saveFfcImage = true; // required by HfFusion prerequisites
-    options.runGsamSegmentation = true;
-    options.runHfFusion = false;
-    if (host_->captureGsamPromptEdit_ != nullptr)
-      options.gsamPrompt = host_->captureGsamPromptEdit_->text().trimmed();
-    if (host_->captureGsamSampleCountSpin_ != nullptr)
-      options.gsamSampleCount = host_->captureGsamSampleCountSpin_->value();
-    if (gsam2ServerManager_ != nullptr)
-      options.gsamServerUrl = gsam2ServerManager_->serverUrl();
-
-    host_->appendLog(
-        QStringLiteral("Capture post-process (pre-fusion): missing preprocessing/segmentation; running preprocess+GSAM…"));
-
-    capturePostProcessorWorker_->requestProcess(
-        sessionSummary, options,
-        [this, path, modes](const hf::processing::CapturePostProcessResult &result) {
-          QMetaObject::invokeMethod(
-              this,
-              [this, path, modes, result]() {
-                for (const QString &line : result.logLines)
-                  host_->appendLog(line);
-
-                // Re-check: user asked for a single guard, so only start fusion
-                // if segmentation now exists.
-                bool stillMissing = true;
-                {
-                  auto preprocessedDirForCamera2 = [](const QString &sessionDirectory,
-                                                      const QString &mode,
-                                                      const QString &camera) -> QString {
-                    return QDir(sessionDirectory).filePath(
-                        mode + QLatin1Char('/') + camera +
-                        QStringLiteral("/preprocessed"));
-                  };
-                  auto hasRgbPng2 = [](const QString &preprocessedDir) -> bool {
-                    const QDir dir(preprocessedDir);
-                    if (!dir.exists())
-                      return false;
-                    const QStringList matches = dir.entryList(
-                        {QStringLiteral("*_rgb.png")}, QDir::Files, QDir::Name);
-                    return !matches.isEmpty();
-                  };
-                  auto hasFfcHdr2 = [](const QString &preprocessedDir) -> bool {
-                    const QDir dir(preprocessedDir);
-                    if (!dir.exists())
-                      return false;
-                    const QStringList matches = dir.entryList(
-                        {QStringLiteral("*_ffc.hdr")}, QDir::Files, QDir::Name);
-                    return !matches.isEmpty();
-                  };
-                  auto hasSegmentationManifest2 = [](const QString &preprocessedDir) -> bool {
-                    const QString manifestPath =
-                        QDir(preprocessedDir).filePath(
-                            QStringLiteral("segmentation/segmentation_results.json"));
-                    return QFileInfo::exists(manifestPath);
-                  };
-
-                  stillMissing = false;
-                  for (const QString &mode : modes)
-                  {
-                    const QString fxPre = preprocessedDirForCamera2(
-                        path, mode, QStringLiteral("fx10e"));
-                    const QString swPre = preprocessedDirForCamera2(
-                        path, mode, QStringLiteral("swir3"));
-                    if (!hasRgbPng2(fxPre) || !hasFfcHdr2(fxPre) || !hasSegmentationManifest2(fxPre) ||
-                        !hasRgbPng2(swPre) || !hasFfcHdr2(swPre) || !hasSegmentationManifest2(swPre))
-                    {
-                      stillMissing = true;
-                      break;
-                    }
-                  }
-                }
-
-                if (stillMissing)
-                {
-                  host_->appendLog(
-                      QStringLiteral("Capture fusion: post-process did not produce required preprocessing/segmentation; fusion aborted."));
-                  updateRecorderControls();
-                  return;
-                }
-
-                if (hfFusionWorker_ != nullptr && !hfFusionWorker_->isBusy())
-                  hfFusionWorker_->requestFusion(path, modes, [this](const hf::processing::HfFusionSessionResult &fusionResult) {
-                    QMetaObject::invokeMethod(
-                        this,
-                        [this, fusionResult]() {
-                          for (const QString &line : fusionResult.logLines)
-                            host_->appendLog(line);
-                          updateRecorderControls();
-                        },
-                        Qt::QueuedConnection);
-                  });
-              },
-              Qt::QueuedConnection);
-        });
-  }
-  else
-  {
-    startFusion();
-  }
-
-  updateRecorderControls();
-}
-
 void hf::capture::CapturePanelController::runCapturePostProcessingIfEnabled() {
+  if (capturePostProcessStartedForSession_)
+    return;
+
   if (host_->capturePreprocessAfterScanCheck_ == nullptr ||
       !host_->capturePreprocessAfterScanCheck_->isChecked())
     return;
@@ -3363,6 +3221,9 @@ void hf::capture::CapturePanelController::runCapturePostProcessingIfEnabled() {
   host_->appendLog(
       QStringLiteral("Capture post-process: started in background\u2026"));
 
+  capturePostProcessStartedForSession_ = true;
+  capturePostProcessInFlight_ = true;
+
   capturePostProcessorWorker_->requestProcess(
       lastEndedCaptureSessionSummary_, options,
       [this](const hf::processing::CapturePostProcessResult &result) {
@@ -3371,6 +3232,7 @@ void hf::capture::CapturePanelController::runCapturePostProcessingIfEnabled() {
             [this, result]() {
               for (const QString &line : result.logLines)
                 host_->appendLog(line);
+              capturePostProcessInFlight_ = false;
               captureRecordCompletePostProcessPending_ = false;
               updateRecorderControls();
               tryNotifyRecordComplete();
@@ -4317,6 +4179,10 @@ void hf::capture::CapturePanelController::startRecord() {
   capture3dPending_ = want3d;
   capture3dOnlySession_ = want3d && !wantHsi;
   capture3dSessionDirectory_.clear();
+  lastCapture3dSummaryText_.clear();
+  capture3dAwaitingOperatorConfirm_ = false;
+  capturePostProcessStartedForSession_ = false;
+  capturePostProcessInFlight_ = false;
 
   if (!wantHsi) {
     if (!begin3dOnlyDatasetSession(errorMessage)) {
@@ -4329,6 +4195,25 @@ void hf::capture::CapturePanelController::startRecord() {
     resetCaptureSequenceState();
     captureRecorderMode_ = CaptureRecorderMode::Record;
     updateRecorderControls();
+
+    QMessageBox box(host_);
+    box.setIcon(QMessageBox::Information);
+    box.setWindowTitle(tr("Scanning procedure"));
+    box.setText(tr("Ready to start 3D-only recording?"));
+    box.setInformativeText(buildScanningProcedureSummary());
+    box.setStandardButtons(QMessageBox::Ok | QMessageBox::Cancel);
+    box.setDefaultButton(QMessageBox::Ok);
+    if (QAbstractButton *continueButton = box.button(QMessageBox::Ok))
+      continueButton->setText(QStringLiteral("Continue"));
+    if (box.exec() != QMessageBox::Ok) {
+      capture3dPending_ = false;
+      capture3dOnlySession_ = false;
+      captureRecorderMode_ = CaptureRecorderMode::Idle;
+      updateRecorderControls();
+      host_->appendLog(QStringLiteral("Capture record: cancelled by operator."));
+      return;
+    }
+
     host_->appendLog(
         QStringLiteral("Capture record: 3D-only session %1")
             .arg(capture3dSessionDirectory_));
@@ -4405,7 +4290,8 @@ void hf::capture::CapturePanelController::startRecord() {
 
   if (want3d)
     host_->appendLog(QStringLiteral(
-        "Capture record: 3D RGB will run after HSI (stage → %1 mm).")
+        "Capture record: after HSI, stage moves to 3D pose (%1 mm), then "
+        "Continue/Skip 3D. Preprocessing can start as soon as HSI is saved.")
                          .arg(hf::hardwareConfig().sample3dScanningPositionMm, 0, 'f', 0));
 
   host_->appendLog(QStringLiteral("Capture record: session %1 \u2014 "
@@ -4464,6 +4350,7 @@ void hf::capture::CapturePanelController::stopRecorder() {
   capture3dInProgress_ = false;
   capture3dPending_ = false;
   capture3dOnlySession_ = false;
+  capture3dAwaitingOperatorConfirm_ = false;
   capture3dSessionDirectory_.clear();
   resetCaptureSequenceState();
   capturePendingIlluminationModes_.clear();
@@ -4622,6 +4509,7 @@ bool hf::capture::CapturePanelController::begin3dOnlyDatasetSession(
 void hf::capture::CapturePanelController::begin3dScanningCapturePhase() {
   if (host_->stageWorker() == nullptr
       || host_->stageWorker()->currentState() != StageState::Connected) {
+    capture3dAwaitingOperatorConfirm_ = false;
     failCaptureSequence(QStringLiteral("%1: stage is not connected for 3D scan.")
                             .arg(captureSequenceLogPrefix()));
     return;
@@ -4640,8 +4528,52 @@ void hf::capture::CapturePanelController::begin3dScanningCapturePhase() {
   updateRecorderStatus();
 }
 
+void hf::capture::CapturePanelController::startHemisphere3dCaptureAfterStageMove() {
+  if (host_->ur3ePanel() == nullptr) {
+    failCaptureSequence(QStringLiteral("%1: UR3e panel unavailable for 3D scan.")
+                            .arg(captureSequenceLogPrefix()));
+    return;
+  }
+
+  const QString outDir = capture3dScanningOutputDir();
+  if (outDir.isEmpty()) {
+    failCaptureSequence(QStringLiteral("%1: 3D scanning output directory is empty.")
+                            .arg(captureSequenceLogPrefix()));
+    return;
+  }
+  QDir().mkpath(outDir);
+
+  hf::ur3e::HemisphereScanExecuteOptions opts;
+  opts.captureOutputDir = outDir;
+  opts.stabilizeMs = hf::hardwareConfig().ur3e.scanCaptureStabilizeMs;
+  opts.suppressUiSummary = true;
+  capture3dInProgress_ = true;
+  lastCapture3dSummaryText_.clear();
+  host_->appendLog(
+      QStringLiteral("%1: hemisphere 3D capture → %2 (%3 ms settle per pose; wrist sweep if enabled)…")
+          .arg(captureSequenceLogPrefix(), outDir)
+          .arg(opts.stabilizeMs));
+
+  connect(host_->ur3ePanel(),
+          &hf::ur3e::Ur3ePanelController::hemisphereScanExecuteFinished,
+          this,
+          &CapturePanelController::on3dScanningCaptureFinished,
+          Qt::UniqueConnection);
+
+  if (!host_->ur3ePanel()->startHemisphereScanExecute(opts)) {
+    capture3dInProgress_ = false;
+    failCaptureSequence(
+        QStringLiteral("%1: could not start UR3e 3D scan execute.")
+            .arg(captureSequenceLogPrefix()));
+  }
+}
+
 void hf::capture::CapturePanelController::on3dScanningCaptureFinished(
-    const bool ok, const QString &detail, const int capturedFrameCount) {
+    const bool ok,
+    const QString &detail,
+    const int capturedFrameCount,
+    const int successfulPins,
+    const qint64 elapsedMs) {
   if (!capture3dInProgress_)
     return;
 
@@ -4651,6 +4583,23 @@ void hf::capture::CapturePanelController::on3dScanningCaptureFinished(
           .arg(ok ? QStringLiteral("finished") : QStringLiteral("failed"))
           .arg(capturedFrameCount)
           .arg(detail));
+
+  if (ok) {
+    const qint64 totalSec = (elapsedMs > 0 ? elapsedMs : qint64{0}) / 1000;
+    const qint64 minutes = totalSec / 60;
+    const qint64 seconds = totalSec % 60;
+    lastCapture3dSummaryText_ =
+        QStringLiteral("3D scanning\n"
+                       "Successful pins: %1\n"
+                       "Multiview images recorded: %2\n"
+                       "Scanning time: %3:%4")
+            .arg(successfulPins)
+            .arg(capturedFrameCount)
+            .arg(minutes)
+            .arg(seconds, 2, 10, QLatin1Char('0'));
+  } else {
+    lastCapture3dSummaryText_.clear();
+  }
 
   if (!ok && captureRecorderMode_ == CaptureRecorderMode::Record) {
     capture3dInProgress_ = false;

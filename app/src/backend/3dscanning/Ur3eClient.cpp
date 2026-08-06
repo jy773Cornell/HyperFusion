@@ -308,9 +308,11 @@ void fillHealthStatus(const QJsonObject &response, Ur3eHealthStatus *status)
 
 bool ur3eServerHealthCheck(const QString &serverUrl,
                            Ur3eHealthStatus *status,
-                           QString *errorMessage)
+                           QString *errorMessage,
+                           const int timeoutMs)
 {
-    const QJsonObject response = getJson(serverUrl, QStringLiteral("/health"), 3000, errorMessage);
+    const QJsonObject response =
+        getJson(serverUrl, QStringLiteral("/health"), qMax(3000, timeoutMs), errorMessage);
     if (response.isEmpty())
         return false;
 

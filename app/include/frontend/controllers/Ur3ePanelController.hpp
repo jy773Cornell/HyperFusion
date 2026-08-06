@@ -31,6 +31,9 @@ struct HemisphereScanExecuteOptions
     QString captureOutputDir;
     /// Dwell after arriving at each pin before optional capture (ms).
     int stabilizeMs = 2000;
+    /// When true (Capture-driven 3D), skip the standalone UR3e summary dialog on success —
+    /// Capture merges the scan stats into Recording complete.
+    bool suppressUiSummary = false;
 };
 
 class Ur3ePanelController : public QObject
@@ -61,7 +64,9 @@ public:
 signals:
     void hemisphereScanExecuteFinished(bool ok,
                                        const QString &detail,
-                                       int capturedFrameCount);
+                                       int capturedFrameCount,
+                                       int successfulPins,
+                                       qint64 elapsedMs);
 
 public slots:
     void onSidecarStateChanged(Ur3eServerManager::State state, const QString &detail);
@@ -198,6 +203,7 @@ private:
     bool busy_ = false;
     bool scanPlanReady_ = false;
     bool scanExecuting_ = false;
+    bool scanExecuteSuppressUiSummary_ = false;
     bool scanPlanning_ = false;
     bool motionInProgress_ = false;
     Ur3eHemisphereScanPlan plannedScanPlan_;

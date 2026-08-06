@@ -34,12 +34,24 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Session directory not found: {session}", file=sys.stderr)
         return 1
 
+    process_hsi = not args.no_hsi
+    if process_hsi:
+        try:
+            import matplotlib  # noqa: F401
+        except ImportError:
+            print(
+                "matplotlib is required for fused ROI spectrum plots. "
+                "Run: cd resources\\hf_fusion ; .\\.venv\\Scripts\\python.exe -m pip install -r requirements.txt",
+                file=sys.stderr,
+            )
+            return 1
+
     params = FusionPipelineParams(
         session=session,
         mode=args.mode,
         cfg=args.cfg,
         margin_mm=args.margin_mm,
-        process_hsi=not args.no_hsi,
+        process_hsi=process_hsi,
     )
 
     try:

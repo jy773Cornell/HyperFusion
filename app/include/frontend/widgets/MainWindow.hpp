@@ -274,7 +274,6 @@ private:
     QCheckBox *captureSaveFfcImageCheck_ = nullptr;
     QCheckBox *captureRunGsamCheck_ = nullptr;
     QCheckBox *captureRunHfFusionCheck_ = nullptr;
-    QPushButton *captureRunFusionManualBtn_ = nullptr;
     QLabel *captureGsamServerStatusLabel_ = nullptr;
     QLineEdit *captureGsamPromptEdit_ = nullptr;
     QSpinBox *captureGsamSampleCountSpin_ = nullptr;

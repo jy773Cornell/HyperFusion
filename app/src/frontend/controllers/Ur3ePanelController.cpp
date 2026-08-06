@@ -554,13 +554,28 @@ void Ur3ePanelController::pollDriverPrestartReady()
     const QString serverUrl = serverManager_->serverUrl();
     std::thread([this, serverUrl]() {
         Ur3eHealthStatus health;
-        const bool ok = ur3eServerHealthCheck(serverUrl, &health);
+        QString error;
+        const bool ok = ur3eServerHealthCheck(serverUrl, &health, &error, 15000);
         QMetaObject::invokeMethod(
             this,
-            [this, ok, health]() {
+            [this, ok, health, error]() {
                 driverReadyPollInFlight_.store(false, std::memory_order_release);
                 if (!ok || !isSidecarRunning())
+                {
+                    if (!ok && !error.isEmpty() && host_ != nullptr)
+                    {
+                        // Rate-limit: only log when still waiting (timer still active).
+                        static qint64 lastLogMs = 0;
+                        const qint64 now = QDateTime::currentMSecsSinceEpoch();
+                        if (now - lastLogMs > 10000)
+                        {
+                            lastLogMs = now;
+                            host_->appendLog(
+                                QStringLiteral("UR3e: waiting for driver ready (%1)…").arg(error));
+                        }
+                    }
                     return;
+                }
 
                 if (health.driverReady)
                 {
@@ -1434,6 +1449,7 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
             .arg(wristSummary));
     stopRequested_.store(false, std::memory_order_release);
     scanExecuting_ = true;
+    scanExecuteSuppressUiSummary_ = options.suppressUiSummary;
     if (host_->ur3eScanRoutePlanWidget_ != nullptr)
         host_->ur3eScanRoutePlanWidget_->beginScanExecution();
     setBusy(true);
@@ -2272,15 +2288,22 @@ void Ur3ePanelController::finishScanExecute(const bool ok,
             .arg(capturedFrameCount)
             .arg(durationText);
 
-    if (!ok)
-        QMessageBox::warning(host_, summaryTitle, summaryBody + QStringLiteral("\n\n") + detail);
-    else
-        QMessageBox::information(host_, summaryTitle, summaryBody);
+    // Capture-driven 3D merges the success/stopped summary into Recording complete.
+    // Still show failures immediately so the operator sees the error.
+    if (!(scanExecuteSuppressUiSummary_ && ok))
+    {
+        if (!ok)
+            QMessageBox::warning(host_, summaryTitle, summaryBody + QStringLiteral("\n\n") + detail);
+        else
+            QMessageBox::information(host_, summaryTitle, summaryBody);
+    }
+
+    scanExecuteSuppressUiSummary_ = false;
 
     if (ok)
         pollJoints();
     updateRobotUi();
-    emit hemisphereScanExecuteFinished(ok, detail, capturedFrameCount);
+    emit hemisphereScanExecuteFinished(ok, detail, capturedFrameCount, successfulPins, elapsedMs);
 }
 
 void Ur3ePanelController::onMoveItStateChanged(const bool running, const QString &detail)

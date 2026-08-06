@@ -101,6 +101,8 @@ class Ur3eRosDriverManager:
         self._stderr_file = None
         self._stderr_read_offset = 0
         self._rtde_conflict_warned = False
+        # Sticky after a successful readiness probe — /health must stay cheap (app polls ~3s).
+        self._connect_ready_cached = False
 
     @staticmethod
     def write_initial_positions_yaml(joint_deg: List[float]) -> None:
@@ -131,13 +133,19 @@ class Ur3eRosDriverManager:
     def connect_ready(self) -> bool:
         """True when Connect may proceed (mock controllers up, or :50002 listening)."""
         if not self.running:
+            self._connect_ready_cached = False
             return False
-        if self.use_mock_hardware:
-            return self.controller_manager_ready()
-        # Reverse script port is what the pendant External Control dials.
-        if self._script_sender_port_listening():
+        if self._connect_ready_cached:
             return True
-        return self.controller_manager_ready()
+        if self.use_mock_hardware:
+            ready = self.controller_manager_ready()
+        elif self._script_sender_port_listening():
+            ready = True
+        else:
+            ready = self.controller_manager_ready()
+        if ready:
+            self._connect_ready_cached = True
+        return ready
 
     def start(
         self,
@@ -358,6 +366,7 @@ class Ur3eRosDriverManager:
         helper.ensure_joint_states_stamper(reset=reset)
 
     def stop(self) -> None:
+        self._connect_ready_cached = False
         self.stop_joint_states_stamper()
         if self._process is None:
             if self._stderr_file is not None:
@@ -468,6 +477,7 @@ class Ur3eRosDriverManager:
                     "UR3e driver: port 50002 listening — press Play on External Control URCap "
                     f"(remote PC {self.reverse_ip}:50002).\n"
                 )
+                self._connect_ready_cached = True
                 return
 
             if self._verify_controller_manager(raise_on_failure=False):
@@ -480,6 +490,7 @@ class Ur3eRosDriverManager:
                         sys.stderr.write(
                             f"UR3e driver: controller manager ready after {attempt} poll(s).\n"
                         )
+                self._connect_ready_cached = True
                 return
 
             attempt += 1
@@ -506,6 +517,7 @@ class Ur3eRosDriverManager:
                     "UR3e driver: port 50002 listening after wait — press Play on "
                     f"External Control URCap (remote PC {self.reverse_ip}:50002).\n"
                 )
+                self._connect_ready_cached = True
                 return
             sys.stderr.write(
                 "UR3e driver: controller manager / port 50002 not ready yet — leaving "

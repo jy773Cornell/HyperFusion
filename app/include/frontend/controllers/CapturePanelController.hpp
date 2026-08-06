@@ -130,7 +130,6 @@ public slots:
     void startRecord();
     void stopRecorder();
     void finishScan();
-    void runManualFusion();
 
 private:
     double autoRecordScanSpeedMmPerSec() const;
@@ -154,6 +153,11 @@ private:
     bool confirmCaptureHoodPreparation(CaptureIlluminationMode mode,
                                        bool betweenReflectanceAndTransmittance);
     bool confirmContinuousCaptureWithoutStage() const;
+    [[nodiscard]] bool confirmContinueWith3dScanningAfterHsi() const;
+    [[nodiscard]] QString buildScanningProcedureSummary(
+        const LighthouseControllerPowerStatus *powerStatus = nullptr) const;
+    void finishRecordAfterSkipping3d();
+    void startHemisphere3dCaptureAfterStageMove();
     void startCurrentCaptureMode();
     void beginCaptureModeMotion();
     void beginCaptureMoveToTempStopPosition();
@@ -193,7 +197,11 @@ private:
     void onCaptureRelativeScanComplete();
     void completeCaptureSequence();
     void begin3dScanningCapturePhase();
-    void on3dScanningCaptureFinished(bool ok, const QString &detail, int capturedFrameCount);
+    void on3dScanningCaptureFinished(bool ok,
+                                     const QString &detail,
+                                     int capturedFrameCount,
+                                     int successfulPins,
+                                     qint64 elapsedMs);
     void finishCaptureSequenceAfterOptional3d();
     [[nodiscard]] bool is3dRgbCaptureSelected() const;
     [[nodiscard]] bool canRun3dRgbCapture() const;
@@ -305,6 +313,13 @@ private:
     bool capture3dPending_ = false;
     bool capture3dOnlySession_ = false;
     bool capture3dInProgress_ = false;
+    /// After HSI: stage moves to 3D pose first; confirm dialog runs when that move completes.
+    bool capture3dAwaitingOperatorConfirm_ = false;
+    /// Filled after Capture-driven 3D scan; merged into Recording complete (empty if 3D skipped).
+    QString lastCapture3dSummaryText_;
+    /// True after HSI dump ended and post-process was queued for this session (may run during 3D).
+    bool capturePostProcessStartedForSession_ = false;
+    bool capturePostProcessInFlight_ = false;
     QString capture3dSessionDirectory_;
     bool dualCameraScanSyncHardwareApplied_ = false;
     bool dualCameraSyncHardwareApplyPending_ = false;

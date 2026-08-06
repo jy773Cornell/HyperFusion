@@ -36,6 +36,7 @@ public:
     void refreshAvailableRoutes();
     /// After Plan: use reachable pin count for total-image estimate (−1 = grid estimate).
     void setPlannedReachablePins(int reachablePins);
+    [[nodiscard]] int plannedReachablePins() const { return plannedReachablePins_; }
 
 signals:
     void planScanRequested();

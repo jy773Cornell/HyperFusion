@@ -502,6 +502,7 @@ class Ur3eRosBridge:
         ):
           reuse = True
         elif self.use_mock_hardware:
+          # Mock launch already up; sticky connect_ready cache is set after first probe.
           reuse = True
         else:
           restart = True

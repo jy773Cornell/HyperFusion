@@ -17,6 +17,27 @@ namespace
 
 constexpr int kCacheSchemaVersion = 4; // home_path_ok / chain-only marking
 
+/// Compare robot-cfg fingerprints ignoring use_mock_hardware (sim ↔ real).
+bool robotCfgFingerprintsMatch(const QString &a, const QString &b)
+{
+    if (a == b)
+        return true;
+    if (a.isEmpty() || b.isEmpty())
+        return false;
+
+    auto stripMock = [](const QString &raw) -> QString {
+        QJsonParseError err;
+        const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
+        if (err.error != QJsonParseError::NoError || !doc.isObject())
+            return raw;
+        QJsonObject o = doc.object();
+        o.remove(QStringLiteral("use_mock_hardware"));
+        return QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
+    };
+
+    return stripMock(a) == stripMock(b);
+}
+
 QJsonObject matPoseToJson(const Ur3eScanTcpPose &tcp)
 {
     QJsonObject o;
@@ -51,7 +72,7 @@ QJsonObject robotCfgFingerprintObject(const hf::HardwareConfig::Ur3eConfig &ur3e
     QJsonObject fp;
     fp.insert(QStringLiteral("schema"), kCacheSchemaVersion);
     fp.insert(QStringLiteral("ur_type"), ur3e.urType);
-    fp.insert(QStringLiteral("use_mock_hardware"), ur3e.useMockHardware);
+    // Intentionally omit use_mock_hardware — sim plans must load on real robot (same geometry).
     fp.insert(QStringLiteral("tool_tcp_x_mm"), ur3e.toolTcpXMm);
     fp.insert(QStringLiteral("tool_tcp_y_mm"), ur3e.toolTcpYMm);
     fp.insert(QStringLiteral("tool_tcp_z_mm"), ur3e.toolTcpZMm);
@@ -263,7 +284,8 @@ QString defaultUr3eScanRoutesDir()
 
 QString defaultUr3eScanRouteDisplayName(const Ur3eHemisphereScanParams &params)
 {
-    return QStringLiteral("R%1mm %2×%3 θ%4–%5")
+    // Keep short for the settings combo (long labels force the panel wider than the splitter).
+    return QStringLiteral("R%1 %2×%3 θ%4–%5")
         .arg(qRound(params.sphereRadiusM * 1000.0))
         .arg(params.horizontalPoints)
         .arg(params.verticalPoints)
@@ -328,7 +350,7 @@ bool loadUr3eScanPlanCache(const QString &path,
     }
 
     const QString fingerprint = root.value(QStringLiteral("fingerprint")).toString();
-    if (fingerprint.isEmpty() || fingerprint != expectedFingerprint)
+    if (fingerprint.isEmpty() || !robotCfgFingerprintsMatch(fingerprint, expectedFingerprint))
     {
         if (errorMessage != nullptr)
             *errorMessage = QStringLiteral(
@@ -393,7 +415,7 @@ listUr3eScanRoutesMatchingCfg(const QString &dir,
             continue;
 
         const QString robotFp = root.value(QStringLiteral("robot_cfg_fingerprint")).toString();
-        if (robotFp.isEmpty() || robotFp != expectedRobotCfgFingerprint)
+        if (robotFp.isEmpty() || !robotCfgFingerprintsMatch(robotFp, expectedRobotCfgFingerprint))
             continue;
 
         Ur3eScanRouteInfo entry;
@@ -453,7 +475,7 @@ bool loadUr3eNamedScanRoute(const QString &path,
     }
 
     const QString robotFp = root.value(QStringLiteral("robot_cfg_fingerprint")).toString();
-    if (robotFp.isEmpty() || robotFp != expectedRobotCfgFingerprint)
+    if (robotFp.isEmpty() || !robotCfgFingerprintsMatch(robotFp, expectedRobotCfgFingerprint))
     {
         if (errorMessage != nullptr)
             *errorMessage = QStringLiteral(

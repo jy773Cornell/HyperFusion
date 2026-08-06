@@ -17,6 +17,7 @@
 #include <QFileInfo>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QTimer>
 
@@ -325,7 +326,17 @@ void UiSettingsController::connectAutosave()
     if (host_->captureSaveFfcImageCheck_ != nullptr)
         connect(host_->captureSaveFfcImageCheck_, &QCheckBox::toggled, this, schedule);
     if (host_->captureRunGsamCheck_ != nullptr)
+    {
         connect(host_->captureRunGsamCheck_, &QCheckBox::toggled, this, schedule);
+        connect(host_->captureRunGsamCheck_, &QCheckBox::toggled, this, [this](bool checked) {
+            if (!checked && host_->captureRunHfFusionCheck_ != nullptr)
+            {
+                const QSignalBlocker blocker(host_->captureRunHfFusionCheck_);
+                host_->captureRunHfFusionCheck_->setChecked(false);
+            }
+            host_->capturePanel()->updateRecorderControls();
+        });
+    }
     if (host_->captureRunHfFusionCheck_ != nullptr)
     {
         connect(host_->captureRunHfFusionCheck_, &QCheckBox::toggled, this, schedule);

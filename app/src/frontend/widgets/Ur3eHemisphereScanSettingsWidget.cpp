@@ -30,9 +30,18 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
 
   auto *group = new QGroupBox(QStringLiteral("Scanning"), this);
   auto *form = new QFormLayout(group);
+  form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+  form->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);
+  form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+  form->setRowWrapPolicy(QFormLayout::DontWrapRows);
+  form->setHorizontalSpacing(8);
+  form->setVerticalSpacing(4);
 
   routeCombo_ = new QComboBox(group);
   routeCombo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+  // Keep combo narrow so the settings column does not need a horizontal scrollbar.
+  routeCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+  routeCombo_->setMinimumContentsLength(8);
   routeCombo_->setToolTip(
       QStringLiteral("Saved scan routes that match the current robot cfg "
                      "(hyperfusion.cfg). Changing sphere/grid does not hide them — "
@@ -46,7 +55,7 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
   routeLayout->setSpacing(6);
   routeLayout->addWidget(routeCombo_, 1);
   routeLayout->addWidget(loadRouteBtn_, 0);
-  form->addRow(QStringLiteral("Scan route"), routeRow);
+  form->addRow(QStringLiteral("Route"), routeRow);
 
   sphereRadiusSpin_ = new QDoubleSpinBox(group);
   sphereRadiusSpin_->setRange(10.0, 5000.0);
@@ -54,7 +63,7 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
   sphereRadiusSpin_->setSingleStep(10.0);
   sphereRadiusSpin_->setSuffix(QStringLiteral(" mm"));
   sphereRadiusSpin_->setValue(500.0);
-  form->addRow(QStringLiteral("Sphere radius"), sphereRadiusSpin_);
+  form->addRow(QStringLiteral("Radius"), sphereRadiusSpin_);
 
   horizontalPointsSpin_ = new QSpinBox(group);
   horizontalPointsSpin_->setRange(1, 360);
@@ -73,7 +82,7 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
   gridTimes->setAlignment(Qt::AlignCenter);
   gridLayout->addWidget(gridTimes);
   gridLayout->addWidget(verticalPointsSpin_);
-  form->addRow(QStringLiteral("Grid points"), gridRow);
+  form->addRow(QStringLiteral("Grid"), gridRow);
 
   thetaMinSpin_ = new QDoubleSpinBox(group);
   thetaMinSpin_->setRange(0.0, 90.0);
@@ -103,13 +112,13 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
   thetaDash->setAlignment(Qt::AlignCenter);
   thetaLayout->addWidget(thetaDash);
   thetaLayout->addWidget(thetaMaxSpin_);
-  form->addRow(QStringLiteral("Theta range"), thetaRow);
+  form->addRow(QStringLiteral("Theta"), thetaRow);
 
-  wristSweepEnabledCheck_ = new QCheckBox(QStringLiteral("Enabled"), group);
+  wristSweepEnabledCheck_ = new QCheckBox(QStringLiteral("On"), group);
   wristSweepEnabledCheck_->setToolTip(
       QStringLiteral("After each pin, permute selected wrists for multiview stills "
                      "(collision skips). Center pose is always included."));
-  form->addRow(QStringLiteral("Wrist permutation"), wristSweepEnabledCheck_);
+  form->addRow(QStringLiteral("Sweep"), wristSweepEnabledCheck_);
 
   wristSweepStepSpin_ = new QDoubleSpinBox(group);
   wristSweepStepSpin_->setRange(0.5, 45.0);
@@ -117,7 +126,7 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
   wristSweepStepSpin_->setSingleStep(1.0);
   wristSweepStepSpin_->setSuffix(QStringLiteral(" °"));
   wristSweepStepSpin_->setValue(3.0);
-  form->addRow(QStringLiteral("Wrist step"), wristSweepStepSpin_);
+  form->addRow(QStringLiteral("Step"), wristSweepStepSpin_);
 
   wristSweepStepsSpin_ = new QSpinBox(group);
   wristSweepStepsSpin_->setRange(1, 12);
@@ -125,11 +134,14 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
   wristSweepStepsSpin_->setToolTip(
       QStringLiteral("Steps each way from center (±N×step). Offsets exclude 0 "
                      "(center is captured separately)."));
-  form->addRow(QStringLiteral("Steps each way"), wristSweepStepsSpin_);
+  form->addRow(QStringLiteral("± steps"), wristSweepStepsSpin_);
 
-  wrist1Check_ = new QCheckBox(QStringLiteral("wrist_1"), group);
-  wrist2Check_ = new QCheckBox(QStringLiteral("wrist_2"), group);
-  wrist3Check_ = new QCheckBox(QStringLiteral("wrist_3"), group);
+  wrist1Check_ = new QCheckBox(QStringLiteral("w1"), group);
+  wrist1Check_->setToolTip(QStringLiteral("wrist_1"));
+  wrist2Check_ = new QCheckBox(QStringLiteral("w2"), group);
+  wrist2Check_->setToolTip(QStringLiteral("wrist_2"));
+  wrist3Check_ = new QCheckBox(QStringLiteral("w3"), group);
+  wrist3Check_->setToolTip(QStringLiteral("wrist_3"));
   wrist2Check_->setChecked(true);
   wrist3Check_->setChecked(true);
   auto *wristAxesRow = new QWidget(group);
@@ -140,10 +152,13 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
   wristAxesLayout->addWidget(wrist2Check_);
   wristAxesLayout->addWidget(wrist3Check_);
   wristAxesLayout->addStretch(1);
-  form->addRow(QStringLiteral("Permute"), wristAxesRow);
+  form->addRow(QStringLiteral("Axes"), wristAxesRow);
 
   imageEstimateLabel_ = new QLabel(group);
-  imageEstimateLabel_->setWordWrap(true);
+  imageEstimateLabel_->setWordWrap(false);
+  imageEstimateLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  imageEstimateLabel_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+  imageEstimateLabel_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
   imageEstimateLabel_->setStyleSheet(QStringLiteral("color: #444;"));
   form->addRow(QStringLiteral("Images"), imageEstimateLabel_);
 
@@ -392,12 +407,20 @@ void Ur3eHemisphereScanSettingsWidget::refreshAvailableRoutes()
   for (int i = 0; i < routes.size(); ++i)
   {
     const hf::ur3e::Ur3eScanRouteInfo &route = routes[i];
+    // Short combo text; full detail in item tooltip.
     const QString label =
-        QStringLiteral("%1 — %2 reachable / %3 pins")
+        QStringLiteral("%1 (%2/%3)")
             .arg(route.displayName)
             .arg(route.reachableCount)
             .arg(route.pointCount);
+    const QString tip =
+        QStringLiteral("%1 — %2 reachable / %3 pins\n%4")
+            .arg(route.displayName)
+            .arg(route.reachableCount)
+            .arg(route.pointCount)
+            .arg(route.path);
     routeCombo_->addItem(label, route.path);
+    routeCombo_->setItemData(routeCombo_->count() - 1, tip, Qt::ToolTipRole);
     if (!previousPath.isEmpty() && route.path == previousPath)
       selectIndex = i;
   }
@@ -480,11 +503,15 @@ void Ur3eHemisphereScanSettingsWidget::updateImageEstimateLabel()
   const qint64 total = static_cast<qint64>(perPin) * static_cast<qint64>(pinCount);
 
   const QString pinSource = plannedReachablePins_ >= 0
-                                ? QStringLiteral("%1 reachable").arg(pinCount)
+                                ? QStringLiteral("%1 ok").arg(pinCount)
                                 : QStringLiteral("%1 grid").arg(pinCount);
 
-  imageEstimateLabel_->setText(
-      QStringLiteral("%1 / pin × %2 ≈ %3 total")
+  // Keep to one short line — word-wrap in a tight QFormLayout was painting overlapping text.
+  const QString text =
+      QStringLiteral("%1/pin x %2 = %3").arg(perPin).arg(pinSource).arg(total);
+  imageEstimateLabel_->setText(text);
+  imageEstimateLabel_->setToolTip(
+      QStringLiteral("%1 image(s) per pin × %2 pins ≈ %3 total captures.")
           .arg(perPin)
           .arg(pinSource)
           .arg(total));

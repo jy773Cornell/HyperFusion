@@ -7,9 +7,11 @@
 QWidget *MainWindow::createSettingsPanel()
 {
     auto *panel = new QWidget(this);
-    panel->setMinimumWidth(380);
-    panel->setMaximumWidth(520);
+    // Keep the settings column compact; UR3e route combo no longer forces panel width.
+    panel->setMinimumWidth(360);
+    panel->setMaximumWidth(480);
     auto *layout = new QVBoxLayout(panel);
+    layout->setContentsMargins(4, 4, 4, 4);
 
     settingsTabs_ = new QTabWidget(panel);
     settingsTabs_->addTab(createCameraSettingsTab(), QStringLiteral("Cameras"));

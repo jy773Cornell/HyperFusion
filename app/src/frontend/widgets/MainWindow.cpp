@@ -175,7 +175,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     splitter->addWidget(createStreamTabsPanel());
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 1);
-    splitter->setSizes({420, 1130});
+    splitter->setSizes({400, 1150});
 
     auto *logBox = new QGroupBox(QStringLiteral("Log"), central);
     auto *logLayout = new QVBoxLayout(logBox);

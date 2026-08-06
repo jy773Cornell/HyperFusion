@@ -101,7 +101,7 @@ private:
     std::vector<PreviewScanPoint> scanPoints_;
     double yawRad_ = 0.0;
     double pitchRad_ = 0.0;
-    double zoomFactor_ = 0.68;
+    double zoomFactor_ = 1.25;
     bool executionActive_ = false;
     bool executionResultsVisible_ = false;
     int executionActivePointIndex_ = -1;

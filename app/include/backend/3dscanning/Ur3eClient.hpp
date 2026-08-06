@@ -106,7 +106,8 @@ struct Ur3eWrist3RewindResult
 
 bool ur3eServerHealthCheck(const QString &serverUrl,
                            Ur3eHealthStatus *status = nullptr,
-                           QString *errorMessage = nullptr);
+                           QString *errorMessage = nullptr,
+                           int timeoutMs = 15000);
 
 bool ur3eServerShutdown(const QString &serverUrl, QString *errorMessage = nullptr);
 

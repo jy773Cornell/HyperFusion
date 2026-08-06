@@ -30,6 +30,7 @@ struct Ur3eScanRouteInfo
                                               const Ur3eHemisphereScanParams &params);
 
 /// Robot / hyperfusion.cfg geometry only — used to list loadable named routes.
+/// Ignores use_mock_hardware so simulation plans load on the real robot.
 [[nodiscard]] QString ur3eScanRobotCfgFingerprint(const hf::HardwareConfig::Ur3eConfig &ur3e);
 
 [[nodiscard]] QString defaultUr3eScanPlanCachePath();

@@ -129,10 +129,16 @@ def save_roi_spectra_plot_png(
     series_label: str,
     y_axis_label: str = "Reflectance",
 ) -> None:
-    import matplotlib
+    try:
+        import matplotlib
 
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise RuntimeError(
+            "matplotlib is required for ROI spectrum plots. "
+            "Run: cd resources\\hf_fusion ; .\\.venv\\Scripts\\python.exe -m pip install -r requirements.txt"
+        ) from exc
 
     wl = np.asarray(wavelengths_nm, dtype=np.float64)
 
@@ -185,10 +191,16 @@ def save_all_roi_spectra_plot_png(
     if not rows:
         raise ValueError("No ROI spectrum rows to plot")
 
-    import matplotlib
+    try:
+        import matplotlib
 
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise RuntimeError(
+            "matplotlib is required for ROI spectrum plots. "
+            "Run: cd resources\\hf_fusion ; .\\.venv\\Scripts\\python.exe -m pip install -r requirements.txt"
+        ) from exc
 
     wavelengths = rows[0].wavelengths_nm
     for row in rows[1:]:

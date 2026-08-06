@@ -33,8 +33,8 @@ constexpr double kNormalDisplayLengthM = 0.018;
 // Default orbit: front-right, looking slightly down at tray + hemisphere (not inverted).
 constexpr double kDefaultYawRad = 40.0 * kPi / 180.0;
 constexpr double kDefaultPitchRad = -30.0 * kPi / 180.0;
-constexpr double kDefaultZoomFactor = 0.68;
-constexpr double kSceneFitPadding = 2.65;
+constexpr double kDefaultZoomFactor = 1.25;
+constexpr double kSceneFitPadding = 2.2;
 
 hf::ur3e::Ur3eHemisphereScanPoint offsetScanPoint(const hf::ur3e::Ur3eHemisphereScanPoint &point)
 {
