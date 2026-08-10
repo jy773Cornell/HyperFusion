@@ -1838,7 +1838,8 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                 {
                     ok = false;
                     errorMessage = moveResult.errorMessage;
-                    returnHomeAfterScan = false;
+                    // Still retreat home after a pin move failure (operator expects a known pose).
+                    returnHomeAfterScan = true;
                     break;
                 }
 
@@ -1982,9 +1983,22 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                         }
                     }
 
-                    // Return to nominal pin joints before the next pin.
+                    // After all wrist-sweep combinations, return to the nominal pin pose
+                    // before the next pin. Use direct_only — offsets are small wrist deltas;
+                    // via-home here would send the arm home between every pin on a ring.
                     if (sessionActive() && !stopRequested_.load(std::memory_order_acquire))
                     {
+                        QMetaObject::invokeMethod(
+                            this,
+                            [this, pointIndex]() {
+                                host_->appendLog(
+                                    QStringLiteral(
+                                        "UR3e scan wrist sweep pin %1: returning to "
+                                        "nominal pin pose…")
+                                        .arg(pointIndex));
+                            },
+                            Qt::QueuedConnection);
+
                         const Ur3eScanWaypointMoveResult returnPin =
                             ur3eExecuteScanWaypoint(serverUrl,
                                                     point.jointPositionsRad,
@@ -1998,7 +2012,7 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                                 ur3eStopMotion(serverUrl);
                             goto scan_execute_loop_done;
                         }
-                        if (!returnPin.ok)
+                        if (!returnPin.ok || returnPin.skipped)
                         {
                             const QString reason = returnPin.errorMessage.isEmpty()
                                                        ? QStringLiteral("could not return to pin")
@@ -2009,11 +2023,26 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                                     host_->appendLog(
                                         QStringLiteral(
                                             "UR3e scan wrist sweep pin %1: return-to-pin "
-                                            "warning — %2")
+                                            "failed — %2 (next pin may start from offset)")
                                             .arg(pointIndex)
                                             .arg(reason));
                                 },
                                 Qt::QueuedConnection);
+                        }
+                        else
+                        {
+                            QMetaObject::invokeMethod(
+                                this,
+                                [this, pointIndex]() {
+                                    host_->appendLog(
+                                        QStringLiteral(
+                                            "UR3e scan wrist sweep pin %1: back at "
+                                            "nominal pin pose.")
+                                            .arg(pointIndex));
+                                },
+                                Qt::QueuedConnection);
+                            std::this_thread::sleep_for(
+                                std::chrono::milliseconds(stabilizeMs));
                         }
                     }
                 }
@@ -2040,6 +2069,12 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
 
             if (returnHomeAfterScan)
             {
+                scanReturningHome_.store(true, std::memory_order_release);
+                // Allow MoveIt home even though Stop was pressed (sidecar stop latch cleared
+                // inside /execute_move_home). Extra Stop presses are ignored while this flag
+                // is set so they cannot cancel the retreat.
+                stopRequested_.store(false, std::memory_order_release);
+
                 QMetaObject::invokeMethod(
                     this,
                     [this, userStopped]() {
@@ -2053,8 +2088,11 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                     },
                     Qt::BlockingQueuedConnection);
 
-                // /execute_move_home clears the sidecar stop latch so MoveIt can run again.
+                // Sidecar post_scan_home retries + ignore_stop; C++ ignores extra Stop presses.
                 const Ur3eScanWaypointMoveResult postHomeResult = ur3eExecuteMoveHome(serverUrl);
+
+                scanReturningHome_.store(false, std::memory_order_release);
+
                 if (postHomeResult.ok)
                 {
                     QMetaObject::invokeMethod(
@@ -2062,7 +2100,7 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                         &Ur3ePanelController::syncHomeJointTargetSliders,
                         Qt::QueuedConnection);
                 }
-                if (!postHomeResult.ok && !postHomeResult.stopped)
+                else
                 {
                     const QString reason = postHomeResult.errorMessage.isEmpty()
                                                ? QStringLiteral("could not return to home")
@@ -2262,6 +2300,7 @@ void Ur3ePanelController::finishScanExecute(const bool ok,
                                             const qint64 elapsedMs,
                                             const bool stopped)
 {
+    scanReturningHome_.store(false, std::memory_order_release);
     setBusy(false);
     setJointPollIntervalMs(kPosePollIntervalMs);
     host_->appendLog(QStringLiteral("UR3e scan execute: %1").arg(detail));
@@ -2842,6 +2881,14 @@ void Ur3ePanelController::requestStopMotion()
 {
     if (serverManager_ == nullptr || !robotConnected_)
         return;
+
+    // Do not cancel an in-progress post-scan retreat to home (double-Stop used to abort it).
+    if (scanReturningHome_.load(std::memory_order_acquire))
+    {
+        host_->appendLog(
+            QStringLiteral("UR3e: stop ignored — already returning to scan home."));
+        return;
+    }
 
     stopRequested_.store(true, std::memory_order_release);
     host_->appendLog(QStringLiteral("UR3e: stop requested"));

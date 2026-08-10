@@ -291,7 +291,10 @@ def coalesce_joints_for_execute(
 
 
 # Soft keep-out near MoveIt hard limits (pendant "close to joint limit" protective stop).
-SOFT_JOINT_LIMIT_MARGIN_RAD = math.radians(10.0)
+# margin_rad = how far (radians) each limited joint must stay inside the hard URDF/MoveIt
+# limit. Example: hard limit ±180° and margin 5° ⇒ usable band about ±175°.
+# Was 10° (too strict for dense dome + wrist sweep); 5° is the loosened default.
+SOFT_JOINT_LIMIT_MARGIN_RAD = math.radians(5.0)
 
 
 def joint_limit_clearance_rad(

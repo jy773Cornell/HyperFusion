@@ -157,10 +157,10 @@ struct HardwareConfig
         /// After each scan pin: wrist grid (±steps×stepDeg) on enabled wrists + center.
         bool scanWristSweepEnabled = true;
         double scanWristSweepStepDeg = 3.0;
-        int scanWristSweepStepsEachWay = 4;
+        int scanWristSweepStepsEachWay = 1;
         bool scanWristSweepWrist1 = false;
         bool scanWristSweepWrist2 = true;
-        bool scanWristSweepWrist3 = true;
+        bool scanWristSweepWrist3 = false;
         /// Settle time after each pin / wrist pose before BFS still (or motion-only dwell).
         int scanCaptureStabilizeMs = 500;
         /// Lock scan TCP roll so image-up ≈ tray/world +Z (projected ⊥ look-at). Pin centers only.

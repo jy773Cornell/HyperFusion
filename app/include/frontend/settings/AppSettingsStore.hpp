@@ -55,10 +55,10 @@ struct PersistedUr3eHemisphereScanSettings
     double thetaMaxDeg = 90.0;
     bool wristSweepEnabled = true;
     double wristSweepStepDeg = 3.0;
-    int wristSweepStepsEachWay = 4;
+    int wristSweepStepsEachWay = 1;
     bool wristSweepWrist1 = false;
     bool wristSweepWrist2 = true;
-    bool wristSweepWrist3 = true;
+    bool wristSweepWrist3 = false;
 };
 
 struct PersistedBfsCameraSettings

@@ -130,10 +130,10 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
 
   wristSweepStepsSpin_ = new QSpinBox(group);
   wristSweepStepsSpin_->setRange(1, 12);
-  wristSweepStepsSpin_->setValue(4);
+  wristSweepStepsSpin_->setValue(1);
   wristSweepStepsSpin_->setToolTip(
       QStringLiteral("Steps each way from center (±N×step). Offsets exclude 0 "
-                     "(center is captured separately)."));
+                     "(center is captured separately). Default 1 → fewer multiview poses."));
   form->addRow(QStringLiteral("± steps"), wristSweepStepsSpin_);
 
   wrist1Check_ = new QCheckBox(QStringLiteral("w1"), group);
@@ -143,7 +143,7 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(
   wrist3Check_ = new QCheckBox(QStringLiteral("w3"), group);
   wrist3Check_->setToolTip(QStringLiteral("wrist_3"));
   wrist2Check_->setChecked(true);
-  wrist3Check_->setChecked(true);
+  wrist3Check_->setChecked(false);
   auto *wristAxesRow = new QWidget(group);
   auto *wristAxesLayout = new QHBoxLayout(wristAxesRow);
   wristAxesLayout->setContentsMargins(0, 0, 0, 0);
@@ -319,7 +319,7 @@ Ur3eHemisphereScanSettingsWidget::wristSweepParams() const
   hf::ur3e::Ur3eWristSweepParams wrist;
   wrist.enabled = wristSweepEnabledCheck_ != nullptr && wristSweepEnabledCheck_->isChecked();
   wrist.stepDeg = wristSweepStepSpin_ != nullptr ? wristSweepStepSpin_->value() : 3.0;
-  wrist.stepsEachWay = wristSweepStepsSpin_ != nullptr ? wristSweepStepsSpin_->value() : 4;
+  wrist.stepsEachWay = wristSweepStepsSpin_ != nullptr ? wristSweepStepsSpin_->value() : 1;
   wrist.wrist1 = wrist1Check_ != nullptr && wrist1Check_->isChecked();
   wrist.wrist2 = wrist2Check_ != nullptr && wrist2Check_->isChecked();
   wrist.wrist3 = wrist3Check_ != nullptr && wrist3Check_->isChecked();

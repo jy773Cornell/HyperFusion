@@ -130,7 +130,7 @@ TRAJECTORY_MAX_PINCH_SAMPLES = 48
 TRAJECTORY_MAX_COLLISION_SAMPLES = 48
 # Reject OMPL "snake" paths: travel may not exceed max(floor, ratio * start→goal).
 TRAJECTORY_MAX_TRAVEL_FLOOR_RAD = math.radians(150.0)
-TRAJECTORY_MAX_TRAVEL_RATIO = 2.0
+TRAJECTORY_MAX_TRAVEL_RATIO = 2.5
 # Hardware-only spins (cable unwind): sample this often and MoveIt-validate each pose.
 HARDWARE_SPIN_MAX_STEP_RAD = math.radians(8.0)
 

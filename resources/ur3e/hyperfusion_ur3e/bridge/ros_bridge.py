@@ -1848,12 +1848,26 @@ class Ur3eRosBridge:
     workspace_cfg = body.get("workspace")
     workspace = workspace_from_dict(workspace_cfg) if isinstance(workspace_cfg, dict) else None
 
+    # Post-scan / post-stop retreat: do not abort when a racing Stop re-sets the latch.
+    ignore_stop = bool(body.get("ignore_stop", False) or body.get("post_scan_home", False))
+    stop_event = None if ignore_stop else self._stop_requested
+
     planner = get_scan_planner(ros_distro=self.ros_distro, ur_type=self.ur_type)
     planner.apply_home_joints_from_body(body)
-    return planner.execute_move_home(
-      workspace=workspace,
-      stop_event=self._stop_requested,
-    )
+
+    last: Dict[str, Any] = {"ok": False, "error": "could not move to home"}
+    attempts = 3 if ignore_stop else 1
+    for attempt in range(1, attempts + 1):
+      self._stop_requested.clear()
+      last = planner.execute_move_home(
+        workspace=workspace,
+        stop_event=stop_event,
+      )
+      if last.get("ok"):
+        return last
+      if attempt < attempts:
+        time.sleep(0.75)
+    return last
 
   def maybe_rewind_wrist3_cable(self, body: Dict[str, Any]) -> Dict[str, Any]:
     """Between scan pins: unwind wrist_3 at home if ≥½ turn from home ref."""

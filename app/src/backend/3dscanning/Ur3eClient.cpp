@@ -696,10 +696,14 @@ Ur3eScanWaypointMoveResult ur3eExecuteScanWaypoint(const QString &serverUrl,
 Ur3eScanWaypointMoveResult ur3eExecuteMoveHome(const QString &serverUrl, QString *errorMessage)
 {
     QString localError;
+    QJsonObject body = buildScanMotionRequestBody();
+    // After Stop / scan end, ignore racing stop latch and retry briefly so home completes.
+    body.insert(QStringLiteral("post_scan_home"), true);
+    body.insert(QStringLiteral("ignore_stop"), true);
     const QJsonObject response = postJson(
         serverUrl,
         QStringLiteral("/execute_move_home"),
-        buildScanMotionRequestBody(),
+        body,
         180000,
         &localError);
     Ur3eScanWaypointMoveResult result = parseScanMotionResponse(response, localError);

@@ -204,6 +204,9 @@ private:
     bool scanPlanReady_ = false;
     bool scanExecuting_ = false;
     bool scanExecuteSuppressUiSummary_ = false;
+    /// True while post-scan / post-stop retreat-to-home is running — ignore extra Stop presses
+    /// so they cannot cancel the home motion mid-flight.
+    std::atomic<bool> scanReturningHome_{false};
     bool scanPlanning_ = false;
     bool motionInProgress_ = false;
     Ur3eHemisphereScanPlan plannedScanPlan_;
