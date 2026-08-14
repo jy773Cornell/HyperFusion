@@ -9,7 +9,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Optional, Sequence
 
 os.environ.setdefault("ROS_LOCALHOST_ONLY", "1")
@@ -37,6 +37,12 @@ from hyperfusion_ur3e.joint_angles import (
     wrist3_needs_rewind,
     wrist3_on_home_branch,
     wrist3_unwind_target_rad,
+)
+from hyperfusion_ur3e.moveit.robot_joints import (
+    branch_gap_warning,
+    coalesce_goal_to_plan_start,
+    execute_anchor_joints,
+    read_live_joints,
 )
 
 GROUP_NAME = "ur_manipulator"
@@ -120,9 +126,8 @@ RECOVERY_NUM_PLANNING_ATTEMPTS = 8
 # Reject IK solutions whose tool0 +Z faces away from the dome center (180° flip).
 TOOL_Z_ALIGNMENT_MIN_DOT = 0.95
 
-# Pin pose approach-cone search (half-angle deg). Inside→out; first reachable wins.
-PIN_POSE_CONE_MID_AZIMUTHS = 4
-PIN_POSE_CONE_OUTER_AZIMUTHS = 8
+# Pin pose tip search (half-angle deg): vertical plane only (look-at × camera-up).
+# Inside→out: mid then half; at each tip, +toward up then −toward tray.
 
 # Trajectory scoring: sample pinch guard along planned paths before execute.
 TRAJECTORY_PINCH_MIN_GAP_M = 0.028
@@ -241,8 +246,11 @@ class ScanPoseTarget:
     camera_up_x: float = 0.0
     camera_up_y: float = 0.0
     camera_up_z: float = 1.0
-    # Apex pin: no look-at cone — exact surface-normal only.
+    # Apex pin: exact look-down only (no tip cone); roll variants may still be tried.
     require_perpendicular: bool = False
+    # Optional grid metadata (Semi ring grouping).
+    theta_deg: float = 0.0
+    phi_deg: float = 0.0
 
 
 @dataclass
@@ -264,6 +272,8 @@ class ScanPoseResult:
     cone_tip_deg: float = 0.0
     # True when a home→pin path+unwrap exists; False = previous→pin chain only.
     home_path_ok: bool = False
+    # Semi: full shoulder_pan circle at fixed other joints is collision-free.
+    base_sweep_ok: bool = False
 
 
 def _normalize(x: float, y: float, z: float) -> tuple[float, float, float]:
@@ -283,15 +293,38 @@ def _cross(
     )
 
 
+def _rotate_about_axis(
+    v: tuple[float, float, float],
+    axis: tuple[float, float, float],
+    ang_rad: float,
+) -> tuple[float, float, float]:
+    """Rodrigues rotate unit-ish vector *v* about unit *axis* by *ang_rad*."""
+    ax, ay, az = axis
+    vx, vy, vz = v
+    c = math.cos(ang_rad)
+    s = math.sin(ang_rad)
+    dot = ax * vx + ay * vy + az * vz
+    cx, cy, cz = _cross(axis, v)
+    return (
+        vx * c + cx * s + ax * dot * (1.0 - c),
+        vy * c + cy * s + ay * dot * (1.0 - c),
+        vz * c + cz * s + az * dot * (1.0 - c),
+    )
+
+
 def iter_tool_z_cone_directions(
     zx: float,
     zy: float,
     zz: float,
     half_angle_deg: float,
+    *,
+    up: tuple[float, float, float] = (0.0, 0.0, 1.0),
 ) -> List[tuple[float, tuple[float, float, float]]]:
-    """Inside→out tool +Z samples in a half-angle cone (degrees).
+    """Inside→out tool +Z samples in the vertical plane (look-at × camera-up).
 
-    Returns (tip_deg, unit_tool_z). Nominal (0°) is always first.
+    No left/right (azimuthal) tips — same plane as ``pin_tcp_tilt_deg``.
+    Returns (signed_tip_deg, unit_tool_z): + toward *up*, − toward −up.
+    Nominal (0°) is always first.
     """
     z0 = _normalize(zx, zy, zz)
     samples: List[tuple[float, tuple[float, float, float]]] = [(0.0, z0)]
@@ -299,28 +332,28 @@ def iter_tool_z_cone_directions(
     if half <= 1.0e-6:
         return samples
 
-    ref = (1.0, 0.0, 0.0) if abs(z0[0]) < 0.9 else (0.0, 1.0, 0.0)
-    u = _normalize(*_cross(z0, ref))
-    v = _normalize(*_cross(z0, u))
+    ux, uy, uz = float(up[0]), float(up[1]), float(up[2])
+    # Project camera-up ⊥ look-at so pitch axis is well-defined.
+    dot_zu = z0[0] * ux + z0[1] * uy + z0[2] * uz
+    up_perp = (ux - dot_zu * z0[0], uy - dot_zu * z0[1], uz - dot_zu * z0[2])
+    up_len = math.sqrt(up_perp[0] ** 2 + up_perp[1] ** 2 + up_perp[2] ** 2)
+    if up_len < 1.0e-9:
+        return samples  # look-at ‖ camera-up: no vertical-plane pitch
 
-    rings: List[tuple[float, int]] = []
+    pitch_axis = _normalize(*_cross(z0, up_perp))
+    tip_angles: List[float] = []
     mid = 0.5 * half
     if mid >= 0.5:
-        rings.append((mid, PIN_POSE_CONE_MID_AZIMUTHS))
-    rings.append((half, PIN_POSE_CONE_OUTER_AZIMUTHS))
+        tip_angles.append(mid)
+    tip_angles.append(half)
 
-    for tip_deg, n_az in rings:
-        tip = math.radians(tip_deg)
-        cos_t = math.cos(tip)
-        sin_t = math.sin(tip)
-        for k in range(max(1, int(n_az))):
-            az = (2.0 * math.pi * k) / float(n_az)
-            cx = math.cos(az)
-            sx = math.sin(az)
-            dx = cos_t * z0[0] + sin_t * (cx * u[0] + sx * v[0])
-            dy = cos_t * z0[1] + sin_t * (cx * u[1] + sx * v[1])
-            dz = cos_t * z0[2] + sin_t * (cx * u[2] + sx * v[2])
-            samples.append((tip_deg, _normalize(dx, dy, dz)))
+    for tip_abs in tip_angles:
+        tip_rad = math.radians(tip_abs)
+        # +tip toward camera-up, then −tip toward tray.
+        for signed in (tip_abs, -tip_abs):
+            ang = tip_rad if signed > 0.0 else -tip_rad
+            tilted = _rotate_about_axis(z0, pitch_axis, ang)
+            samples.append((float(signed), _normalize(*tilted)))
     return samples
 
 
@@ -392,9 +425,29 @@ def tool_z_to_rotation_vector(
 
     # Rotation matrix columns are x, y, z tool axes.
     trace = xx + yy + zz
-    angle = math.acos(max(-1.0, min(1.0, (trace - 1.0) * 0.5)))
+    cos_angle = max(-1.0, min(1.0, (trace - 1.0) * 0.5))
+    angle = math.acos(cos_angle)
     if angle <= 1.0e-9:
         return 0.0, 0.0, 0.0
+
+    # Near 180°: (R − Rᵀ)/(2 sinθ) is unstable (apex look-down).
+    if angle > math.pi - 1.0e-6 or abs(math.sin(angle)) < 1.0e-6:
+        ax = math.sqrt(max(0.0, (xx + 1.0) * 0.5))
+        ay = math.sqrt(max(0.0, (yy + 1.0) * 0.5))
+        az = math.sqrt(max(0.0, (zz + 1.0) * 0.5))
+        if ax >= ay and ax >= az:
+            ay = math.copysign(ay, xy + yx)
+            az = math.copysign(az, xz + zx)
+        elif ay >= az:
+            ax = math.copysign(ax, xy + yx)
+            az = math.copysign(az, yz + zy)
+        else:
+            ax = math.copysign(ax, xz + zx)
+            ay = math.copysign(ay, yz + zy)
+        length = math.sqrt(ax * ax + ay * ay + az * az)
+        if length <= 1.0e-9:
+            return math.pi, 0.0, 0.0
+        return ax / length * math.pi, ay / length * math.pi, az / length * math.pi
 
     ax = (yz - zy) / (2.0 * math.sin(angle))
     ay = (zx - xz) / (2.0 * math.sin(angle))
@@ -406,7 +459,10 @@ def pose_target_to_ur_pose(target: ScanPoseTarget) -> tuple[float, float, float,
     """World-frame TCP pose; prefer HyperFusion rotvec (camera-up roll) when present."""
     if abs(target.rx) + abs(target.ry) + abs(target.rz) > 1.0e-12:
         return target.x_m, target.y_m, target.z_m, target.rx, target.ry, target.rz
-    rx, ry, rz = tool_z_to_rotation_vector(target.tool_z_x, target.tool_z_y, target.tool_z_z)
+    up = (float(target.camera_up_x), float(target.camera_up_y), float(target.camera_up_z))
+    rx, ry, rz = tool_z_to_rotation_vector(
+        target.tool_z_x, target.tool_z_y, target.tool_z_z, up=up
+    )
     return target.x_m, target.y_m, target.z_m, rx, ry, rz
 
 
@@ -1153,6 +1209,12 @@ class MoveItScanPlanner:
             self._last_workspace = workspace
         return self._apply_workspace_collision(workspace)
 
+    def _live_joint_reading(self, *, timeout_s: float = 1.5):
+        """RTDE-authoritative live joints (see moveit.robot_joints)."""
+        hardware = self._ensure_hardware_joint_positions(timeout_s=timeout_s)
+        stamper = self._current_joint_positions()
+        return read_live_joints(hardware_rad=hardware, stamper_rad=stamper)
+
     def _current_joint_positions(self) -> Optional[List[float]]:
         if len(self._latest_joint_positions) != 6:
             return None
@@ -1182,14 +1244,12 @@ class MoveItScanPlanner:
         return hardware
 
     def _moveit_start_joint_positions(self) -> Optional[List[float]]:
-        """Current joints on the MoveIt /joint_states branch (from stamper)."""
-        current = self._current_joint_positions()
-        if current is not None:
-            return list(current)
-        hardware = self._hardware_joint_positions()
-        if hardware is None:
-            return None
-        return coalesce_joints_for_moveit(hardware, hardware)
+        """Plan-start joints: RTDE mapped into MoveIt limits (not stamper twins)."""
+        reading = read_live_joints(
+            hardware_rad=self._hardware_joint_positions(),
+            stamper_rad=self._current_joint_positions(),
+        )
+        return reading.plan_start_rad
 
     def _wait_for_planner_joint_feedback(self, timeout_s: float = 2.0) -> None:
         """Wait until MoveIt / hardware joint caches are populated (spin thread feeds them)."""
@@ -1209,7 +1269,7 @@ class MoveItScanPlanner:
         pin_pose_tolerance_deg: float = 0.0,
         lock_camera_up: bool = True,
     ) -> tuple[List[float], Optional[List[float]]]:
-        """Coalesce goal onto the live MoveIt (/joint_states) branch for planning.
+        """Coalesce goal onto the RTDE-mapped plan-start branch.
 
         Never re-seed onto the plan-time home seed (that caused wrist branch flips).
         RTDE multi-turn hardware is applied only when unwrapping the execute trajectory.
@@ -1217,16 +1277,16 @@ class MoveItScanPlanner:
         del direct_only  # kept for call-site compatibility
         resolved_goal = [float(v) for v in goal_joints]
         self._wait_for_planner_joint_feedback(timeout_s=1.5)
-        moveit_start = self._moveit_start_joint_positions()
-        if moveit_start is None:
-            # Last resort: map hardware into MoveIt limits so validity/planning stay in-range.
-            hardware = self._ensure_hardware_joint_positions(timeout_s=1.0)
-            if hardware is not None:
-                moveit_start = coalesce_joints_for_moveit(hardware, hardware)
+        reading = self._live_joint_reading(timeout_s=1.0)
+        moveit_start = reading.plan_start_rad
+        warn = branch_gap_warning(reading)
+        if warn:
+            sys.stderr.write(f"UR3e MoveIt execute: {warn}.\n")
+            sys.stderr.flush()
 
         if moveit_start is not None:
             branch_ref = list(moveit_start)
-            resolved_goal = coalesce_joints_for_moveit(branch_ref, resolved_goal)
+            resolved_goal = coalesce_goal_to_plan_start(branch_ref, resolved_goal)
         else:
             branch_ref = None
 
@@ -1238,7 +1298,7 @@ class MoveItScanPlanner:
                 lock_camera_up=lock_camera_up,
             )
             if refreshed is not None:
-                resolved_goal = coalesce_joints_for_moveit(branch_ref, refreshed)
+                resolved_goal = coalesce_goal_to_plan_start(branch_ref, refreshed)
 
         return resolved_goal, branch_ref
 
@@ -2068,15 +2128,20 @@ class MoveItScanPlanner:
         hardware = self._ensure_hardware_joint_positions(timeout_s=1.5)
         if hardware is not None:
             previous = [float(v) for v in hardware]
-        elif self._moveit_start_joint_positions() is not None:
-            previous = self._moveit_start_joint_positions()  # type: ignore[assignment]
         else:
-            first = joint_traj.points[0]
-            if len(first.positions) <= max(indices):
-                return False
-            previous = [
-                float(first.positions[index]) for index in indices
-            ]
+            anchor = execute_anchor_joints(
+                hardware_rad=None,
+                fallback_rad=self._moveit_start_joint_positions(),
+            )
+            if anchor is not None:
+                previous = list(anchor)
+            else:
+                first = joint_traj.points[0]
+                if len(first.positions) <= max(indices):
+                    return False
+                previous = [
+                    float(first.positions[index]) for index in indices
+                ]
 
         max_step_rad = self._unwrap_trajectory_waypoints(
             joint_traj, indices, previous, start_point_index=0
@@ -2904,6 +2969,26 @@ class MoveItScanPlanner:
                 return False, pinch_reason
         return True, ""
 
+    def _base_sweep_ok(
+        self,
+        joints: Sequence[float],
+        *,
+        samples: int = 36,
+    ) -> tuple[bool, str]:
+        """Plan-time check: shoulder_pan full turn at fixed other joints is valid."""
+        if joints is None or len(joints) != 6:
+            return False, "base_sweep: invalid joints"
+        n = max(8, int(samples))
+        base = [float(v) for v in joints]
+        pan0 = base[0]
+        for i in range(n):
+            sample = list(base)
+            sample[0] = pan0 + (2.0 * math.pi) * (float(i) / float(n))
+            ok, reason = self._state_is_valid(sample, check_pinch=True)
+            if not ok:
+                return False, reason or f"base_sweep collision at sample {i}/{n}"
+        return True, ""
+
     def plan_poses(
         self,
         targets: Sequence[ScanPoseTarget],
@@ -2912,6 +2997,9 @@ class MoveItScanPlanner:
         initial_seed: Optional[Sequence[float]] = None,
         pin_pose_tolerance_deg: float = 0.0,
         lock_camera_up: bool = True,
+        semi_ring_sweep: bool = False,
+        semi_max_sweep_ok_per_ring: int = 3,
+        semi_ring_search_candidates: int = 360,
     ) -> List[ScanPoseResult]:
         with self._lock:
             self._process_manager.ensure_running()
@@ -2937,13 +3025,25 @@ class MoveItScanPlanner:
             total = len(targets)
             move_client = self._ensure_move_client()
             tolerance_deg = max(0.0, float(pin_pose_tolerance_deg))
+            max_per_ring = max(1, int(semi_max_sweep_ok_per_ring))
+            sweep_ok_by_ring: Dict[int, int] = {}
+            n_phi = max(1, min(720, int(semi_ring_search_candidates)))
+            # Full-turn base-sweep samples (~every 10° of pan).
+            base_sweep_samples = max(8, min(72, max(36, n_phi // 7)))
             sys.stderr.write(
                 "UR3e MoveIt: planning "
                 f"{total} scan pose(s) (multi-IK; home→pin preferred, "
                 "previous→pin fallback"
                 + (
-                    f"; pin cone ±{tolerance_deg:.1f}°"
+                    f"; pin tip ±{tolerance_deg:.1f}° (vertical plane)"
                     if tolerance_deg > 1.0e-6
+                    else ""
+                )
+                + (
+                    f"; semi base-sweep first {max_per_ring}/ring"
+                    f", {n_phi} φ candidates/ring"
+                    "; require home↔pin"
+                    if semi_ring_sweep
                     else ""
                 )
                 + ")…\n"
@@ -2955,15 +3055,30 @@ class MoveItScanPlanner:
                         f"UR3e MoveIt: planned {pose_index}/{total} pose(s)…\n"
                     )
                 result = ScanPoseResult(index=target.index, reachable=False)
+                ring_key = int(round(float(target.theta_deg) * 2.0))
+                if (
+                    semi_ring_sweep
+                    and not target.require_perpendicular
+                    and sweep_ok_by_ring.get(ring_key, 0) >= max_per_ring
+                ):
+                    result.error = (
+                        f"semi ring θ≈{target.theta_deg:.1f}° already has "
+                        f"{max_per_ring} base-sweep OK pin(s)"
+                    )
+                    results.append(result)
+                    continue
+
                 last_pick_error = "IK failed"
                 try:
-                    # Apex: same XY + orientation as home TCP (MoveIt FK); only Z changes.
+                    # Apex: C++ already places TCP over home TCP XY (look-down).
+                    # Snap XY/orientation from MoveIt home FK (Z stays dome radius).
                     pin_target = target
                     if target.require_perpendicular:
                         pin_target = self._apex_target_from_home(target, plan_start_seed)
                         sys.stderr.write(
                             "UR3e MoveIt: apex pin — home TCP XY/orientation, "
-                            f"Z={pin_target.z_m:.3f} m (no cone).\n"
+                            f"Z={pin_target.z_m:.3f} m "
+                            "(exact perpendicular only; no cone, no tilt).\n"
                         )
                     current_pin_seed = (
                         last_reachable_pin
@@ -2980,73 +3095,165 @@ class MoveItScanPlanner:
                             s for s in ik_seeds if s != list(plan_start_seed)
                         ]
                     pin_tol_deg = (
-                        0.0 if pin_target.require_perpendicular else tolerance_deg
+                        0.0 if pin_target.require_perpendicular else float(tolerance_deg)
                     )
-                    cone_samples = iter_tool_z_cone_directions(
-                        pin_target.tool_z_x,
-                        pin_target.tool_z_y,
-                        pin_target.tool_z_z,
-                        pin_tol_deg,
-                    )
-                    for tip_deg, tool_z in cone_samples:
-                        if tip_deg <= 1.0e-9:
-                            sample_target = pin_target
-                        else:
-                            sample_target = scan_pose_target_with_tool_z(
-                                pin_target,
-                                tool_z,
-                                lock_camera_up=lock_camera_up,
-                            )
-                        pose = pose_target_to_ur_pose(sample_target)
-                        joints, pick_error, recovered, home_path_ok = (
-                            self._pick_ik_closest_to_home_with_path(
-                                pose,
-                                plan_start_seed,
-                                ik_seeds,
-                                move_client,
-                                last_pin_joints=last_reachable_pin,
-                                desired_tool_z=(
-                                    sample_target.tool_z_x,
-                                    sample_target.tool_z_y,
-                                    sample_target.tool_z_z,
-                                ),
-                                prefer_collision_free_ik=not pin_target.require_perpendicular,
-                            )
-                        )
-                        if joints is None:
-                            last_pick_error = pick_error or last_pick_error
-                            if pick_error and (
-                                "path from home" in pick_error
-                                or "path from previous" in pick_error
-                                or "previous pin" in pick_error
-                            ):
-                                # Count once per pin at most (nominal path reject).
-                                if tip_deg <= 1.0e-9:
-                                    path_rejected += 1
-                            continue
 
-                        if recovered:
-                            multi_seed_recoveries += 1
-                        if tip_deg > 1.0e-9:
-                            cone_recoveries += 1
-                        if not home_path_ok:
-                            chain_only_count += 1
-                        result.reachable = True
-                        result.home_path_ok = bool(home_path_ok)
-                        result.joint_positions = joints
-                        result.cone_tip_deg = float(tip_deg)
-                        result.tcp_x_m = float(sample_target.x_m)
-                        result.tcp_y_m = float(sample_target.y_m)
-                        result.tcp_z_m = float(sample_target.z_m)
-                        result.tcp_rx = float(sample_target.rx)
-                        result.tcp_ry = float(sample_target.ry)
-                        result.tcp_rz = float(sample_target.rz)
-                        result.tool_z_x = float(sample_target.tool_z_x)
-                        result.tool_z_y = float(sample_target.tool_z_y)
-                        result.tool_z_z = float(sample_target.tool_z_z)
-                        last_reachable_pin = list(joints)
-                        break
-                    else:
+                    roll_targets: List[ScanPoseTarget] = [pin_target]
+                    if pin_target.require_perpendicular:
+                        for alt in (
+                            (-1.0, 0.0, 0.0),
+                            (0.0, 1.0, 0.0),
+                            (0.0, -1.0, 0.0),
+                        ):
+                            if (
+                                abs(alt[0] - pin_target.camera_up_x) < 1.0e-9
+                                and abs(alt[1] - pin_target.camera_up_y) < 1.0e-9
+                                and abs(alt[2] - pin_target.camera_up_z) < 1.0e-9
+                            ):
+                                continue
+                            alt_t = replace(
+                                pin_target,
+                                camera_up_x=alt[0],
+                                camera_up_y=alt[1],
+                                camera_up_z=alt[2],
+                            )
+                            roll_targets.append(
+                                scan_pose_target_with_tool_z(
+                                    alt_t,
+                                    (
+                                        alt_t.tool_z_x,
+                                        alt_t.tool_z_y,
+                                        alt_t.tool_z_z,
+                                    ),
+                                    lock_camera_up=True,
+                                )
+                            )
+
+                    picked = False
+                    for roll_i, roll_target in enumerate(roll_targets):
+                        if picked:
+                            break
+                        for tip_deg, tool_z in iter_tool_z_cone_directions(
+                            roll_target.tool_z_x,
+                            roll_target.tool_z_y,
+                            roll_target.tool_z_z,
+                            pin_tol_deg,
+                            up=(
+                                roll_target.camera_up_x,
+                                roll_target.camera_up_y,
+                                roll_target.camera_up_z,
+                            ),
+                        ):
+                            if abs(tip_deg) <= 1.0e-9:
+                                sample_target = roll_target
+                            else:
+                                sample_target = scan_pose_target_with_tool_z(
+                                    roll_target,
+                                    tool_z,
+                                    lock_camera_up=lock_camera_up,
+                                )
+                            pose = pose_target_to_ur_pose(sample_target)
+                            joints, pick_error, recovered, home_path_ok = (
+                                self._pick_ik_closest_to_home_with_path(
+                                    pose,
+                                    plan_start_seed,
+                                    ik_seeds,
+                                    move_client,
+                                    last_pin_joints=last_reachable_pin,
+                                    desired_tool_z=(
+                                        sample_target.tool_z_x,
+                                        sample_target.tool_z_y,
+                                        sample_target.tool_z_z,
+                                    ),
+                                    prefer_collision_free_ik=not pin_target.require_perpendicular,
+                                )
+                            )
+                            if joints is None:
+                                last_pick_error = pick_error or last_pick_error
+                                if pick_error and (
+                                    "path from home" in pick_error
+                                    or "path from previous" in pick_error
+                                    or "previous pin" in pick_error
+                                ):
+                                    if abs(tip_deg) <= 1.0e-9 and roll_i == 0:
+                                        path_rejected += 1
+                                continue
+
+                            if recovered:
+                                multi_seed_recoveries += 1
+                            if abs(tip_deg) > 1.0e-9:
+                                cone_recoveries += 1
+                            if not home_path_ok:
+                                chain_only_count += 1
+
+                            if semi_ring_sweep:
+                                if not home_path_ok:
+                                    last_pick_error = (
+                                        "semi requires home→pin path (chain-only rejected)"
+                                    )
+                                    if abs(tip_deg) <= 1.0e-9 and roll_i == 0:
+                                        path_rejected += 1
+                                    continue
+                                return_ok, return_err = self._start_to_goal_path_ok(
+                                    joints,
+                                    plan_start_seed,
+                                    move_client,
+                                    label="pin→home",
+                                )
+                                if not return_ok:
+                                    last_pick_error = (
+                                        return_err or "semi pin→home path failed"
+                                    )
+                                    if abs(tip_deg) <= 1.0e-9 and roll_i == 0:
+                                        path_rejected += 1
+                                    continue
+
+                            base_sweep_ok = True
+                            if semi_ring_sweep and not pin_target.require_perpendicular:
+                                base_sweep_ok, sweep_err = self._base_sweep_ok(
+                                    joints, samples=base_sweep_samples
+                                )
+                                if not base_sweep_ok:
+                                    last_pick_error = sweep_err or "base_sweep failed"
+                                    continue
+
+                            if pin_target.require_perpendicular and roll_i > 0:
+                                sys.stderr.write(
+                                    "UR3e MoveIt: apex used alternate camera-up "
+                                    f"({sample_target.camera_up_x:.0f},"
+                                    f"{sample_target.camera_up_y:.0f},"
+                                    f"{sample_target.camera_up_z:.0f}) "
+                                    "(look-at still perpendicular).\n"
+                                )
+
+                            result.reachable = True
+                            result.home_path_ok = bool(home_path_ok)
+                            result.base_sweep_ok = bool(base_sweep_ok) or bool(
+                                pin_target.require_perpendicular
+                            )
+                            result.joint_positions = joints
+                            result.cone_tip_deg = float(tip_deg)
+                            result.tcp_x_m = float(sample_target.x_m)
+                            result.tcp_y_m = float(sample_target.y_m)
+                            result.tcp_z_m = float(sample_target.z_m)
+                            result.tcp_rx = float(sample_target.rx)
+                            result.tcp_ry = float(sample_target.ry)
+                            result.tcp_rz = float(sample_target.rz)
+                            result.tool_z_x = float(sample_target.tool_z_x)
+                            result.tool_z_y = float(sample_target.tool_z_y)
+                            result.tool_z_z = float(sample_target.tool_z_z)
+                            last_reachable_pin = list(joints)
+                            if (
+                                semi_ring_sweep
+                                and result.base_sweep_ok
+                                and not pin_target.require_perpendicular
+                            ):
+                                sweep_ok_by_ring[ring_key] = (
+                                    sweep_ok_by_ring.get(ring_key, 0) + 1
+                                )
+                            picked = True
+                            break
+                    if not picked:
                         result.error = last_pick_error or "IK failed"
                 except Exception as exc:
                     result.error = str(exc)
@@ -3059,7 +3266,7 @@ class MoveItScanPlanner:
                 )
             if cone_recoveries > 0:
                 sys.stderr.write(
-                    "UR3e MoveIt: pin-pose cone recovered "
+                    "UR3e MoveIt: pin-pose vertical tip recovered "
                     f"{cone_recoveries} pose(s) (tolerance ±{tolerance_deg:.1f}°).\n"
                 )
             if path_rejected > 0:
@@ -3077,9 +3284,14 @@ class MoveItScanPlanner:
             home_ok_count = sum(
                 1 for item in results if item.reachable and item.home_path_ok
             )
+            sweep_ok_count = sum(
+                1 for item in results if item.reachable and item.base_sweep_ok
+            )
             sys.stderr.write(
                 f"UR3e MoveIt: plan complete — {reachable}/{total} reachable "
-                f"({home_ok_count} home→pin, {chain_only_count} chain-only).\n"
+                f"({home_ok_count} home→pin, {chain_only_count} chain-only"
+                + (f", {sweep_ok_count} base-sweep OK" if semi_ring_sweep else "")
+                + ").\n"
             )
 
             return results
@@ -3570,15 +3782,16 @@ class MoveItScanPlanner:
         )
         tolerance_deg = max(0.0, float(pin_pose_tolerance_deg))
         if base.require_perpendicular:
-            tolerance_deg = 0.0
+            tolerance_deg = 0.0  # apex: exact look-down only
         last_error = "no IK solution"
         for tip_deg, tool_z in iter_tool_z_cone_directions(
             base.tool_z_x,
             base.tool_z_y,
             base.tool_z_z,
             tolerance_deg,
+            up=(base.camera_up_x, base.camera_up_y, base.camera_up_z),
         ):
-            if tip_deg <= 1.0e-9:
+            if abs(tip_deg) <= 1.0e-9:
                 sample = base
             else:
                 sample = scan_pose_target_with_tool_z(
@@ -3610,9 +3823,9 @@ class MoveItScanPlanner:
                 last_error = reason or "collision"
                 continue
 
-            if tip_deg > 1.0e-9:
+            if abs(tip_deg) > 1.0e-9:
                 sys.stderr.write(
-                    "UR3e MoveIt execute: live IK refresh used pin-pose cone "
+                    "UR3e MoveIt execute: live IK refresh used vertical tip "
                     f"tip={tip_deg:.1f}° (tolerance ±{tolerance_deg:.1f}°).\n"
                 )
             else:
@@ -3656,22 +3869,19 @@ class MoveItScanPlanner:
         """Try planners in order; execute the first valid trajectory (no collect-all)."""
         from moveit_msgs.msg import MoveItErrorCodes
 
-        # MoveIt plans against /joint_states (stamper branch). RTDE hardware branch is
-        # applied only when unwrapping the trajectory for scaled_joint_trajectory_controller.
-        hardware_start = self._ensure_hardware_joint_positions(timeout_s=1.5)
-        moveit_start = self._moveit_start_joint_positions()
-        # Principalize continuous joints for MoveGroup (matches stamper (-π, π] stream).
-        if moveit_start is not None:
-            moveit_start = coalesce_joints_for_moveit(moveit_start, moveit_start)
-        plan_goal = list(goal_joints)
-        if moveit_start is not None:
-            plan_goal = coalesce_joints_for_moveit(moveit_start, plan_goal)
-        else:
-            plan_goal = coalesce_joints_for_moveit(plan_goal, plan_goal)
+        # Single source of truth: RTDE → plan start (robot_joints.read_live_joints).
+        reading = self._live_joint_reading(timeout_s=1.5)
+        hardware_start = reading.hardware_rad
+        moveit_start = reading.plan_start_rad
+        warn = branch_gap_warning(reading)
+        if warn:
+            sys.stderr.write(f"UR3e MoveIt execute: {warn}.\n")
+            sys.stderr.flush()
+        plan_goal = coalesce_goal_to_plan_start(moveit_start, goal_joints)
         if hardware_start is not None:
             sys.stderr.write(
-                "UR3e MoveIt execute: plan in MoveIt joint branch; "
-                "execute unwrap anchors to RTDE hardware.\n"
+                "UR3e MoveIt execute: plan from RTDE-mapped start; "
+                "execute unwrap anchors to live hardware.\n"
             )
 
         self._publish_rviz_goal_state(plan_goal)
@@ -4083,7 +4293,7 @@ class MoveItScanPlanner:
         )
         tolerance_deg = max(0.0, float(pin_pose_tolerance_deg))
         if base.require_perpendicular:
-            tolerance_deg = 0.0
+            tolerance_deg = 0.0  # apex: exact look-down only
 
         skip_key = None
         if skip_joints is not None and len(skip_joints) == 6:
@@ -4095,8 +4305,9 @@ class MoveItScanPlanner:
             base.tool_z_y,
             base.tool_z_z,
             tolerance_deg,
+            up=(base.camera_up_x, base.camera_up_y, base.camera_up_z),
         ):
-            if tip_deg <= 1.0e-9:
+            if abs(tip_deg) <= 1.0e-9:
                 sample = base
             else:
                 sample = scan_pose_target_with_tool_z(
@@ -4132,7 +4343,9 @@ class MoveItScanPlanner:
             )
             if ok:
                 tip_note = (
-                    f" (cone tip={tip_deg:.1f}°)" if tip_deg > 1.0e-9 else ""
+                    f" (vertical tip={tip_deg:.1f}°)"
+                    if abs(tip_deg) > 1.0e-9
+                    else ""
                 )
                 sys.stderr.write(
                     "UR3e MoveIt execute: reached pin via home + live cone IK"
@@ -4223,7 +4436,10 @@ class MoveItScanPlanner:
         target: ScanPoseTarget,
         home_joints: Sequence[float],
     ) -> ScanPoseTarget:
-        """Apex = home optical TCP XY/orientation with dome-radius Z (MoveIt FK)."""
+        """Apex = home optical TCP XY/orientation with dome-radius Z (MoveIt FK).
+
+        Ring pins stay on the base_link-centered dome; only apex uses home TCP XY.
+        """
         home_pose = self._fk_ee_pose(home_joints)
         if home_pose is None:
             return target
@@ -4243,7 +4459,67 @@ class MoveItScanPlanner:
             camera_up_y=target.camera_up_y,
             camera_up_z=target.camera_up_z,
             require_perpendicular=True,
+            theta_deg=target.theta_deg,
+            phi_deg=target.phi_deg,
         )
+
+    def _tcp_target_for_pin_pose_cone(
+        self,
+        goal_joints: Sequence[float],
+        tcp_target: Optional[Dict[str, Any]],
+    ) -> Optional[Dict[str, Any]]:
+        """Build / relax a TCP dict so pin_pose_tolerance_deg cone can apply.
+
+        Semi-fixed ring entries: never require_perpendicular. If TCP is missing,
+        FK the goal joints and aim tool +Z toward the tray scan-center projection.
+        """
+        import math
+
+        out: Dict[str, Any]
+        if isinstance(tcp_target, dict):
+            out = dict(tcp_target)
+        else:
+            fk = self._fk_ee_pose(goal_joints)
+            if fk is None:
+                return None
+            x_m, y_m, z_m, rx, ry, rz = fk
+            out = {
+                "x_m": float(x_m),
+                "y_m": float(y_m),
+                "z_m": float(z_m),
+                "rx": float(rx),
+                "ry": float(ry),
+                "rz": float(rz),
+            }
+
+        out["require_perpendicular"] = False
+        out.setdefault("camera_up_x", 0.0)
+        out.setdefault("camera_up_y", 0.0)
+        out.setdefault("camera_up_z", 1.0)
+
+        # Prefer explicit tool_z; else look toward tray origin under the pin XY.
+        tx = float(out.get("tool_z_x", 0.0) or 0.0)
+        ty = float(out.get("tool_z_y", 0.0) or 0.0)
+        tz = float(out.get("tool_z_z", 0.0) or 0.0)
+        if (tx * tx + ty * ty + tz * tz) < 1.0e-12:
+            x_m = float(out.get("x_m", out.get("x", 0.0)))
+            y_m = float(out.get("y_m", out.get("y", 0.0)))
+            z_m = float(out.get("z_m", out.get("z", 0.0)))
+            # Look at tray under the pin (x,y,0) — cone tilts around this axis.
+            dx = 0.0
+            dy = 0.0
+            dz = -max(abs(z_m), 0.05)
+            norm = math.sqrt(dx * dx + dy * dy + dz * dz)
+            out["tool_z_x"] = dx / norm
+            out["tool_z_y"] = dy / norm
+            out["tool_z_z"] = dz / norm
+            _ = (x_m, y_m)  # pin XY kept in out for IK pose
+
+        sys.stderr.write(
+            "UR3e MoveIt execute: pin-pose cone enabled for semi-fixed ring entry.\n"
+        )
+        sys.stderr.flush()
+        return out
 
     def execute_single_waypoint(
         self,
@@ -4256,6 +4532,7 @@ class MoveItScanPlanner:
         direct_only: bool = False,
         pin_pose_tolerance_deg: float = 0.0,
         lock_camera_up: bool = True,
+        allow_pin_pose_cone: bool = False,
     ) -> Dict[str, Any]:
         """Plan and execute one collision-aware joint-space motion via MoveIt.
 
@@ -4268,6 +4545,9 @@ class MoveItScanPlanner:
 
         Manual joint **Move** sets *direct_only*: same MoveIt plan+execute as scan pins,
         but without home retreat on failure.
+
+        *allow_pin_pose_cone*: semi-fixed ring entries — force non-apex cone relaxation
+        (``pin_pose_tolerance_deg``) and FK-fill TCP when missing.
         """
         if stop_event is not None and stop_event.is_set():
             return {"ok": False, "stopped": True, "error": "stopped"}
@@ -4277,6 +4557,9 @@ class MoveItScanPlanner:
 
         goal_joints = [float(v) for v in joints]
         tolerance_deg = max(0.0, float(pin_pose_tolerance_deg))
+
+        if allow_pin_pose_cone:
+            tcp_target = self._tcp_target_for_pin_pose_cone(goal_joints, tcp_target)
 
         with self._lock:
             self._process_manager.ensure_running()
@@ -4304,7 +4587,7 @@ class MoveItScanPlanner:
             planned_joints,
             direct_only=direct_only,
             tcp_target=tcp_target,
-            refresh_ik=False,
+            refresh_ik=bool(allow_pin_pose_cone and isinstance(tcp_target, dict)),
             pin_pose_tolerance_deg=tolerance_deg,
             lock_camera_up=lock_camera_up,
         )
@@ -4334,6 +4617,13 @@ class MoveItScanPlanner:
 
             goal_valid, goal_reason = self._state_is_valid(goal_joints)
             if not goal_valid and isinstance(tcp_target, dict) and branch_ref is not None:
+                if not allow_pin_pose_cone:
+                    detail = self._format_state_invalid_reason(goal_joints, goal_reason)
+                    return {
+                        "ok": False,
+                        "skipped": not direct_only,
+                        "error": f"planned joints invalid: {detail}",
+                    }
                 sys.stderr.write(
                     "UR3e MoveIt execute: planned joints invalid "
                     f"({goal_reason or 'collision'}) — trying live IK fallback"
@@ -4437,20 +4727,20 @@ class MoveItScanPlanner:
         with self._lock:
             move_client = self._ensure_move_client()
 
-        hardware = self._ensure_hardware_joint_positions(timeout_s=1.5)
-        self._wait_for_planner_joint_feedback(timeout_s=1.5)
-        current_joints = self._current_joint_positions()
-        if current_joints is not None:
-            current_joints = self._normalize_joint_solution_to_reference(
-                current_joints, current_joints
-            )
-        elif hardware is not None:
-            current_joints = coalesce_joints_for_moveit(hardware, hardware)
+        reading = self._live_joint_reading(timeout_s=1.5)
+        self._wait_for_planner_joint_feedback(timeout_s=0.5)
+        # Prefer RTDE-mapped joints for "already home" and goal coalescing so a
+        # stamper +2π twin does not make home look far away (or plan wrong).
+        current_joints = reading.plan_start_rad
+        warn = branch_gap_warning(reading)
+        if warn:
+            sys.stderr.write(f"UR3e MoveIt execute: {warn}.\n")
+            sys.stderr.flush()
 
         home_ref = (
             current_joints if current_joints is not None else self.home_joints_rad()
         )
-        home_joints = coalesce_joints_for_moveit(home_ref, self.home_joints_rad())
+        home_joints = coalesce_goal_to_plan_start(home_ref, self.home_joints_rad())
 
         if current_joints is not None:
             wrap_dist = self._joint_distance_rad(current_joints, home_joints)
@@ -4531,11 +4821,13 @@ class MoveItScanPlanner:
         *,
         stop_event: Optional[threading.Event] = None,
         label: str = "hardware joint move",
+        skip_collision_check: bool = False,
     ) -> tuple[bool, str]:
         """Send a multi-point RTDE trajectory after MoveIt-validating every sample.
 
-        Used only for continuous wrist_3 cable unwind (MoveIt ±π cannot plan multi-turn).
-        Still refuses to move if any interpolated pose collides (tool mesh vs arm).
+        Used for continuous wrist_3 cable unwind (MoveIt ±π cannot plan multi-turn)
+        and for semi-fixed shoulder_pan ring spins (skip_collision_check=True — operator
+        guarantees the ring stays clear of boundaries; no MoveIt planning).
         """
         from builtin_interfaces.msg import Duration
         from moveit_msgs.msg import MoveItErrorCodes, RobotTrajectory
@@ -4551,19 +4843,20 @@ class MoveItScanPlanner:
             return True, ""
 
         samples = self._interpolate_joint_waypoints(start, goal)
-        for index, sample in enumerate(samples):
-            # Validity uses principalized joints for FCL; geometry matches continuous pose
-            # for limited joints and wrist_3 within a few turns.
-            check_joints = coalesce_joints_for_moveit(sample, sample)
-            ok, reason = self._state_is_valid(check_joints, check_pinch=True)
-            if not ok:
-                detail = reason or "collision or limits"
-                sys.stderr.write(
-                    f"UR3e MoveIt: {label} blocked — MoveIt collision at sample "
-                    f"{index}/{len(samples) - 1}: {detail}\n"
-                )
-                sys.stderr.flush()
-                return False, f"collision along spin ({detail})"
+        if not skip_collision_check:
+            for index, sample in enumerate(samples):
+                # Validity uses principalized joints for FCL; geometry matches continuous pose
+                # for limited joints and wrist_3 within a few turns.
+                check_joints = coalesce_joints_for_moveit(sample, sample)
+                ok, reason = self._state_is_valid(check_joints, check_pinch=True)
+                if not ok:
+                    detail = reason or "collision or limits"
+                    sys.stderr.write(
+                        f"UR3e MoveIt: {label} blocked — MoveIt collision at sample "
+                        f"{index}/{len(samples) - 1}: {detail}\n"
+                    )
+                    sys.stderr.flush()
+                    return False, f"collision along spin ({detail})"
 
         trajectory = RobotTrajectory()
         joint_traj = JointTrajectory()
@@ -4600,6 +4893,48 @@ class MoveItScanPlanner:
         if int(code) == int(MoveItErrorCodes.SUCCESS):
             return True, ""
         return False, self._moveit_error_name(int(code))
+
+    def execute_hardware_joint_move(
+        self,
+        goal_joints: Sequence[float],
+        *,
+        workspace: Optional[WorkspaceBox] = None,
+        stop_event: Optional[threading.Event] = None,
+        skip_collision_check: bool = False,
+        label: str = "hardware joint move",
+    ) -> Dict[str, Any]:
+        """Direct hardware joint trajectory (no MoveIt planning).
+
+        Semi-fixed ring spins use this with skip_collision_check=True.
+        """
+        _ = workspace  # reserved for future soft workspace gates
+        if stop_event is not None and stop_event.is_set():
+            return {"ok": False, "stopped": True, "error": "stopped"}
+
+        if len(goal_joints) != 6:
+            return {"ok": False, "error": "expected 6 joints"}
+
+        hardware = self._ensure_hardware_joint_positions(timeout_s=1.5)
+        if hardware is None or len(hardware) != 6:
+            return {"ok": False, "error": "no hardware joint feedback"}
+
+        start = [float(v) for v in hardware]
+        goal = [float(v) for v in goal_joints]
+        ok, reason = self._execute_hardware_joint_spin(
+            start,
+            goal,
+            stop_event=stop_event,
+            label=label,
+            skip_collision_check=bool(skip_collision_check),
+        )
+        if stop_event is not None and stop_event.is_set():
+            return {"ok": False, "stopped": True, "error": "stopped"}
+        if not ok:
+            err = reason or "hardware joint move failed"
+            if err == "stopped":
+                return {"ok": False, "stopped": True, "error": "stopped"}
+            return {"ok": False, "error": err}
+        return {"ok": True}
 
     def maybe_rewind_wrist3_cable(
         self,

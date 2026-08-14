@@ -1,13 +1,15 @@
-// 3D preview of UR3e hemisphere scan over the sample tray (frontend/ui layer).
+// 3D preview of UR3e hemisphere / semi-fixed scan over the sample tray (frontend/ui).
 #pragma once
 
 #include "backend/3dscanning/Ur3eHemisphereScan.hpp"
 #include "backend/3dscanning/Ur3eHemisphereScanReachability.hpp"
 #include "backend/3dscanning/Ur3eMountTransform.hpp"
+#include "backend/3dscanning/Ur3eSemiFixedScan.hpp"
 #include "backend/3dscanning/Ur3eWorkspaceBoundary.hpp"
 
 #include <QPoint>
 #include <QTimer>
+#include <QVector>
 #include <QWidget>
 
 #include <vector>
@@ -30,11 +32,19 @@ public:
     void setSceneMount(const hf::ur3e::Ur3eMountTransform &mount);
     void setScanPlan(const hf::ur3e::Ur3eHemisphereScanPlan &plan);
     void clearScanPlan();
+    void setSemiFixedPreviewRings(const QVector<hf::ur3e::Ur3eSemiFixedPreviewRing> &rings);
+    void clearSemiFixedPreviewRings();
     void beginScanExecution();
     void setActiveScanPoint(int pointIndex);
     void markScanPointCompleted(int pointIndex);
     void markScanPointFailed(int pointIndex);
     void endScanExecution();
+
+    /// Planned execute units (reachable Auto pins, or Semi executable rings + top).
+    [[nodiscard]] int plannedExecutionCount() const;
+    [[nodiscard]] int completedExecutionCount() const;
+    [[nodiscard]] int failedExecutionCount() const;
+    [[nodiscard]] bool isScanExecutionActive() const { return executionActive_; }
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -69,11 +79,20 @@ private:
         hf::ur3e::Ur3eHemisphereScanPoint point;
         bool reachabilityKnown = false;
         bool reachable = false;
-        /// Reachable but only via previous→pin chain (no home→pin at plan).
         bool homePathOk = true;
         bool executionCompleted = false;
         bool executionFailed = false;
     };
+
+    struct PreviewSemiFixedRing
+    {
+        hf::ur3e::Ur3eSemiFixedPreviewRing ring;
+        bool executionCompleted = false;
+        bool executionFailed = false;
+    };
+
+    /// Execute ringIndex (0..N-1) / top (N) → preview index, skipping plan-unreachable rings.
+    [[nodiscard]] int mapSemiExecuteIndexToPreview(int executeIndex) const;
 
     [[nodiscard]] Vec3 sceneCenter() const;
     [[nodiscard]] Vec3 mapScenePoint(const Vec3 &point) const;
@@ -84,6 +103,7 @@ private:
     void drawWorkspaceBoundary(QPainter &painter, const QRectF &bounds, double scale) const;
     void drawHemisphere(QPainter &painter, const QRectF &bounds, double scale) const;
     void drawScanNormals(QPainter &painter, const QRectF &bounds, double scale) const;
+    void drawSemiFixedRings(QPainter &painter, const QRectF &bounds, double scale) const;
     void drawScanPin(QPainter &painter,
                      const QRectF &bounds,
                      double scale,
@@ -99,6 +119,8 @@ private:
     hf::ur3e::Ur3eWorkspaceBoundary workspaceBoundary_;
     hf::ur3e::Ur3eMountTransform sceneMount_;
     std::vector<PreviewScanPoint> scanPoints_;
+    std::vector<PreviewSemiFixedRing> semiFixedRings_;
+    bool semiFixedPreviewActive_ = false;
     double yawRad_ = 0.0;
     double pitchRad_ = 0.0;
     double zoomFactor_ = 1.25;

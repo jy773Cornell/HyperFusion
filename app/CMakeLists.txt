@@ -188,6 +188,9 @@ qt_add_executable(app WIN32
     src/backend/3dscanning/BfsTiffIo.cpp
     src/backend/3dscanning/Ur3eCameraTransforms.cpp
     src/backend/3dscanning/Ur3eScanPlanCache.cpp
+    src/backend/3dscanning/Ur3eSemiFixedScan.cpp
+    src/backend/3dscanning/Ur3eSemiFixedScanExecute.cpp
+    src/backend/3dscanning/Ur3eAutoHemisphereScanExecute.cpp
     src/backend/camera/processing/IlluminantTables.cpp
     src/backend/camera/processing/ReferenceBuilder.cpp
     src/backend/camera/processing/EnviBilWriter.cpp

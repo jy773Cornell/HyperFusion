@@ -3,6 +3,7 @@
 
 #include "backend/3dscanning/Ur3eHemisphereScanReachability.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace hf::ur3e
@@ -42,10 +43,47 @@ void rotationMatrixToRotVec(const double m00,
                               double &rz)
 {
     const double trace = m00 + m11 + m22;
-    const double angle = std::acos(std::clamp((trace - 1.0) * 0.5, -1.0, 1.0));
+    const double cosAngle = std::clamp((trace - 1.0) * 0.5, -1.0, 1.0);
+    const double angle = std::acos(cosAngle);
     if (angle <= kEpsilon)
     {
         rx = ry = rz = 0.0;
+        return;
+    }
+
+    // Near 180°: (R − Rᵀ)/(2 sinθ) is unstable — use diagonal of R.
+    if (angle > kPi - 1.0e-6 || std::abs(std::sin(angle)) < 1.0e-6)
+    {
+        double ax = std::sqrt(std::max(0.0, (m00 + 1.0) * 0.5));
+        double ay = std::sqrt(std::max(0.0, (m11 + 1.0) * 0.5));
+        double az = std::sqrt(std::max(0.0, (m22 + 1.0) * 0.5));
+        if (ax >= ay && ax >= az)
+        {
+            ay = std::copysign(ay, m10 + m01);
+            az = std::copysign(az, m20 + m02);
+        }
+        else if (ay >= az)
+        {
+            ax = std::copysign(ax, m10 + m01);
+            az = std::copysign(az, m21 + m12);
+        }
+        else
+        {
+            ax = std::copysign(ax, m20 + m02);
+            ay = std::copysign(ay, m21 + m12);
+        }
+        const double len = std::sqrt(ax * ax + ay * ay + az * az);
+        if (len <= kEpsilon)
+        {
+            // Fallback: rotate 180° about X (covers look-down tool +Z = −world Z).
+            rx = kPi;
+            ry = 0.0;
+            rz = 0.0;
+            return;
+        }
+        rx = ax / len * kPi;
+        ry = ay / len * kPi;
+        rz = az / len * kPi;
         return;
     }
 

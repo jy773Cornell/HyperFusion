@@ -1,5 +1,5 @@
-// Optical-TCP FK at scan home → tray-plane scan center (backend layer).
-// Matches HyperFusion URDF chain (ceiling mount + UR3e + hyperfusion_tcp).
+// Tray scan centers: base XY for ring dome; home optical-TCP XY for apex (backend).
+// FK matches HyperFusion URDF chain (ceiling mount + UR3e + hyperfusion_tcp).
 #include "backend/3dscanning/Ur3eHemisphereScan.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
@@ -147,8 +147,6 @@ void inverseSceneMountXy(double &xM, double &yM, const Ur3eMountTransform &mount
     const double cp = std::cos(-mount.pitchRad);
     const double sp = std::sin(-mount.pitchRad);
 
-    // Inverse of applyYawPitch for a point on the tray plane (z≈0 after pitch undo).
-    // Forward: yaw then pitch. Inverse: inv pitch then inv yaw.
     const double x1 = cp * xM - sp * 0.0;
     const double y1 = yM;
     const double z1 = sp * xM + cp * 0.0;
@@ -156,14 +154,14 @@ void inverseSceneMountXy(double &xM, double &yM, const Ur3eMountTransform &mount
     yM = sy * x1 + cy * y1;
     (void)z1;
 }
-} // namespace
 
-void scanCenterOffsetM(double &xM, double &yM)
+void homeOpticalTcpTrayXyM(double &xM, double &yM)
 {
     const auto &cfg = hf::hardwareConfig().ur3e;
     std::array<double, 6> qRad{};
     for (int i = 0; i < 6; ++i)
-        qRad[static_cast<std::size_t>(i)] = cfg.homeJointsDeg[static_cast<std::size_t>(i)] * kPi / 180.0;
+        qRad[static_cast<std::size_t>(i)] =
+            cfg.homeJointsDeg[static_cast<std::size_t>(i)] * kPi / 180.0;
 
     const Mat4 tcpWorld = ur3eOpticalTcpWorldFromJoints(qRad, cfg);
     double wx = 0.0;
@@ -177,6 +175,20 @@ void scanCenterOffsetM(double &xM, double &yM)
 
     // Grid is authored in pre-mount tray frame; C++ remounts poses for MoveIt.
     inverseSceneMountXy(xM, yM, Ur3eMountTransform::sceneAlignFromConfig(cfg));
+}
+} // namespace
+
+void scanCenterOffsetM(double &xM, double &yM)
+{
+    // Ring dome / look-at: under base_link when mount_offset_x/y_mm = 0.
+    xM = 0.0;
+    yM = 0.0;
+}
+
+void homeTcpScanCenterOffsetM(double &xM, double &yM)
+{
+    // Apex only: optical TCP XY at home_joints_deg (reachable look-down locus).
+    homeOpticalTcpTrayXyM(xM, yM);
 }
 
 } // namespace hf::ur3e

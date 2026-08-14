@@ -31,10 +31,10 @@ fi
 source "/opt/ros/${ROS_DISTRO}/setup.bash"
 export ROS_LOCALHOST_ONLY=1
 export ROS2CLI_DISABLE_DAEMON=1
-# WSLg / native X: use host display when not set (RViz needs this).
-if [[ -z "${DISPLAY:-}" ]] && [[ -n "${WAYLAND_DISPLAY:-}" || -d /mnt/wslg ]]; then
-  export DISPLAY=:0
-fi
+# Ensure a visible Windows window under WSLg (see wslg_display_env.sh).
+# Strip CRLF so Windows-edited scripts still source cleanly in bash.
+# shellcheck source=/dev/null
+source <(sed 's/\r$//' "${SCRIPT_DIR}/wslg_display_env.sh")
 
 # Robot model + TF come from the running driver (robot_state_publisher).
 "${SCRIPT_DIR}/wait_for_joint_states.sh" "${ROS_DISTRO}" 120

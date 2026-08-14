@@ -91,7 +91,9 @@ QJsonObject robotCfgFingerprintObject(const hf::HardwareConfig::Ur3eConfig &ur3e
     fp.insert(QStringLiteral("mount_yaw_deg"), ur3e.mountYawDeg);
     fp.insert(QStringLiteral("mount_offset_x_mm"), ur3e.mountOffsetXMm);
     fp.insert(QStringLiteral("mount_offset_y_mm"), ur3e.mountOffsetYMm);
-    fp.insert(QStringLiteral("scan_center_from_home_tcp"), true);
+    fp.insert(QStringLiteral("scan_center_from_home_tcp"), false);
+    fp.insert(QStringLiteral("scan_center_base_xy"), true);
+    fp.insert(QStringLiteral("apex_over_home_tcp_xy"), true);
 
     QJsonArray home;
     for (const double deg : ur3e.homeJointsDeg)
@@ -99,6 +101,9 @@ QJsonObject robotCfgFingerprintObject(const hf::HardwareConfig::Ur3eConfig &ur3e
     fp.insert(QStringLiteral("home_joints_deg"), home);
     fp.insert(QStringLiteral("scan_camera_up_world_z"), ur3e.scanCameraUpWorldZ);
     fp.insert(QStringLiteral("pin_pose_tolerance_deg"), ur3e.pinPoseToleranceDeg);
+    fp.insert(QStringLiteral("pin_pose_tolerance_vertical_only"), true);
+    fp.insert(QStringLiteral("pin_tcp_tilt_deg"), ur3e.pinTcpTiltDeg);
+    fp.insert(QStringLiteral("semi_ring_search_candidates"), ur3e.semiRingSearchCandidates);
     return fp;
 }
 
@@ -141,6 +146,7 @@ QJsonObject planPointsToJson(const Ur3eHemisphereScanPlan &plan)
         entry.insert(QStringLiteral("tcp"), matPoseToJson(pt.tcp));
         entry.insert(QStringLiteral("reachable"), pt.reachable);
         entry.insert(QStringLiteral("home_path_ok"), pt.homePathOk);
+        entry.insert(QStringLiteral("base_sweep_ok"), pt.baseSweepOk);
         entry.insert(QStringLiteral("planning_error"), pt.planningError);
 
         QJsonArray joints;
@@ -190,6 +196,8 @@ bool planFromJsonRoot(const QJsonObject &root, Ur3eHemisphereScanPlan &planOut, 
         pt.reachable = entry.value(QStringLiteral("reachable")).toBool();
         pt.homePathOk =
             pt.reachable && entry.value(QStringLiteral("home_path_ok")).toBool(true);
+        pt.baseSweepOk =
+            pt.reachable && entry.value(QStringLiteral("base_sweep_ok")).toBool(false);
         pt.planningError = entry.value(QStringLiteral("planning_error")).toString();
         const QJsonArray joints = entry.value(QStringLiteral("joints_rad")).toArray();
         pt.jointPositionsRad.reserve(joints.size());

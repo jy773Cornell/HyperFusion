@@ -86,14 +86,18 @@ generateHemisphereScanPoints(const Ur3eHemisphereScanParams &params)
     double centerYM = 0.0;
     scanCenterOffsetM(centerXM, centerYM);
 
+    double apexXM = 0.0;
+    double apexYM = 0.0;
+    homeTcpScanCenterOffsetM(apexXM, apexYM);
+
     const std::vector<double> thetaSamples =
         linspaceInclusive(normalized.thetaMinDeg, normalized.thetaMaxDeg, normalized.verticalPoints);
 
     std::vector<Ur3eHemisphereScanPoint> points;
     points.reserve(static_cast<std::size_t>(hemisphereScanPointCount(normalized)));
 
-    // Fixed apex pin first: camera looks along −surface normal (toward dome center).
-    points.push_back(makeApexScanPoint(normalized.sphereRadiusM, centerXM, centerYM));
+    // Apex over home TCP XY (reachable look-down); rings orbit base XY.
+    points.push_back(makeApexScanPoint(normalized.sphereRadiusM, apexXM, apexYM));
 
     for (const double thetaDeg : thetaSamples)
     {
@@ -105,6 +109,58 @@ generateHemisphereScanPoints(const Ur3eHemisphereScanParams &params)
             const double phiDeg =
                 360.0 * static_cast<double>(horizontalIndex)
                 / static_cast<double>(normalized.horizontalPoints);
+            const double thetaRad = thetaDeg * kPi / 180.0;
+            const double phiRad = phiDeg * kPi / 180.0;
+            const double sinTheta = std::sin(thetaRad);
+
+            Ur3eHemisphereScanPoint point;
+            point.phiDeg = phiDeg;
+            point.thetaDeg = thetaDeg;
+            point.xM = centerXM + normalized.sphereRadiusM * sinTheta * std::cos(phiRad);
+            point.yM = centerYM + normalized.sphereRadiusM * sinTheta * std::sin(phiRad);
+            point.zM = normalized.sphereRadiusM * std::cos(thetaRad);
+            points.push_back(point);
+        }
+    }
+
+    return points;
+}
+
+std::vector<Ur3eHemisphereScanPoint>
+generateSemiHemisphereScanPoints(const Ur3eHemisphereScanParams &params,
+                                 const int searchCandidates)
+{
+    Ur3eHemisphereScanParams normalized = params;
+    normalizeHemisphereScanParams(normalized);
+
+    const int nPhi = std::max(
+        1, std::max(normalized.horizontalPoints, std::clamp(searchCandidates, 1, 720)));
+
+    double centerXM = 0.0;
+    double centerYM = 0.0;
+    scanCenterOffsetM(centerXM, centerYM);
+
+    double apexXM = 0.0;
+    double apexYM = 0.0;
+    homeTcpScanCenterOffsetM(apexXM, apexYM);
+
+    const std::vector<double> thetaSamples =
+        linspaceInclusive(normalized.thetaMinDeg, normalized.thetaMaxDeg, normalized.verticalPoints);
+
+    std::vector<Ur3eHemisphereScanPoint> points;
+    points.reserve(static_cast<std::size_t>(1 + nPhi * normalized.verticalPoints));
+
+    points.push_back(makeApexScanPoint(normalized.sphereRadiusM, apexXM, apexYM));
+
+    for (const double thetaDeg : thetaSamples)
+    {
+        if (isApexThetaDeg(thetaDeg))
+            continue;
+
+        for (int horizontalIndex = 0; horizontalIndex < nPhi; ++horizontalIndex)
+        {
+            const double phiDeg =
+                360.0 * static_cast<double>(horizontalIndex) / static_cast<double>(nPhi);
             const double thetaRad = thetaDeg * kPi / 180.0;
             const double phiRad = phiDeg * kPi / 180.0;
             const double sinTheta = std::sin(thetaRad);

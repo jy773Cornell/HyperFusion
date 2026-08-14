@@ -13,6 +13,7 @@ for trajectory execute anchoring in scan_planner.
 """
 from __future__ import annotations
 
+import math
 import sys
 
 import rclpy
@@ -21,8 +22,11 @@ from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile, ReliabilityPo
 from sensor_msgs.msg import JointState
 
 from hyperfusion_ur3e.joint_angles import (
+    CANONICAL_JOINT_NAMES,
+    MOVEIT_JOINT_LIMITS_RAD,
     home_joints_deg_from_env,
     home_joints_rad_by_name,
+    joint_delta_rad,
     stabilize_joint_reading,
     wrap_joint_for_stream,
 )
@@ -71,6 +75,22 @@ class JointStatesStamper(Node):
     for name, raw in zip(msg.name, msg.position):
       reference = self._branch_reference(name, float(raw))
       wrapped = wrap_joint_for_stream(name, float(raw), reference)
+      # Follow hardware principalize (±2π) spins: if raw is already inside MoveIt
+      # limits and wrap-equal to the tracked branch but ~one turn away, snap to raw
+      # so MoveIt start matches RTDE (avoids home reject -4).
+      try:
+        jidx = CANONICAL_JOINT_NAMES.index(name)
+        limits = MOVEIT_JOINT_LIMITS_RAD[jidx]
+        raw_f = float(raw)
+        if (
+          limits is not None
+          and limits[0] - 1e-9 <= raw_f <= limits[1] + 1e-9
+          and abs(joint_delta_rad(wrapped, raw_f)) < 1e-4
+          and abs(wrapped - raw_f) > (math.pi * 0.5)
+        ):
+          wrapped = raw_f
+      except ValueError:
+        pass
       previous = self._last_wrapped.get(name, wrapped)
       wrapped = stabilize_joint_reading(previous, wrapped)
       self._last_wrapped[name] = wrapped

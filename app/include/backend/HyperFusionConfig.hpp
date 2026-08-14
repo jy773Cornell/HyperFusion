@@ -165,9 +165,17 @@ struct HardwareConfig
         int scanCaptureStabilizeMs = 500;
         /// Lock scan TCP roll so image-up ≈ tray/world +Z (projected ⊥ look-at). Pin centers only.
         bool scanCameraUpWorldZ = true;
-        /// Half-angle (deg) approach cone around each pin look-at; 0 = nominal only.
-        /// Plan searches inside→out (≤13 samples) for the first reachable pose.
+        /// Half-angle (deg) tip in the vertical plane (look-at × camera-up); 0 = nominal only.
+        /// Plan searches inside→out (±mid, ±half; no left/right) for the first reachable pose.
         double pinPoseToleranceDeg = 5.0;
+        /// Angular offset (deg) of tool +Z from the nominal look-at-center TCP pose.
+        /// Not a wrist joint nudge: baked into TCP orientation (rx,ry,rz).
+        /// + = tip toward camera-up; − = tip toward tray. Apex (θ=0) stays look-down.
+        /// Pin-pose tolerance tips around this tilted look-at in the same vertical plane.
+        double pinTcpTiltDeg = 0.0;
+        /// Semi Plan: number of φ candidates per θ ring when hunting base-sweep OK entries.
+        /// Spaced evenly over 360° (e.g. 260 → every ~1.4°).
+        int semiRingSearchCandidates = 360;
         /// Persist last MoveIt plan beside app.exe; reload on start if cfg fingerprint matches.
         bool rememberLastScanPlan = true;
         /// BFS OpenCV intrinsics for multiview pose JSON / transforms.json (pixels).

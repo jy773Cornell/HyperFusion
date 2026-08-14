@@ -46,8 +46,41 @@ struct PersistedLighthouseSettings
     int transmittancePercent = 40;
 };
 
+struct PersistedUr3eScanModePanelSettings
+{
+    double sphereRadiusMm = 500.0;
+    /// Auto: φ pins per latitude. Semi: latitude layer count.
+    int horizontalPoints = 12;
+    /// Auto: latitude count. Semi: unused (interval is imagingIntervalDeg).
+    int verticalPoints = 5;
+    double thetaMinDeg = 30.0;
+    double thetaMaxDeg = 90.0;
+    bool wristSweepEnabled = true;
+    double wristSweepStepDeg = 3.0;
+    int wristSweepStepsEachWay = 1;
+    bool wristSweepWrist1 = false;
+    bool wristSweepWrist2 = true;
+    bool wristSweepWrist3 = false;
+    /// Semi imaging interval (°); ignored in Auto.
+    double imagingIntervalDeg = 10.0;
+    /// Semi pan direction (+1 / −1); ignored in Auto.
+    int panDirection = 1;
+};
+
 struct PersistedUr3eHemisphereScanSettings
 {
+    /// 0 = Auto planning, 1 = Semi-fixed
+    int scanExecuteMode = 0;
+    PersistedUr3eScanModePanelSettings autoPanel{};
+    PersistedUr3eScanModePanelSettings semiPanel{};
+    /// Last selected Auto named-route JSON path (combo selection).
+    QString lastAutoRoutePath;
+    /// Last selected Semi plan JSON path (ur3e_semi_scan_routes).
+    QString lastSemiFixedPlanPath;
+    /// Last loaded/saved Semi-fixed route JSON path (legacy rings list).
+    QString lastSemiFixedRoutePath;
+
+    // ---- Compatibility aliases (active-mode mirror; prefer autoPanel/semiPanel) ----
     double sphereRadiusMm = 500.0;
     int horizontalPoints = 12;
     int verticalPoints = 5;
@@ -59,6 +92,8 @@ struct PersistedUr3eHemisphereScanSettings
     bool wristSweepWrist1 = false;
     bool wristSweepWrist2 = true;
     bool wristSweepWrist3 = false;
+    double semiFixedIntervalDeg = 10.0;
+    int semiFixedPanDirection = 1;
 };
 
 struct PersistedBfsCameraSettings

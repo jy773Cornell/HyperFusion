@@ -2,6 +2,8 @@
 
 #include <QSettings>
 
+#include <algorithm>
+
 namespace
 {
 constexpr char kOrg[] = "HyperFusion";
@@ -114,52 +116,226 @@ void AppSettingsStore::saveLighthouseSettings(const PersistedLighthouseSettings 
     settings.setValue(QStringLiteral("light/transmittancePercent"), lighthouse.transmittancePercent);
 }
 
+namespace
+{
+PersistedUr3eScanModePanelSettings loadScanModePanel(QSettings &settings,
+                                                     const QString &prefix,
+                                                     const PersistedUr3eScanModePanelSettings &defaults)
+{
+    PersistedUr3eScanModePanelSettings panel = defaults;
+    panel.sphereRadiusMm =
+        settings.value(prefix + QStringLiteral("sphereRadiusMm"), defaults.sphereRadiusMm)
+            .toDouble();
+    panel.horizontalPoints =
+        settings.value(prefix + QStringLiteral("horizontalPoints"), defaults.horizontalPoints)
+            .toInt();
+    panel.verticalPoints =
+        settings.value(prefix + QStringLiteral("verticalPoints"), defaults.verticalPoints).toInt();
+    panel.thetaMinDeg =
+        settings.value(prefix + QStringLiteral("thetaMinDeg"), defaults.thetaMinDeg).toDouble();
+    panel.thetaMaxDeg =
+        settings.value(prefix + QStringLiteral("thetaMaxDeg"), defaults.thetaMaxDeg).toDouble();
+    panel.wristSweepEnabled =
+        settings.value(prefix + QStringLiteral("wristSweepEnabled"), defaults.wristSweepEnabled)
+            .toBool();
+    panel.wristSweepStepDeg =
+        settings.value(prefix + QStringLiteral("wristSweepStepDeg"), defaults.wristSweepStepDeg)
+            .toDouble();
+    panel.wristSweepStepsEachWay =
+        settings
+            .value(prefix + QStringLiteral("wristSweepStepsEachWay"),
+                   defaults.wristSweepStepsEachWay)
+            .toInt();
+    panel.wristSweepWrist1 =
+        settings.value(prefix + QStringLiteral("wristSweepWrist1"), defaults.wristSweepWrist1)
+            .toBool();
+    panel.wristSweepWrist2 =
+        settings.value(prefix + QStringLiteral("wristSweepWrist2"), defaults.wristSweepWrist2)
+            .toBool();
+    panel.wristSweepWrist3 =
+        settings.value(prefix + QStringLiteral("wristSweepWrist3"), defaults.wristSweepWrist3)
+            .toBool();
+    panel.imagingIntervalDeg =
+        settings.value(prefix + QStringLiteral("imagingIntervalDeg"), defaults.imagingIntervalDeg)
+            .toDouble();
+    panel.panDirection =
+        settings.value(prefix + QStringLiteral("panDirection"), defaults.panDirection).toInt();
+    if (panel.panDirection >= 0)
+        panel.panDirection = 1;
+    else
+        panel.panDirection = -1;
+    return panel;
+}
+
+void saveScanModePanel(QSettings &settings,
+                       const QString &prefix,
+                       const PersistedUr3eScanModePanelSettings &panel)
+{
+    settings.setValue(prefix + QStringLiteral("sphereRadiusMm"), panel.sphereRadiusMm);
+    settings.setValue(prefix + QStringLiteral("horizontalPoints"), panel.horizontalPoints);
+    settings.setValue(prefix + QStringLiteral("verticalPoints"), panel.verticalPoints);
+    settings.setValue(prefix + QStringLiteral("thetaMinDeg"), panel.thetaMinDeg);
+    settings.setValue(prefix + QStringLiteral("thetaMaxDeg"), panel.thetaMaxDeg);
+    settings.setValue(prefix + QStringLiteral("wristSweepEnabled"), panel.wristSweepEnabled);
+    settings.setValue(prefix + QStringLiteral("wristSweepStepDeg"), panel.wristSweepStepDeg);
+    settings.setValue(prefix + QStringLiteral("wristSweepStepsEachWay"),
+                      panel.wristSweepStepsEachWay);
+    settings.setValue(prefix + QStringLiteral("wristSweepWrist1"), panel.wristSweepWrist1);
+    settings.setValue(prefix + QStringLiteral("wristSweepWrist2"), panel.wristSweepWrist2);
+    settings.setValue(prefix + QStringLiteral("wristSweepWrist3"), panel.wristSweepWrist3);
+    settings.setValue(prefix + QStringLiteral("imagingIntervalDeg"), panel.imagingIntervalDeg);
+    settings.setValue(prefix + QStringLiteral("panDirection"), panel.panDirection);
+}
+
+void mirrorActivePanelAliases(PersistedUr3eHemisphereScanSettings &scan)
+{
+    const PersistedUr3eScanModePanelSettings &panel =
+        scan.scanExecuteMode == 1 ? scan.semiPanel : scan.autoPanel;
+    scan.sphereRadiusMm = panel.sphereRadiusMm;
+    scan.horizontalPoints = panel.horizontalPoints;
+    scan.verticalPoints = panel.verticalPoints;
+    scan.thetaMinDeg = panel.thetaMinDeg;
+    scan.thetaMaxDeg = panel.thetaMaxDeg;
+    scan.wristSweepEnabled = panel.wristSweepEnabled;
+    scan.wristSweepStepDeg = panel.wristSweepStepDeg;
+    scan.wristSweepStepsEachWay = panel.wristSweepStepsEachWay;
+    scan.wristSweepWrist1 = panel.wristSweepWrist1;
+    scan.wristSweepWrist2 = panel.wristSweepWrist2;
+    scan.wristSweepWrist3 = panel.wristSweepWrist3;
+    scan.semiFixedIntervalDeg = scan.semiPanel.imagingIntervalDeg;
+    scan.semiFixedPanDirection = scan.semiPanel.panDirection;
+}
+} // namespace
+
 PersistedUr3eHemisphereScanSettings AppSettingsStore::loadUr3eHemisphereScan()
 {
     QSettings &settings = storage();
     PersistedUr3eHemisphereScanSettings scan;
     const PersistedUr3eHemisphereScanSettings defaults;
-    scan.sphereRadiusMm =
-        settings.value(QStringLiteral("ur3e/hemisphereScan/sphereRadiusMm"), 500.0).toDouble();
-    scan.horizontalPoints =
-        settings.value(QStringLiteral("ur3e/hemisphereScan/horizontalPoints"), 12).toInt();
-    scan.verticalPoints =
-        settings.value(QStringLiteral("ur3e/hemisphereScan/verticalPoints"), 5).toInt();
-    scan.thetaMinDeg =
-        settings.value(QStringLiteral("ur3e/hemisphereScan/thetaMinDeg"), 30.0).toDouble();
-    scan.thetaMaxDeg =
-        settings.value(QStringLiteral("ur3e/hemisphereScan/thetaMaxDeg"), 90.0).toDouble();
-    scan.wristSweepEnabled = settings
-                                 .value(QStringLiteral("ur3e/hemisphereScan/wristSweepEnabled"),
-                                        defaults.wristSweepEnabled)
-                                 .toBool();
-    scan.wristSweepStepDeg = settings
-                                 .value(QStringLiteral("ur3e/hemisphereScan/wristSweepStepDeg"),
-                                        defaults.wristSweepStepDeg)
-                                 .toDouble();
-    scan.wristSweepStepsEachWay =
+
+    scan.scanExecuteMode = settings
+                               .value(QStringLiteral("ur3e/hemisphereScan/scanExecuteMode"),
+                                      defaults.scanExecuteMode)
+                               .toInt();
+    if (scan.scanExecuteMode != 0 && scan.scanExecuteMode != 1)
+        scan.scanExecuteMode = 0;
+
+    const bool hasSplitAuto =
+        settings.contains(QStringLiteral("ur3e/hemisphereScan/auto/sphereRadiusMm"));
+    const bool hasSplitSemi =
+        settings.contains(QStringLiteral("ur3e/hemisphereScan/semi/sphereRadiusMm"));
+
+    if (hasSplitAuto)
+    {
+        scan.autoPanel = loadScanModePanel(settings, QStringLiteral("ur3e/hemisphereScan/auto/"),
+                                           defaults.autoPanel);
+    }
+    else
+    {
+        // Migrate legacy flat keys → Auto panel.
+        scan.autoPanel.sphereRadiusMm =
+            settings.value(QStringLiteral("ur3e/hemisphereScan/sphereRadiusMm"), 500.0).toDouble();
+        scan.autoPanel.horizontalPoints =
+            settings.value(QStringLiteral("ur3e/hemisphereScan/horizontalPoints"), 12).toInt();
+        scan.autoPanel.verticalPoints =
+            settings.value(QStringLiteral("ur3e/hemisphereScan/verticalPoints"), 5).toInt();
+        scan.autoPanel.thetaMinDeg =
+            settings.value(QStringLiteral("ur3e/hemisphereScan/thetaMinDeg"), 30.0).toDouble();
+        scan.autoPanel.thetaMaxDeg =
+            settings.value(QStringLiteral("ur3e/hemisphereScan/thetaMaxDeg"), 90.0).toDouble();
+        scan.autoPanel.wristSweepEnabled =
+            settings
+                .value(QStringLiteral("ur3e/hemisphereScan/wristSweepEnabled"),
+                       defaults.autoPanel.wristSweepEnabled)
+                .toBool();
+        scan.autoPanel.wristSweepStepDeg =
+            settings
+                .value(QStringLiteral("ur3e/hemisphereScan/wristSweepStepDeg"),
+                       defaults.autoPanel.wristSweepStepDeg)
+                .toDouble();
+        scan.autoPanel.wristSweepStepsEachWay =
+            settings
+                .value(QStringLiteral("ur3e/hemisphereScan/wristSweepStepsEachWay"),
+                       defaults.autoPanel.wristSweepStepsEachWay)
+                .toInt();
+        scan.autoPanel.wristSweepWrist1 =
+            settings
+                .value(QStringLiteral("ur3e/hemisphereScan/wristSweepWrist1"),
+                       defaults.autoPanel.wristSweepWrist1)
+                .toBool();
+        scan.autoPanel.wristSweepWrist2 =
+            settings
+                .value(QStringLiteral("ur3e/hemisphereScan/wristSweepWrist2"),
+                       defaults.autoPanel.wristSweepWrist2)
+                .toBool();
+        scan.autoPanel.wristSweepWrist3 =
+            settings
+                .value(QStringLiteral("ur3e/hemisphereScan/wristSweepWrist3"),
+                       defaults.autoPanel.wristSweepWrist3)
+                .toBool();
+    }
+
+    if (hasSplitSemi)
+    {
+        scan.semiPanel = loadScanModePanel(settings, QStringLiteral("ur3e/hemisphereScan/semi/"),
+                                           defaults.semiPanel);
+    }
+    else
+    {
+        // Seed Semi from Auto (or legacy flat) + old interval/direction keys.
+        scan.semiPanel = scan.autoPanel;
+        scan.semiPanel.imagingIntervalDeg =
+            settings
+                .value(QStringLiteral("ur3e/hemisphereScan/semiFixedIntervalDeg"),
+                       defaults.semiPanel.imagingIntervalDeg)
+                .toDouble();
+        scan.semiPanel.panDirection =
+            settings
+                .value(QStringLiteral("ur3e/hemisphereScan/semiFixedPanDirection"),
+                       defaults.semiPanel.panDirection)
+                .toInt();
+        if (scan.semiPanel.panDirection >= 0)
+            scan.semiPanel.panDirection = 1;
+        else
+            scan.semiPanel.panDirection = -1;
+        // Semi layer default: reuse vertical if horizontal looks like Auto φ count.
+        if (scan.semiPanel.horizontalPoints > 36)
+            scan.semiPanel.horizontalPoints = std::max(1, scan.semiPanel.verticalPoints);
+    }
+
+    scan.lastAutoRoutePath =
         settings
-            .value(QStringLiteral("ur3e/hemisphereScan/wristSweepStepsEachWay"),
-                   defaults.wristSweepStepsEachWay)
-            .toInt();
-    scan.wristSweepWrist1 = settings
-                                .value(QStringLiteral("ur3e/hemisphereScan/wristSweepWrist1"),
-                                       defaults.wristSweepWrist1)
-                                .toBool();
-    scan.wristSweepWrist2 = settings
-                                .value(QStringLiteral("ur3e/hemisphereScan/wristSweepWrist2"),
-                                       defaults.wristSweepWrist2)
-                                .toBool();
-    scan.wristSweepWrist3 = settings
-                                .value(QStringLiteral("ur3e/hemisphereScan/wristSweepWrist3"),
-                                       defaults.wristSweepWrist3)
-                                .toBool();
+            .value(QStringLiteral("ur3e/hemisphereScan/lastAutoRoutePath"),
+                   defaults.lastAutoRoutePath)
+            .toString();
+    scan.lastSemiFixedPlanPath =
+        settings
+            .value(QStringLiteral("ur3e/hemisphereScan/lastSemiFixedPlanPath"),
+                   defaults.lastSemiFixedPlanPath)
+            .toString();
+    scan.lastSemiFixedRoutePath =
+        settings
+            .value(QStringLiteral("ur3e/hemisphereScan/lastSemiFixedRoutePath"),
+                   defaults.lastSemiFixedRoutePath)
+            .toString();
+
+    mirrorActivePanelAliases(scan);
     return scan;
 }
 
-void AppSettingsStore::saveUr3eHemisphereScan(const PersistedUr3eHemisphereScanSettings &scan)
+void AppSettingsStore::saveUr3eHemisphereScan(const PersistedUr3eHemisphereScanSettings &scanIn)
 {
+    PersistedUr3eHemisphereScanSettings scan = scanIn;
+    if (scan.scanExecuteMode != 0 && scan.scanExecuteMode != 1)
+        scan.scanExecuteMode = 0;
+    mirrorActivePanelAliases(scan);
+
     QSettings &settings = storage();
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/scanExecuteMode"), scan.scanExecuteMode);
+    saveScanModePanel(settings, QStringLiteral("ur3e/hemisphereScan/auto/"), scan.autoPanel);
+    saveScanModePanel(settings, QStringLiteral("ur3e/hemisphereScan/semi/"), scan.semiPanel);
+
+    // Keep legacy flat keys synced to the active mode (older readers / debugging).
     settings.setValue(QStringLiteral("ur3e/hemisphereScan/sphereRadiusMm"), scan.sphereRadiusMm);
     settings.setValue(QStringLiteral("ur3e/hemisphereScan/horizontalPoints"), scan.horizontalPoints);
     settings.setValue(QStringLiteral("ur3e/hemisphereScan/verticalPoints"), scan.verticalPoints);
@@ -172,6 +348,16 @@ void AppSettingsStore::saveUr3eHemisphereScan(const PersistedUr3eHemisphereScanS
     settings.setValue(QStringLiteral("ur3e/hemisphereScan/wristSweepWrist1"), scan.wristSweepWrist1);
     settings.setValue(QStringLiteral("ur3e/hemisphereScan/wristSweepWrist2"), scan.wristSweepWrist2);
     settings.setValue(QStringLiteral("ur3e/hemisphereScan/wristSweepWrist3"), scan.wristSweepWrist3);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/semiFixedIntervalDeg"),
+                      scan.semiFixedIntervalDeg);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/semiFixedPanDirection"),
+                      scan.semiFixedPanDirection);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/lastAutoRoutePath"),
+                      scan.lastAutoRoutePath);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/lastSemiFixedPlanPath"),
+                      scan.lastSemiFixedPlanPath);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/lastSemiFixedRoutePath"),
+                      scan.lastSemiFixedRoutePath);
 }
 
 PersistedBfsCameraSettings AppSettingsStore::loadBfsCameraSettings()

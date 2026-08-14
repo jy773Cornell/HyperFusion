@@ -47,10 +47,14 @@ Ur3eScanTcpPose tcpPoseForHemispherePoint(const Ur3eHemisphereScanPoint &gridPoi
         Ur3eMountTransform::sceneAlignFromConfig(hf::hardwareConfig().ur3e);
     mount.transformPoint(tcp.xM, tcp.yM, tcp.zM);
 
-    // Dome axis / floor-circle center (home optical-TCP projected onto tray).
+    // Apex look-at: under home TCP XY (perpendicular). Rings: under base XY (0,0).
+    const bool isApexPin = std::abs(gridPoint.thetaDeg) <= 1.0e-9;
     double centerXM = 0.0;
     double centerYM = 0.0;
-    scanCenterOffsetM(centerXM, centerYM);
+    if (isApexPin)
+        homeTcpScanCenterOffsetM(centerXM, centerYM);
+    else
+        scanCenterOffsetM(centerXM, centerYM);
     double centerZM = kSampleTrayHeightM;
     mount.transformPoint(centerXM, centerYM, centerZM);
 
@@ -60,11 +64,55 @@ Ur3eScanTcpPose tcpPoseForHemispherePoint(const Ur3eHemisphereScanPoint &gridPoi
 
     // Apex (θ=0, look-down): image-up / TCP upper face → world +X.
     // Other pins: image-up ≈ tray/world +Z when scan_camera_up_world_z is enabled.
-    const bool isApexPin = std::abs(gridPoint.thetaDeg) <= 1.0e-9;
     double upX = isApexPin ? 1.0 : 0.0;
     double upY = 0.0;
     double upZ = isApexPin ? 0.0 : 1.0;
     mount.transformVector(upX, upY, upZ);
+
+    // Nominal tool +Z = look at scan-center. pin_tcp_tilt_deg is the tip angle of that
+    // optical axis away from nominal (TCP pose orientation), not a single-wrist turn.
+    // + tips toward camera-up; − toward tray. Cone search centers on the tilted +Z.
+    const double tiltDeg = hf::hardwareConfig().ur3e.pinTcpTiltDeg;
+    if (!isApexPin && std::abs(tiltDeg) > 1.0e-9)
+    {
+        double zx = tcp.toolZMx;
+        double zy = tcp.toolZMy;
+        double zz = tcp.toolZMz;
+        const double zLen = std::sqrt(zx * zx + zy * zy + zz * zz);
+        double ux = upX;
+        double uy = upY;
+        double uz = upZ;
+        const double uLen = std::sqrt(ux * ux + uy * uy + uz * uz);
+        if (zLen > 1.0e-12 && uLen > 1.0e-12)
+        {
+            zx /= zLen;
+            zy /= zLen;
+            zz /= zLen;
+            ux /= uLen;
+            uy /= uLen;
+            uz /= uLen;
+            // Pitch axis ⊥ nominal look-at and camera-up; rotate tool +Z by tiltDeg.
+            double ax = zy * uz - zz * uy;
+            double ay = zz * ux - zx * uz;
+            double az = zx * uy - zy * ux;
+            const double aLen = std::sqrt(ax * ax + ay * ay + az * az);
+            if (aLen > 1.0e-8)
+            {
+                ax /= aLen;
+                ay /= aLen;
+                az /= aLen;
+                const double ang = tiltDeg * (3.14159265358979323846 / 180.0);
+                const double c = std::cos(ang);
+                const double s = std::sin(ang);
+                const double dot = ax * zx + ay * zy + az * zz;
+                tcp.toolZMx = zx * c + (ay * zz - az * zy) * s + ax * dot * (1.0 - c);
+                tcp.toolZMy = zy * c + (az * zx - ax * zz) * s + ay * dot * (1.0 - c);
+                tcp.toolZMz = zz * c + (ax * zy - ay * zx) * s + az * dot * (1.0 - c);
+            }
+        }
+    }
+
+    // Rebuild full TCP rotvec (rx,ry,rz) from tilted tool +Z + camera-up.
     const bool lockUp =
         isApexPin || hf::hardwareConfig().ur3e.scanCameraUpWorldZ;
     orientScanTcpFromToolZ(tcp, lockUp, upX, upY, upZ);
@@ -307,6 +355,146 @@ Ur3eHemisphereScanPlan evaluateHemisphereScanPlanMoveIt(const QString &serverUrl
 
     return plan;
 
+}
+
+Ur3eHemisphereScanPlan evaluateSemiHemisphereScanPlanMoveIt(
+    const QString &serverUrl,
+    const Ur3eHemisphereScanParams &params,
+    const Ur3eWorkspaceBoundary &boundary,
+    const int maxSweepOkPerRing,
+    QString *errorMessage)
+{
+    Ur3eHemisphereScanPlan plan;
+    const int searchCandidates = hf::hardwareConfig().ur3e.semiRingSearchCandidates;
+    const std::vector<Ur3eHemisphereScanPoint> gridPoints =
+        generateSemiHemisphereScanPoints(params, searchCandidates);
+    if (gridPoints.empty())
+        return plan;
+
+    QJsonArray poses;
+    for (std::size_t index = 0; index < gridPoints.size(); ++index)
+    {
+        const Ur3eScanTcpPose tcp = tcpPoseForHemispherePoint(gridPoints[index]);
+        QJsonObject pose;
+        pose.insert(QStringLiteral("index"), static_cast<int>(index));
+        pose.insert(QStringLiteral("x"), tcp.xM);
+        pose.insert(QStringLiteral("y"), tcp.yM);
+        pose.insert(QStringLiteral("z"), tcp.zM);
+        pose.insert(QStringLiteral("rx"), tcp.rxRad);
+        pose.insert(QStringLiteral("ry"), tcp.ryRad);
+        pose.insert(QStringLiteral("rz"), tcp.rzRad);
+        pose.insert(QStringLiteral("tool_z_x"), tcp.toolZMx);
+        pose.insert(QStringLiteral("tool_z_y"), tcp.toolZMy);
+        pose.insert(QStringLiteral("tool_z_z"), tcp.toolZMz);
+        const bool isApexPin = std::abs(gridPoints[index].thetaDeg) <= 1.0e-9;
+        pose.insert(QStringLiteral("camera_up_x"), isApexPin ? 1.0 : 0.0);
+        pose.insert(QStringLiteral("camera_up_y"), 0.0);
+        pose.insert(QStringLiteral("camera_up_z"), isApexPin ? 0.0 : 1.0);
+        pose.insert(QStringLiteral("require_perpendicular"), isApexPin);
+        pose.insert(QStringLiteral("theta_deg"), gridPoints[index].thetaDeg);
+        pose.insert(QStringLiteral("phi_deg"), gridPoints[index].phiDeg);
+        poses.append(pose);
+    }
+
+    QJsonObject workspace;
+    workspace.insert(QStringLiteral("enabled"), boundary.enabled);
+    workspace.insert(QStringLiteral("length_m"), boundary.lengthM());
+    workspace.insert(QStringLiteral("width_m"), boundary.widthM());
+    workspace.insert(QStringLiteral("height_m"), boundary.heightM());
+    workspace.insert(QStringLiteral("mount_height_m"), boundary.mountHeightM());
+    workspace.insert(QStringLiteral("ceiling_clearance_m"), boundary.ceilingClearanceM());
+
+    QJsonObject body;
+    body.insert(QStringLiteral("poses"), poses);
+    body.insert(QStringLiteral("workspace"), workspace);
+    body.insert(QStringLiteral("pin_pose_tolerance_deg"),
+                hf::hardwareConfig().ur3e.pinPoseToleranceDeg);
+    body.insert(QStringLiteral("scan_camera_up_world_z"),
+                hf::hardwareConfig().ur3e.scanCameraUpWorldZ);
+    body.insert(QStringLiteral("semi_ring_sweep"), true);
+    body.insert(QStringLiteral("semi_max_sweep_ok_per_ring"),
+                std::max(1, maxSweepOkPerRing));
+    body.insert(QStringLiteral("semi_ring_search_candidates"),
+                std::max(1, searchCandidates));
+    appendUr3eScanHomeJointsToJson(body);
+
+    const int planTimeoutMs = std::max(60000, hf::hardwareConfig().ur3e.planTimeoutMs);
+    const QJsonObject response =
+        ur3ePostJsonRequest(serverUrl, QStringLiteral("/plan_hemisphere_scan"), body,
+                            planTimeoutMs, errorMessage);
+
+    if (response.isEmpty() || !response.value(QStringLiteral("ok")).toBool(false))
+    {
+        if (errorMessage != nullptr && errorMessage->isEmpty())
+            *errorMessage = QStringLiteral("MoveIt semi hemisphere scan planning failed.");
+        plan.errorMessage = errorMessage != nullptr ? *errorMessage : QString();
+        return plan;
+    }
+
+    const QJsonArray results = response.value(QStringLiteral("results")).toArray();
+    plan.points.reserve(gridPoints.size());
+    for (std::size_t index = 0; index < gridPoints.size(); ++index)
+    {
+        Ur3ePlannedScanPoint planned;
+        planned.gridPoint = gridPoints[index];
+        planned.tcp = tcpPoseForHemispherePoint(gridPoints[index]);
+        plan.points.push_back(planned);
+    }
+
+    for (const QJsonValue &value : results)
+    {
+        const QJsonObject entry = value.toObject();
+        const int pointIndex = entry.value(QStringLiteral("index")).toInt(-1);
+        if (pointIndex < 0 || pointIndex >= static_cast<int>(plan.points.size()))
+            continue;
+
+        Ur3ePlannedScanPoint &planned = plan.points[static_cast<std::size_t>(pointIndex)];
+        planned.reachable = entry.value(QStringLiteral("reachable")).toBool(false);
+        planned.homePathOk =
+            planned.reachable && entry.value(QStringLiteral("home_path_ok")).toBool(true);
+        planned.baseSweepOk =
+            planned.reachable && entry.value(QStringLiteral("base_sweep_ok")).toBool(false);
+        planned.planningError = entry.value(QStringLiteral("error")).toString();
+
+        const QJsonArray joints = entry.value(QStringLiteral("joints")).toArray();
+        planned.jointPositionsRad.clear();
+        planned.jointPositionsRad.reserve(6);
+        for (const QJsonValue &jointValue : joints)
+            planned.jointPositionsRad.push_back(jointValue.toDouble(0.0));
+
+        const QJsonObject tcpObj = entry.value(QStringLiteral("tcp")).toObject();
+        if (!tcpObj.isEmpty())
+        {
+            planned.tcp.xM = tcpObj.value(QStringLiteral("x")).toDouble(planned.tcp.xM);
+            planned.tcp.yM = tcpObj.value(QStringLiteral("y")).toDouble(planned.tcp.yM);
+            planned.tcp.zM = tcpObj.value(QStringLiteral("z")).toDouble(planned.tcp.zM);
+            planned.tcp.rxRad = tcpObj.value(QStringLiteral("rx")).toDouble(planned.tcp.rxRad);
+            planned.tcp.ryRad = tcpObj.value(QStringLiteral("ry")).toDouble(planned.tcp.ryRad);
+            planned.tcp.rzRad = tcpObj.value(QStringLiteral("rz")).toDouble(planned.tcp.rzRad);
+            planned.tcp.toolZMx =
+                tcpObj.value(QStringLiteral("tool_z_x")).toDouble(planned.tcp.toolZMx);
+            planned.tcp.toolZMy =
+                tcpObj.value(QStringLiteral("tool_z_y")).toDouble(planned.tcp.toolZMy);
+            planned.tcp.toolZMz =
+                tcpObj.value(QStringLiteral("tool_z_z")).toDouble(planned.tcp.toolZMz);
+        }
+
+        if (planned.reachable)
+        {
+            ++plan.reachableCount;
+            if (planned.homePathOk)
+                ++plan.homePathOkCount;
+            else
+                ++plan.chainOnlyCount;
+        }
+        else
+        {
+            ++plan.unreachableCount;
+        }
+    }
+
+    plan.moveItUsed = true;
+    return plan;
 }
 
 std::vector<double> ur3eScanHomeJointsRadFromConfig()

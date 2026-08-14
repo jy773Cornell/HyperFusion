@@ -648,7 +648,8 @@ Ur3eScanWaypointMoveResult ur3eExecuteScanWaypoint(const QString &serverUrl,
                                                    const Ur3eScanTcpPose *tcpPose,
                                                    QString *errorMessage,
                                                    const bool requireHomeFirst,
-                                                   const bool directOnly)
+                                                   const bool directOnly,
+                                                   const bool allowPinPoseCone)
 {
     QJsonObject body = buildScanMotionRequestBody();
     body.insert(QStringLiteral("joints"), positionsToJsonArray(positionsRad));
@@ -656,6 +657,8 @@ Ur3eScanWaypointMoveResult ur3eExecuteScanWaypoint(const QString &serverUrl,
         body.insert(QStringLiteral("require_home_first"), true);
     if (directOnly)
         body.insert(QStringLiteral("direct_only"), true);
+    if (allowPinPoseCone)
+        body.insert(QStringLiteral("allow_pin_pose_cone"), true);
     if (tcpPose != nullptr)
     {
         QJsonObject tcp;
@@ -669,10 +672,18 @@ Ur3eScanWaypointMoveResult ur3eExecuteScanWaypoint(const QString &serverUrl,
         tcp.insert(QStringLiteral("tool_z_y"), tcpPose->toolZMy);
         tcp.insert(QStringLiteral("tool_z_z"), tcpPose->toolZMz);
         // Apex look-down: keep exact perpendicular (no pin-pose cone) + camera-up +X.
+        // Semi-fixed ring entries force cone (require_perpendicular=false).
         const bool apexLookDown = tcpPose->toolZMz < -0.98
                                   && std::abs(tcpPose->toolZMx) < 0.15
                                   && std::abs(tcpPose->toolZMy) < 0.15;
-        if (apexLookDown)
+        if (allowPinPoseCone)
+        {
+            tcp.insert(QStringLiteral("require_perpendicular"), false);
+            tcp.insert(QStringLiteral("camera_up_x"), 0.0);
+            tcp.insert(QStringLiteral("camera_up_y"), 0.0);
+            tcp.insert(QStringLiteral("camera_up_z"), 1.0);
+        }
+        else if (apexLookDown)
         {
             tcp.insert(QStringLiteral("require_perpendicular"), true);
             tcp.insert(QStringLiteral("camera_up_x"), 1.0);
@@ -708,6 +719,29 @@ Ur3eScanWaypointMoveResult ur3eExecuteMoveHome(const QString &serverUrl, QString
         &localError);
     Ur3eScanWaypointMoveResult result = parseScanMotionResponse(response, localError);
     if (errorMessage != nullptr && !result.ok)
+        *errorMessage = result.errorMessage;
+    return result;
+}
+
+Ur3eScanWaypointMoveResult ur3eExecuteHardwareJointMove(const QString &serverUrl,
+                                                        const std::vector<double> &positionsRad,
+                                                        const bool skipCollisionCheck,
+                                                        QString *errorMessage,
+                                                        const QString &label)
+{
+    QJsonObject body = buildScanMotionRequestBody();
+    body.insert(QStringLiteral("joints"), positionsToJsonArray(positionsRad));
+    body.insert(QStringLiteral("skip_collision_check"), skipCollisionCheck);
+    if (!label.isEmpty())
+        body.insert(QStringLiteral("label"), label);
+
+    QString localError;
+    const QJsonObject response = postJson(
+        serverUrl, QStringLiteral("/execute_hardware_joint_move"), body, 360000, &localError);
+    Ur3eScanWaypointMoveResult result = parseScanMotionResponse(response, localError);
+    if (errorMessage != nullptr && !result.ok && !result.stopped)
+        *errorMessage = result.errorMessage;
+    else if (errorMessage != nullptr && result.stopped)
         *errorMessage = result.errorMessage;
     return result;
 }

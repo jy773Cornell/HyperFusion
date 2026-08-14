@@ -67,6 +67,9 @@ struct Ur3ePlannedScanPoint
     /// True when MoveIt verified a home→pin path; false = previous→pin chain only.
     bool homePathOk = false;
 
+    /// Semi plan: full shoulder_pan circle at this pin is collision-free (plan-time).
+    bool baseSweepOk = false;
+
     std::vector<double> jointPositionsRad;
 
     QString planningError;
@@ -123,7 +126,14 @@ struct Ur3eHemisphereScanPlan
 
     QString *errorMessage = nullptr);
 
-
+/// Semi plan: same MoveIt pin IK as Auto, plus base-link pan-circle check.
+/// Keeps at most *maxSweepOkPerRing* sweep-OK pins per latitude (default 3).
+[[nodiscard]] Ur3eHemisphereScanPlan evaluateSemiHemisphereScanPlanMoveIt(
+    const QString &serverUrl,
+    const Ur3eHemisphereScanParams &params,
+    const Ur3eWorkspaceBoundary &boundary,
+    int maxSweepOkPerRing = 3,
+    QString *errorMessage = nullptr);
 
 /// Reachable plan indices: top θ ring first (home-nearest entry), then downward ring-by-ring φ sweep.
 

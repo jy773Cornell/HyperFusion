@@ -4,6 +4,9 @@
 #include "backend/3dscanning/BfsCameraWorker.hpp"
 #include "backend/3dscanning/BfsSpinnakerCamera.hpp"
 #include "backend/3dscanning/BfsTiffIo.hpp"
+#include "backend/3dscanning/Ur3eCameraTransforms.hpp"
+#include "backend/HyperFusionConfig.hpp"
+#include "frontend/controllers/Ur3ePanelController.hpp"
 #include "frontend/logging/AppLog.hpp"
 #include "frontend/widgets/BfsCameraSettingsWidget.hpp"
 #include "frontend/widgets/MainWindow.hpp"
@@ -11,6 +14,7 @@
 
 #include <QDateTime>
 #include <QFileDialog>
+#include <QFileInfo>
 #include <QFont>
 #include <QImage>
 #include <QLabel>
@@ -266,6 +270,69 @@ void BfsPanelController::onCaptureClicked()
     }
 
     host_->appendLog(hf::log::Channel::Ur3e, QStringLiteral("BFS capture saved: %1").arg(path));
+
+    // When the UR3e arm is connected, always write companion pose JSON next to the TIFF
+    // (same format as scan stills: live base_link → hyperfusion_tcp).
+    if (host_->ur3ePanel() != nullptr && host_->ur3ePanel()->isRobotConnected())
+    {
+        hf::ur3e::Ur3eScanTcpPose tcp{};
+        QString poseError;
+        if (!host_->ur3ePanel()->tryGetLiveOpticalTcpPose(&tcp, &poseError))
+        {
+            host_->appendLog(
+                hf::log::Channel::Ur3e,
+                QStringLiteral("BFS capture: robot connected but live TCP unavailable — "
+                               "no pose JSON (%1).")
+                    .arg(poseError));
+        }
+        else
+        {
+            const QFileInfo tiffInfo(path);
+            const QString jsonPath =
+                tiffInfo.absolutePath() + QLatin1Char('/') + tiffInfo.completeBaseName()
+                + QStringLiteral(".json");
+            const QString imageName = tiffInfo.fileName();
+
+            const auto &ur3eCfg = hf::hardwareConfig().ur3e;
+            hf::ur3e::CameraIntrinsics intrinsics;
+            intrinsics.fx = ur3eCfg.bfsCameraFx;
+            intrinsics.fy = ur3eCfg.bfsCameraFy;
+            intrinsics.width = frame.width;
+            intrinsics.height = frame.height;
+            intrinsics.cx = ur3eCfg.bfsCameraCx > 0.0
+                                ? ur3eCfg.bfsCameraCx
+                                : (frame.width > 0 ? 0.5 * static_cast<double>(frame.width) : 0.0);
+            intrinsics.cy = ur3eCfg.bfsCameraCy > 0.0
+                                ? ur3eCfg.bfsCameraCy
+                                : (frame.height > 0 ? 0.5 * static_cast<double>(frame.height)
+                                                    : 0.0);
+            intrinsics.distortion = ur3eCfg.bfsCameraDistortion;
+
+            const hf::ur3e::Mat4 c2w = hf::ur3e::cameraToWorldOpenGlFromTcp(tcp);
+            const hf::ur3e::CameraExtrinsicsRt extrinsics =
+                hf::ur3e::cameraExtrinsicsOpenCvFromTcp(tcp);
+            QString writeError;
+            if (!hf::ur3e::writeCameraPoseJson(jsonPath,
+                                               tcp,
+                                               c2w,
+                                               extrinsics,
+                                               intrinsics,
+                                               imageName,
+                                               QStringLiteral("live_tf_base_hyperfusion_tcp"),
+                                               nullptr,
+                                               &writeError))
+            {
+                host_->appendLog(
+                    hf::log::Channel::Ur3e,
+                    QStringLiteral("BFS capture: pose JSON failed — %1").arg(writeError));
+            }
+            else
+            {
+                host_->appendLog(hf::log::Channel::Ur3e,
+                                 QStringLiteral("BFS capture pose JSON: %1").arg(jsonPath));
+            }
+        }
+    }
 }
 
 void BfsPanelController::onSettingsEdited()

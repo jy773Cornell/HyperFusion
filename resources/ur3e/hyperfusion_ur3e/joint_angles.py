@@ -202,9 +202,14 @@ def wrist3_unwind_target_rad(live_rad: float, ref_rad: float) -> tuple[float, in
 
 
 def stabilize_joint_reading(last: float, new: float) -> float:
-    """Hold the previous branch when hardware noise is sub-degree."""
+    """Hold the previous branch when hardware noise is sub-degree.
+
+    Do not hold across a ±2π principalize snap (wrap-equal but far in numeric
+    space) — that left MoveIt on a +360° twin after hardware unwrap.
+    """
     if abs(joint_delta_rad(last, new)) < JOINT_STREAM_DEADBAND_RAD:
-        return last
+        if abs(last - new) < (math.pi * 0.5):
+            return last
     return new
 
 

@@ -1115,8 +1115,8 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                      || key == QStringLiteral("scan_center_offset_y_mm"))
             {
                 warnings.push_back(
-                    QStringLiteral("Deprecated %1 — scan center is the tray projection of "
-                                   "optical TCP at home_joints_deg")
+                    QStringLiteral("Deprecated %1 — scan center is tray/base XY (0,0); "
+                                   "use mount_offset_*_mm to shift the robot vs tray")
                         .arg(key));
             }
             else if (key == QStringLiteral("home_joints_deg"))
@@ -1217,6 +1217,24 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                         "Invalid ur3e pin_pose_tolerance_deg: %1 (use 0…45)").arg(value));
                 else
                     config.ur3e.pinPoseToleranceDeg = numericValue;
+            }
+            else if (key == QStringLiteral("pin_tcp_tilt_deg"))
+            {
+                if (!hasNumber || numericValue < -45.0 || numericValue > 45.0)
+                    warnings.push_back(QStringLiteral(
+                        "Invalid ur3e pin_tcp_tilt_deg: %1 (use −45…45)").arg(value));
+                else
+                    config.ur3e.pinTcpTiltDeg = numericValue;
+            }
+            else if (key == QStringLiteral("semi_ring_search_candidates")
+                     || key == QStringLiteral("semi_ring_search_buffer_deg"))
+            {
+                // Legacy key semi_ring_search_buffer_deg was misnamed; both mean candidate count.
+                if (!hasNumber || numericValue < 1.0 || numericValue > 720.0)
+                    warnings.push_back(QStringLiteral(
+                        "Invalid ur3e semi_ring_search_candidates: %1 (use 1…720)").arg(value));
+                else
+                    config.ur3e.semiRingSearchCandidates = static_cast<int>(std::lround(numericValue));
             }
             else if (key == QStringLiteral("remember_last_scan_plan"))
             {
@@ -1471,8 +1489,13 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "home_joints_deg = 0,-150,120,0,90,0\n"
         << "scan_capture_stabilize_ms = 500\n"
         << "scan_camera_up_world_z = true\n"
-        << "# Half-angle cone (deg) around each pin look-at for Plan reachability (0=off).\n"
+        << "# Half-angle tip (deg) in vertical plane (look-at × camera-up); 0=off. No left/right.\n"
         << "pin_pose_tolerance_deg = 5\n"
+        << "# TCP look-at tip angle from nominal point-at-center pose (deg), not a wrist joint.\n"
+        << "# + tip toward camera-up; − toward tray. Apex stays exact look-down. Tolerance uses this axis.\n"
+        << "pin_tcp_tilt_deg = 0\n"
+        << "# Semi Plan: φ candidates per θ ring (evenly over 360°). e.g. 260 ≈ every 1.4°.\n"
+        << "semi_ring_search_candidates = 360\n"
         << "remember_last_scan_plan = true\n"
         << "# BFS OpenCV intrinsics for multiview JSON (pixels). fx/fy=0 until calibrated.\n"
         << "bfs_camera_fx = 0\n"

@@ -1677,6 +1677,8 @@ class Ur3eRosBridge:
           camera_up_y=float(entry.get("camera_up_y", 0.0)),
           camera_up_z=float(entry.get("camera_up_z", 1.0)),
           require_perpendicular=bool(entry.get("require_perpendicular", False)),
+          theta_deg=float(entry.get("theta_deg", 0.0)),
+          phi_deg=float(entry.get("phi_deg", 0.0)),
         )
       )
 
@@ -1684,12 +1686,25 @@ class Ur3eRosBridge:
     planner.apply_home_joints_from_body(body)
     tolerance_deg = float(body.get("pin_pose_tolerance_deg", 0.0) or 0.0)
     lock_camera_up = bool(body.get("scan_camera_up_world_z", True))
+    semi_ring_sweep = bool(body.get("semi_ring_sweep", False))
+    semi_max_sweep = int(body.get("semi_max_sweep_ok_per_ring", 3) or 3)
+    # Candidate count per ring (legacy key was misnamed *_buffer_deg).
+    semi_search_candidates = int(
+        body.get(
+            "semi_ring_search_candidates",
+            body.get("semi_ring_search_buffer_deg", 360),
+        )
+        or 360
+    )
     results = planner.plan_poses(
       targets,
       workspace,
       initial_seed=seed_joints,
       pin_pose_tolerance_deg=tolerance_deg,
       lock_camera_up=lock_camera_up,
+      semi_ring_sweep=semi_ring_sweep,
+      semi_max_sweep_ok_per_ring=semi_max_sweep,
+      semi_ring_search_candidates=semi_search_candidates,
     )
 
     payload_results = []
@@ -1717,6 +1732,8 @@ class Ur3eRosBridge:
         "cone_tip_deg": float(item.cone_tip_deg),
         "home_path_ok": bool(item.home_path_ok) if item.reachable else False,
       }
+      if semi_ring_sweep:
+        entry["base_sweep_ok"] = bool(item.base_sweep_ok) if item.reachable else False
       if item.reachable and item.tcp_rx is not None:
         entry["tcp"] = {
           "x": item.tcp_x_m,
@@ -1764,6 +1781,7 @@ class Ur3eRosBridge:
     direct_only = bool(body.get("direct_only", False))
     tolerance_deg = float(body.get("pin_pose_tolerance_deg", 0.0) or 0.0)
     lock_camera_up = bool(body.get("scan_camera_up_world_z", True))
+    allow_pin_pose_cone = bool(body.get("allow_pin_pose_cone", False))
 
     if not self._wait_for_external_control(
         timeout_s=120.0,
@@ -1787,6 +1805,7 @@ class Ur3eRosBridge:
         direct_only=direct_only,
         pin_pose_tolerance_deg=tolerance_deg,
         lock_camera_up=lock_camera_up,
+        allow_pin_pose_cone=allow_pin_pose_cone,
     )
     result = planner.execute_single_waypoint([float(v) for v in joints], **kwargs)
     if result.get("ok") or result.get("stopped"):
@@ -1885,6 +1904,32 @@ class Ur3eRosBridge:
     return planner.maybe_rewind_wrist3_cable(
       workspace=workspace,
       stop_event=self._stop_requested,
+    )
+
+  def execute_hardware_joint_move(self, body: Dict[str, Any]) -> Dict[str, Any]:
+    """Direct RTDE/controller joint move (no MoveIt plan). Used by semi-fixed pan spin."""
+    from hyperfusion_ur3e.moveit.scan_planner import get_scan_planner, workspace_from_dict
+
+    if not self._status.connected:
+      raise RuntimeError("Robot not connected.")
+    self._stop_requested.clear()
+
+    joints = body.get("joints")
+    if not isinstance(joints, list) or len(joints) != 6:
+      raise ValueError("joints must be a list of 6 floats (radians).")
+
+    workspace_cfg = body.get("workspace")
+    workspace = workspace_from_dict(workspace_cfg) if isinstance(workspace_cfg, dict) else None
+
+    planner = get_scan_planner(ros_distro=self.ros_distro, ur_type=self.ur_type)
+    planner.apply_home_joints_from_body(body)
+    label = str(body.get("label") or "hardware joint move")
+    return planner.execute_hardware_joint_move(
+      [float(v) for v in joints],
+      workspace=workspace,
+      stop_event=self._stop_requested,
+      skip_collision_check=bool(body.get("skip_collision_check", False)),
+      label=label,
     )
 
   def execute_hemisphere_scan(self, body: Dict[str, Any]) -> Dict[str, Any]:

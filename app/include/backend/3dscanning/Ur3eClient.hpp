@@ -151,7 +151,10 @@ Ur3eScanWaypointMoveResult ur3eExecuteScanWaypoint(const QString &serverUrl,
                                                    const Ur3eScanTcpPose *tcpPose = nullptr,
                                                    QString *errorMessage = nullptr,
                                                    const bool requireHomeFirst = false,
-                                                   const bool directOnly = false);
+                                                   const bool directOnly = false,
+                                                   /// When true: pin-pose cone may relax look-at (non-apex).
+                                                   /// Semi-fixed ring entries use this; top/apex does not.
+                                                   const bool allowPinPoseCone = false);
 
 Ur3eScanWaypointMoveResult ur3eExecuteMoveHome(const QString &serverUrl,
                                                QString *errorMessage = nullptr);
@@ -159,6 +162,15 @@ Ur3eScanWaypointMoveResult ur3eExecuteMoveHome(const QString &serverUrl,
 /// After a pin: if wrist_3 is ≥½ turn from home, retreat home and unwind.
 Ur3eWrist3RewindResult ur3eRewindWrist3Cable(const QString &serverUrl,
                                             QString *errorMessage = nullptr);
+
+/// Direct hardware joint trajectory (no MoveIt plan). Semi-fixed pan spin uses
+/// skipCollisionCheck=true (operator guarantees clear ring).
+Ur3eScanWaypointMoveResult ur3eExecuteHardwareJointMove(
+    const QString &serverUrl,
+    const std::vector<double> &positionsRad,
+    bool skipCollisionCheck = false,
+    QString *errorMessage = nullptr,
+    const QString &label = QString());
 
 bool ur3eStopMotion(const QString &serverUrl, QString *errorMessage = nullptr);
 

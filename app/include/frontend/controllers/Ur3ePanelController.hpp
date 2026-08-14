@@ -57,6 +57,10 @@ public:
     [[nodiscard]] bool isScanPlanReady() const;
     [[nodiscard]] bool isScanExecuting() const { return scanExecuting_; }
 
+    /// Live optical TCP (base_link / hyperfusion_tcp) when robot is connected.
+    [[nodiscard]] bool tryGetLiveOpticalTcpPose(Ur3eScanTcpPose *out,
+                                                QString *errorMessage = nullptr) const;
+
     /// Start hemisphere execute. Returns false if rejected (busy / no plan / already running).
     bool startHemisphereScanExecute(const HemisphereScanExecuteOptions &options = {});
     void requestStopMotion();
@@ -133,6 +137,9 @@ private:
     void onStartMoveItRequested();
     void onPlanHemisphereScanRequested();
     void onExecuteHemisphereScanRequested();
+    void onAddSemiFixedRingRequested();
+    void refreshSemiFixedPreview();
+    bool startSemiFixedScanExecute(const HemisphereScanExecuteOptions &options);
     void onMoveItStateChanged(bool running, const QString &detail);
     void onRvizStateChanged(bool running, const QString &detail);
 
@@ -168,6 +175,11 @@ private:
     void finishMove(bool ok, const QString &detail);
     void finishStop(bool ok, const QString &detail);
     void finishScanPlan(const Ur3eHemisphereScanPlan &plan, const QString &errorMessage);
+    void finishSemiScanPlan(const Ur3eHemisphereScanPlan &plan,
+                            const QString &errorMessage,
+                            double intervalDeg,
+                            int panDirection,
+                            const Ur3eHemisphereScanParams &scanParams);
     void finishScanExecute(bool ok,
                            const QString &detail,
                            int capturedFrameCount,
@@ -177,6 +189,7 @@ private:
     void tryLoadCachedScanPlan();
     void saveCachedScanPlan();
     void onLoadScanRouteRequested(const QString &routePath);
+    void onLoadPlannedRouteAsSemiFixedRequested(const QString &routePath);
 
     void dismissConnectWaitDialog();
     void applyConnectAsyncStatus(const Ur3eConnectAsyncStatus &status);

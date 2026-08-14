@@ -13,6 +13,9 @@
 #include "backend/3dscanning/Ur3eWslSetup.hpp"
 #include "backend/3dscanning/Ur3eCameraTransforms.hpp"
 #include "backend/3dscanning/Ur3eScanPlanCache.hpp"
+#include "backend/3dscanning/Ur3eAutoHemisphereScanExecute.hpp"
+#include "backend/3dscanning/Ur3eSemiFixedScan.hpp"
+#include "backend/3dscanning/Ur3eSemiFixedScanExecute.hpp"
 #include "backend/3dscanning/BfsTiffIo.hpp"
 #include "frontend/controllers/BfsPanelController.hpp"
 #include "frontend/widgets/MainWindow.hpp"
@@ -34,15 +37,17 @@
 #include <QThread>
 #include <QTimer>
 #include <QHash>
+#include <QJsonDocument>
+#include <QJsonObject>
 
 #include <QMetaObject>
 #include <QVariant>
 
-#include <cmath>
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <mutex>
 #include <thread>
-
 #include <vector>
 
 namespace hf::ur3e
@@ -231,7 +236,35 @@ bool Ur3ePanelController::isSidecarRunning() const
 
 bool Ur3ePanelController::isScanPlanReady() const
 {
+    if (host_ != nullptr && host_->ur3eHemisphereScanSettings_ != nullptr
+        && host_->ur3eHemisphereScanSettings_->scanExecuteMode()
+               == Ur3eScanExecuteMode::SemiFixed)
+        return host_->ur3eHemisphereScanSettings_->semiFixedRouteReady();
     return scanPlanReady_ && plannedScanPlan_.reachableCount > 0;
+}
+
+bool Ur3ePanelController::tryGetLiveOpticalTcpPose(Ur3eScanTcpPose *out,
+                                                   QString *errorMessage) const
+{
+    if (out == nullptr)
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("output pose is null");
+        return false;
+    }
+    if (!robotConnected_ || serverManager_ == nullptr || !serverManager_->isServerConnected())
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("robot not connected");
+        return false;
+    }
+
+    const Ur3ePoseResult livePose = ur3eGetTcpPose(serverManager_->serverUrl(), errorMessage);
+    if (!livePose.ok)
+        return false;
+
+    *out = scanTcpFromLivePose(livePose.pose, Ur3eScanTcpPose{});
+    return true;
 }
 
 void Ur3ePanelController::applyHardwareConfigToUi()
@@ -419,14 +452,42 @@ void Ur3ePanelController::wireSettingsTabConnections()
                 this,
                 &Ur3ePanelController::onLoadScanRouteRequested);
         connect(host_->ur3eHemisphereScanSettings_,
+                &ui::Ur3eHemisphereScanSettingsWidget::loadPlannedRouteAsSemiFixedRequested,
+                this,
+                &Ur3ePanelController::onLoadPlannedRouteAsSemiFixedRequested);
+        connect(host_->ur3eHemisphereScanSettings_,
                 &ui::Ur3eHemisphereScanSettingsWidget::paramsChanged,
                 this,
                 [this]() {
+                    if (host_->ur3eHemisphereScanSettings_ != nullptr
+                        && host_->ur3eHemisphereScanSettings_->scanExecuteMode()
+                               == Ur3eScanExecuteMode::SemiFixed)
+                    {
+                        // Params changed: drop planned rings so preview tracks Layer/θ/radius.
+                        plannedScanPlan_ = Ur3eHemisphereScanPlan{};
+                        scanPlanReady_ = false;
+                        Ur3eSemiFixedRoute route =
+                            host_->ur3eHemisphereScanSettings_->semiFixedRoute();
+                        if (!route.rings.isEmpty())
+                        {
+                            route.rings.clear();
+                            host_->ur3eHemisphereScanSettings_->setSemiFixedRoute(route);
+                        }
+                        else
+                            refreshSemiFixedPreview();
+                        updateRobotUi();
+                        if (host_->capturePanel() != nullptr)
+                            host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
+                        return;
+                    }
                     scanPlanReady_ = false;
                     if (host_->ur3eHemisphereScanSettings_ != nullptr)
                         host_->ur3eHemisphereScanSettings_->setPlannedReachablePins(-1);
                     if (host_->ur3eScanRoutePlanWidget_ != nullptr)
+                    {
+                        host_->ur3eScanRoutePlanWidget_->clearSemiFixedPreviewRings();
                         host_->ur3eScanRoutePlanWidget_->clearScanPlan();
+                    }
                     if (host_->ur3eScanRoutePlanWidget_ != nullptr
                         && host_->ur3eHemisphereScanSettings_ != nullptr)
                     {
@@ -438,6 +499,40 @@ void Ur3ePanelController::wireSettingsTabConnections()
                     if (host_->capturePanel() != nullptr)
                         host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
                 });
+        connect(host_->ur3eHemisphereScanSettings_,
+                &ui::Ur3eHemisphereScanSettingsWidget::scanModeChanged,
+                this,
+                [this]() {
+                    if (host_->ur3eHemisphereScanSettings_ == nullptr)
+                        return;
+                    if (host_->ur3eHemisphereScanSettings_->scanExecuteMode()
+                        == Ur3eScanExecuteMode::SemiFixed)
+                        refreshSemiFixedPreview();
+                    else if (host_->ur3eScanRoutePlanWidget_ != nullptr)
+                    {
+                        host_->ur3eScanRoutePlanWidget_->clearSemiFixedPreviewRings();
+                        if (scanPlanReady_)
+                            host_->ur3eScanRoutePlanWidget_->setScanPlan(plannedScanPlan_);
+                        else
+                            host_->ur3eScanRoutePlanWidget_->clearScanPlan();
+                    }
+                    updateRobotUi();
+                    if (host_->capturePanel() != nullptr)
+                        host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
+                });
+        connect(host_->ur3eHemisphereScanSettings_,
+                &ui::Ur3eHemisphereScanSettingsWidget::semiFixedRouteChanged,
+                this,
+                [this]() {
+                    refreshSemiFixedPreview();
+                    updateRobotUi();
+                    if (host_->capturePanel() != nullptr)
+                        host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
+                });
+        connect(host_->ur3eHemisphereScanSettings_,
+                &ui::Ur3eHemisphereScanSettingsWidget::addSemiFixedRingRequested,
+                this,
+                &Ur3ePanelController::onAddSemiFixedRingRequested);
     }
 
     if (host_->ur3ePosePollTimer_ != nullptr)
@@ -677,8 +772,11 @@ void Ur3ePanelController::updateRobotUi()
     if (host_->ur3eHemisphereScanSettings_ != nullptr)
     {
         host_->ur3eHemisphereScanSettings_->setPlanEnabled(canStartMotion && !busy_);
-        host_->ur3eHemisphereScanSettings_->setExecuteEnabled(canStartMotion && scanPlanReady_
-                                                               && plannedScanPlan_.reachableCount > 0
+        const bool executeReady =
+            host_->ur3eHemisphereScanSettings_->scanExecuteMode() == Ur3eScanExecuteMode::SemiFixed
+                ? host_->ur3eHemisphereScanSettings_->semiFixedRouteReady()
+                : (scanPlanReady_ && plannedScanPlan_.reachableCount > 0);
+        host_->ur3eHemisphereScanSettings_->setExecuteEnabled(canStartMotion && executeReady
                                                                && !scanExecuting_);
         host_->ur3eHemisphereScanSettings_->setParamsEnabled(!scanPlanning_ && !scanExecuting_);
     }
@@ -1089,22 +1187,59 @@ void Ur3ePanelController::onPlanHemisphereScanRequested()
         return;
     }
 
-    const Ur3eHemisphereScanParams scanParams = host_->ur3eHemisphereScanSettings_->params();
+    const bool semiMode =
+        host_->ur3eHemisphereScanSettings_->scanExecuteMode() == Ur3eScanExecuteMode::SemiFixed;
+    const Ur3eHemisphereScanParams scanParams =
+        semiMode ? host_->ur3eHemisphereScanSettings_->semiPlanParams()
+                 : host_->ur3eHemisphereScanSettings_->params();
     const Ur3eWorkspaceBoundary boundary =
         workspaceBoundaryFromConfig(hf::hardwareConfig().ur3e);
     const QString serverUrl = serverManager_->serverUrl();
+    const double intervalDeg =
+        host_->ur3eHemisphereScanSettings_->semiFixedRoute().intervalDeg;
+    const int panDirection =
+        host_->ur3eHemisphereScanSettings_->semiFixedRoute().panDirection;
 
-    host_->appendLog(QStringLiteral("UR3e scan plan: running MoveIt IK + collision check…"));
+    host_->appendLog(
+        semiMode
+            ? QStringLiteral(
+                  "UR3e semi plan: MoveIt IK + base-sweep (first 3 OK pins / ring, "
+                  "%1 φ candidates/ring)…")
+                  .arg(hf::hardwareConfig().ur3e.semiRingSearchCandidates)
+            : QStringLiteral("UR3e scan plan: running MoveIt IK + collision check…"));
     scanPlanning_ = true;
     setBusy(true);
 
-    std::thread([this, scanParams, boundary, serverUrl]() {
+    if (semiMode)
+    {
+        // Show geometric layer rings immediately while MoveIt runs.
+        plannedScanPlan_ = Ur3eHemisphereScanPlan{};
+        scanPlanReady_ = false;
+        if (host_->ur3eHemisphereScanSettings_ != nullptr)
+        {
+            Ur3eSemiFixedRoute route = host_->ur3eHemisphereScanSettings_->semiFixedRoute();
+            route.rings.clear();
+            host_->ur3eHemisphereScanSettings_->setSemiFixedRoute(route);
+        }
+        refreshSemiFixedPreview();
+    }
+
+    std::thread([this, scanParams, boundary, serverUrl, semiMode, intervalDeg,
+                 panDirection]() {
         QString errorMessage;
         const Ur3eHemisphereScanPlan plan =
-            evaluateHemisphereScanPlanMoveIt(serverUrl, scanParams, boundary, &errorMessage);
+            semiMode ? evaluateSemiHemisphereScanPlanMoveIt(serverUrl, scanParams, boundary, 3,
+                                                            &errorMessage)
+                     : evaluateHemisphereScanPlanMoveIt(serverUrl, scanParams, boundary,
+                                                        &errorMessage);
         QMetaObject::invokeMethod(
             this,
-            [this, plan, errorMessage]() { finishScanPlan(plan, errorMessage); },
+            [this, plan, errorMessage, semiMode, intervalDeg, panDirection, scanParams]() {
+                if (semiMode)
+                    finishSemiScanPlan(plan, errorMessage, intervalDeg, panDirection, scanParams);
+                else
+                    finishScanPlan(plan, errorMessage);
+            },
             Qt::QueuedConnection);
     }).detach();
 }
@@ -1134,7 +1269,7 @@ void Ur3ePanelController::finishScanPlan(const Ur3eHemisphereScanPlan &plan,
     host_->appendLog(
         QStringLiteral("UR3e scan plan (MoveIt): %1 points — %2 reachable "
                        "(%3 home→pin, %4 chain-only), %5 unreachable"
-                       " (pin cone ±%6°).")
+                       " (pin tip ±%6° vertical).")
             .arg(plan.points.size())
             .arg(plan.reachableCount)
             .arg(plan.homePathOkCount)
@@ -1173,6 +1308,111 @@ void Ur3ePanelController::finishScanPlan(const Ur3eHemisphereScanPlan &plan,
 
     saveCachedScanPlan();
 
+    updateRobotUi();
+    if (host_->capturePanel() != nullptr)
+        host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
+}
+
+void Ur3ePanelController::finishSemiScanPlan(const Ur3eHemisphereScanPlan &plan,
+                                             const QString &errorMessage,
+                                             const double intervalDeg,
+                                             const int panDirection,
+                                             const Ur3eHemisphereScanParams &scanParams)
+{
+    scanPlanning_ = false;
+    setBusy(false);
+
+    if (!errorMessage.isEmpty() && plan.points.empty())
+    {
+        host_->appendLog(QStringLiteral("UR3e semi plan failed: %1").arg(errorMessage));
+        plannedScanPlan_ = Ur3eHemisphereScanPlan{};
+        scanPlanReady_ = false;
+        updateRobotUi();
+        return;
+    }
+
+    plannedScanPlan_ = plan;
+    scanPlanReady_ = false; // Semi execute uses route rings, not Auto pin order.
+
+    int sweepOk = 0;
+    for (const Ur3ePlannedScanPoint &pt : plan.points)
+    {
+        if (pt.reachable && pt.baseSweepOk)
+            ++sweepOk;
+    }
+
+    host_->appendLog(
+        QStringLiteral("UR3e semi plan (MoveIt): %1 candidates — %2 reachable, "
+                       "%3 base-sweep OK (pin tip ±%4° vertical).")
+            .arg(plan.points.size())
+            .arg(plan.reachableCount)
+            .arg(sweepOk)
+            .arg(hf::hardwareConfig().ur3e.pinPoseToleranceDeg, 0, 'f', 1));
+    if (!plan.errorMessage.isEmpty())
+        host_->appendLog(QStringLiteral("UR3e semi plan: %1").arg(plan.errorMessage));
+
+    const QString robotFp = ur3eScanRobotCfgFingerprint(hf::hardwareConfig().ur3e);
+    const QString displayName = defaultUr3eScanRouteDisplayName(scanParams)
+                                + QStringLiteral(" semi");
+    Ur3eSemiFixedRoute route =
+        semiFixedRouteFromHemispherePlan(plan, robotFp, displayName, intervalDeg, panDirection);
+    if (host_->ur3eHemisphereScanSettings_ != nullptr)
+    {
+        host_->ur3eHemisphereScanSettings_->setSemiFixedRoute(route);
+        host_->ur3eHemisphereScanSettings_->setPlannedReachablePins(sweepOk);
+    }
+
+    // Persist into Semi-only folder.
+    const QString fingerprint = ur3eScanPlanFingerprint(hf::hardwareConfig().ur3e, scanParams);
+    const QString safeStem =
+        QStringLiteral("S%1_%2x%3_i%4_t%5-%6")
+            .arg(qRound(scanParams.sphereRadiusM * 1000.0))
+            .arg(scanParams.horizontalPoints)
+            .arg(scanParams.verticalPoints)
+            .arg(qRound(intervalDeg))
+            .arg(qRound(scanParams.thetaMinDeg))
+            .arg(qRound(scanParams.thetaMaxDeg));
+    const QString routeDir = defaultUr3eSemiScanRoutesDir();
+    QDir().mkpath(routeDir);
+    const QString routePath = QDir(routeDir).filePath(safeStem + QStringLiteral(".json"));
+    QString routeError;
+    if (!saveUr3eNamedScanRoute(routePath, displayName, fingerprint, robotFp, scanParams, plan,
+                                &routeError))
+    {
+        host_->appendLog(QStringLiteral("UR3e semi plan: save failed — %1").arg(routeError));
+    }
+    else
+    {
+        // Tag as Semi plan + imaging interval for reload.
+        QFile f(routePath);
+        if (f.open(QIODevice::ReadOnly | QIODevice::Text))
+        {
+            const QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
+            f.close();
+            if (doc.isObject())
+            {
+                QJsonObject root = doc.object();
+                root.insert(QStringLiteral("kind"), QStringLiteral("ur3e_semi_hemisphere_plan"));
+                root.insert(QStringLiteral("imaging_interval_deg"), intervalDeg);
+                root.insert(QStringLiteral("pan_direction"), panDirection >= 0 ? 1 : -1);
+                if (f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
+                {
+                    f.write(QJsonDocument(root).toJson(QJsonDocument::Indented));
+                    f.close();
+                }
+            }
+        }
+        host_->appendLog(QStringLiteral("UR3e semi plan: saved \"%1\" (%2 ring(s)).")
+                             .arg(displayName)
+                             .arg(route.rings.size()));
+        if (host_->ur3eHemisphereScanSettings_ != nullptr)
+        {
+            host_->ur3eHemisphereScanSettings_->rememberSemiFixedPlanPath(routePath);
+            host_->ur3eHemisphereScanSettings_->refreshAvailableRoutes();
+        }
+    }
+
+    refreshSemiFixedPreview();
     updateRobotUi();
     if (host_->capturePanel() != nullptr)
         host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
@@ -1255,6 +1495,7 @@ void Ur3ePanelController::onLoadScanRouteRequested(const QString &routePath)
     plannedScanPlan_ = plan;
     scanPlanReady_ = plan.reachableCount > 0;
     host_->ur3eHemisphereScanSettings_->setPlannedReachablePins(plan.reachableCount);
+    host_->ur3eHemisphereScanSettings_->rememberAutoRoutePath(routePath);
 
     host_->appendLog(
         QStringLiteral("UR3e scan route: loaded \"%1\" — %2 points (%3 reachable: "
@@ -1265,14 +1506,99 @@ void Ur3ePanelController::onLoadScanRouteRequested(const QString &routePath)
             .arg(plan.homePathOkCount)
             .arg(plan.chainOnlyCount)
             .arg(plan.unreachableCount));
-
     if (host_->ur3eScanRoutePlanWidget_ != nullptr)
     {
         host_->ur3eScanRoutePlanWidget_->setScanParams(routeParams);
         host_->ur3eScanRoutePlanWidget_->setScanPlan(plan);
     }
-
     host_->ur3eHemisphereScanSettings_->refreshAvailableRoutes();
+    updateRobotUi();
+    if (host_->capturePanel() != nullptr)
+        host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
+}
+
+void Ur3ePanelController::onLoadPlannedRouteAsSemiFixedRequested(const QString &routePath)
+{
+    if (host_ == nullptr || host_->ur3eHemisphereScanSettings_ == nullptr)
+        return;
+    if (routePath.trimmed().isEmpty())
+        return;
+
+    const QString robotFp = ur3eScanRobotCfgFingerprint(hf::hardwareConfig().ur3e);
+    Ur3eHemisphereScanPlan plan;
+    Ur3eHemisphereScanParams routeParams;
+    QString displayName;
+    QString error;
+    if (!loadUr3eNamedScanRoute(routePath, robotFp, plan, &routeParams, &displayName, &error))
+    {
+        host_->appendLog(
+            QStringLiteral("UR3e semi-fixed: Semi plan not loaded — %1").arg(error));
+        return;
+    }
+
+    double intervalDeg =
+        host_->ur3eHemisphereScanSettings_->semiFixedRoute().intervalDeg;
+    int panDir = host_->ur3eHemisphereScanSettings_->semiFixedRoute().panDirection;
+    QFile metaFile(routePath);
+    if (metaFile.open(QIODevice::ReadOnly | QIODevice::Text))
+    {
+        const QJsonDocument doc = QJsonDocument::fromJson(metaFile.readAll());
+        metaFile.close();
+        if (doc.isObject())
+        {
+            const QJsonObject root = doc.object();
+            if (root.contains(QStringLiteral("imaging_interval_deg")))
+                intervalDeg = root.value(QStringLiteral("imaging_interval_deg")).toDouble(intervalDeg);
+            if (root.contains(QStringLiteral("pan_direction")))
+                panDir = root.value(QStringLiteral("pan_direction")).toInt(panDir);
+        }
+    }
+
+    Ur3eSemiFixedRoute semi = semiFixedRouteFromHemispherePlan(
+        plan, robotFp, displayName, intervalDeg, panDir);
+
+    // Layer + θ from plan latitudes (scan_params can be stale / defaults).
+    syncHemisphereParamsFromPlanLatitudes(plan, routeParams);
+
+    if (semi.rings.isEmpty())
+    {
+        host_->appendLog(QStringLiteral(
+            "UR3e semi-fixed: Semi plan has no base-sweep OK ring entries."));
+        // Still show all latitudes (unreachable in blue) when the plan has points.
+        if (!plan.points.empty())
+        {
+            plannedScanPlan_ = plan;
+            scanPlanReady_ = false;
+            if (host_->ur3eHemisphereScanSettings_ != nullptr)
+            {
+                host_->ur3eHemisphereScanSettings_->applyLoadedSemiPlanSettings(
+                    routeParams, intervalDeg, panDir);
+            }
+            refreshSemiFixedPreview();
+        }
+        return;
+    }
+
+    plannedScanPlan_ = plan;
+    scanPlanReady_ = false;
+
+    host_->ur3eHemisphereScanSettings_->applyLoadedSemiPlanSettings(routeParams, intervalDeg,
+                                                                    panDir);
+    host_->ur3eHemisphereScanSettings_->setSemiFixedRoute(semi);
+    host_->ur3eHemisphereScanSettings_->rememberSemiFixedPlanPath(routePath);
+    if (host_->ur3eScanRoutePlanWidget_ != nullptr)
+        host_->ur3eScanRoutePlanWidget_->setScanParams(
+            host_->ur3eHemisphereScanSettings_->semiPlanParams());
+    refreshSemiFixedPreview();
+    host_->appendLog(
+        QStringLiteral("UR3e semi-fixed: loaded Semi plan \"%1\" → %2 ring(s) "
+                       "(Layer %3, interval %4°, θ %5–%6°).")
+            .arg(displayName)
+            .arg(semi.rings.size())
+            .arg(routeParams.verticalPoints)
+            .arg(intervalDeg, 0, 'f', 1)
+            .arg(routeParams.thetaMinDeg, 0, 'f', 0)
+            .arg(routeParams.thetaMaxDeg, 0, 'f', 0));
     updateRobotUi();
     if (host_->capturePanel() != nullptr)
         host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
@@ -1284,6 +1610,56 @@ void Ur3ePanelController::tryLoadCachedScanPlan()
         return;
 
     host_->ur3eHemisphereScanSettings_->refreshAvailableRoutes();
+
+    // Restore last Semi-fixed GUI selection (mode already restored from QSettings).
+    if (host_->ur3eHemisphereScanSettings_->rememberLastPlan()
+        && host_->ur3eHemisphereScanSettings_->scanExecuteMode()
+               == Ur3eScanExecuteMode::SemiFixed)
+    {
+        const QString semiRoutePath =
+            host_->ur3eHemisphereScanSettings_->rememberedSemiFixedRoutePath();
+        if (!semiRoutePath.isEmpty() && QFile::exists(semiRoutePath))
+        {
+            Ur3eSemiFixedRoute route;
+            QString err;
+            const QString fp = ur3eScanRobotCfgFingerprint(hf::hardwareConfig().ur3e);
+            if (loadUr3eSemiFixedRoute(semiRoutePath, fp, route, &err))
+            {
+                host_->ur3eHemisphereScanSettings_->setSemiFixedRoute(route);
+                refreshSemiFixedPreview();
+                host_->appendLog(
+                    QStringLiteral("UR3e semi-fixed: restored last route \"%1\" (%2 ring(s)).")
+                        .arg(route.displayName)
+                        .arg(route.rings.size()));
+                updateRobotUi();
+                if (host_->capturePanel() != nullptr)
+                    host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
+                return;
+            }
+        }
+
+        const QString planPath =
+            host_->ur3eHemisphereScanSettings_->rememberedSemiFixedPlanPath();
+        if (!planPath.isEmpty() && QFile::exists(planPath))
+        {
+            onLoadPlannedRouteAsSemiFixedRequested(planPath);
+            return;
+        }
+    }
+
+    // Auto: prefer last named route when remember-last is on.
+    if (host_->ur3eHemisphereScanSettings_->rememberLastPlan()
+        && host_->ur3eHemisphereScanSettings_->scanExecuteMode()
+               == Ur3eScanExecuteMode::AutoHemisphere)
+    {
+        const QString autoPath =
+            host_->ur3eHemisphereScanSettings_->rememberedAutoRoutePath();
+        if (!autoPath.isEmpty() && QFile::exists(autoPath))
+        {
+            onLoadScanRouteRequested(autoPath);
+            return;
+        }
+    }
 
     const QString fingerprint = ur3eScanPlanFingerprint(hf::hardwareConfig().ur3e,
                                                         host_->ur3eHemisphereScanSettings_->params());
@@ -1375,6 +1751,9 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
         || !robotConnected_ || serverManager_ == nullptr || scanExecuting_)
         return false;
 
+    if (host_->ur3eHemisphereScanSettings_->scanExecuteMode() == Ur3eScanExecuteMode::SemiFixed)
+        return startSemiFixedScanExecute(options);
+
     if (!scanPlanReady_ || plannedScanPlan_.reachableCount == 0)
     {
         host_->appendLog(
@@ -1451,7 +1830,16 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
     scanExecuting_ = true;
     scanExecuteSuppressUiSummary_ = options.suppressUiSummary;
     if (host_->ur3eScanRoutePlanWidget_ != nullptr)
-        host_->ur3eScanRoutePlanWidget_->beginScanExecution();
+    {
+        int basePins = 0;
+        for (const Ur3ePlannedScanPoint &pt : plannedScanPlan_.points)
+        {
+            if (pt.reachable)
+                ++basePins;
+        }
+        const int plannedPins = basePins * std::max(1, wristPosesPerPin);
+        host_->ur3eScanRoutePlanWidget_->beginScanExecution(plannedPins);
+    }
     setBusy(true);
     setJointPollIntervalMs(kMotionPollIntervalMs);
 
@@ -1831,6 +2219,17 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                         "scanExecuteMarkFailed",
                         Qt::QueuedConnection,
                         Q_ARG(int, pointIndex));
+                    // Entire base pin skipped → all center+sweep imaging poses failed.
+                    const int poses = std::max(1, wristSweep.imagesPerPin());
+                    QMetaObject::invokeMethod(
+                        this,
+                        [this, poses]() {
+                            if (host_->ur3eScanRoutePlanWidget_ == nullptr)
+                                return;
+                            for (int i = 0; i < poses; ++i)
+                                host_->ur3eScanRoutePlanWidget_->markPinFailed();
+                        },
+                        Qt::QueuedConnection);
                     ++skipped;
                     continue;
                 }
@@ -1887,9 +2286,15 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                     break;
                 }
 
-                // Count pin as soon as center still is taken (Stop mid wrist-sweep
-                // must not report 0 successful waypoints while frames exist).
+                // Count each imaging pose (center + wrist sweeps) for the progress bar.
                 ++executed;
+                QMetaObject::invokeMethod(
+                    this,
+                    [this]() {
+                        if (host_->ur3eScanRoutePlanWidget_ != nullptr)
+                            host_->ur3eScanRoutePlanWidget_->markPinCompleted();
+                    },
+                    Qt::QueuedConnection);
 
                 if (wristSweep.enabled && wristSweep.enabledAxisCount() > 0
                     && point.jointPositionsRad.size() >= 6)
@@ -1915,13 +2320,16 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                                 wristJoints[4] += dWrist2;
                                 wristJoints[5] += dWrist3;
 
+                                // Hardware (not MoveIt): small wrist deltas at an already-reached
+                                // pin — same policy as Semi pan / return-to-pin.
+                                QString wristErr;
                                 const Ur3eScanWaypointMoveResult wristMove =
-                                    ur3eExecuteScanWaypoint(serverUrl,
-                                                            wristJoints,
-                                                            nullptr,
-                                                            nullptr,
-                                                            false,
-                                                            true);
+                                    ur3eExecuteHardwareJointMove(
+                                        serverUrl,
+                                        wristJoints,
+                                        true,
+                                        &wristErr,
+                                        QStringLiteral("auto wrist sweep offset"));
                                 if (wristMove.stopped)
                                 {
                                     if (stopRequested_.load(std::memory_order_acquire))
@@ -1929,10 +2337,10 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                                     else
                                     {
                                         ok = false;
-                                        errorMessage = wristMove.errorMessage.isEmpty()
+                                        errorMessage = wristErr.isEmpty()
                                                            ? QStringLiteral(
                                                                  "Wrist sweep stopped before motion.")
-                                                           : wristMove.errorMessage;
+                                                           : wristErr;
                                     }
                                     goto scan_execute_loop_done;
                                 }
@@ -1940,9 +2348,9 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                                 {
                                     ++wristSkipped;
                                     const QString reason =
-                                        wristMove.errorMessage.isEmpty()
-                                            ? QStringLiteral("collision / no path")
-                                            : wristMove.errorMessage;
+                                        wristErr.isEmpty()
+                                            ? QStringLiteral("hardware move failed")
+                                            : wristErr;
                                     constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
                                     const double w1Deg = dWrist1 * kRadToDeg;
                                     const double w2Deg = dWrist2 * kRadToDeg;
@@ -1959,6 +2367,8 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                                                     .arg(w2Deg, 0, 'f', 1)
                                                     .arg(w3Deg, 0, 'f', 1)
                                                     .arg(reason));
+                                            if (host_->ur3eScanRoutePlanWidget_ != nullptr)
+                                                host_->ur3eScanRoutePlanWidget_->markPinFailed();
                                         },
                                         Qt::QueuedConnection);
                                     continue;
@@ -1976,16 +2386,29 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
 
                                 if (!captureStillAtPose(point.tcp, pointIndex))
                                 {
+                                    // Restore nominal before abort so home retreat is not wrist-offset.
+                                    ur3eExecuteHardwareJointMove(
+                                        serverUrl,
+                                        point.jointPositionsRad,
+                                        true,
+                                        nullptr,
+                                        QStringLiteral("auto return-to-pin after sweep abort"));
                                     returnHomeAfterScan = true;
                                     goto scan_execute_loop_done;
                                 }
+                                QMetaObject::invokeMethod(
+                                    this,
+                                    [this]() {
+                                        if (host_->ur3eScanRoutePlanWidget_ != nullptr)
+                                            host_->ur3eScanRoutePlanWidget_->markPinCompleted();
+                                    },
+                                    Qt::QueuedConnection);
                             }
                         }
                     }
 
-                    // After all wrist-sweep combinations, return to the nominal pin pose
-                    // before the next pin. Use direct_only — offsets are small wrist deltas;
-                    // via-home here would send the arm home between every pin on a ring.
+                    // Always restore nominal pin joints before the next pin (hardware —
+                    // only wrists moved; do not continue from an offset pose).
                     if (sessionActive() && !stopRequested_.load(std::memory_order_acquire))
                     {
                         QMetaObject::invokeMethod(
@@ -1999,13 +2422,14 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                             },
                             Qt::QueuedConnection);
 
+                        QString returnErr;
                         const Ur3eScanWaypointMoveResult returnPin =
-                            ur3eExecuteScanWaypoint(serverUrl,
-                                                    point.jointPositionsRad,
-                                                    nullptr,
-                                                    nullptr,
-                                                    false,
-                                                    true);
+                            ur3eExecuteHardwareJointMove(
+                                serverUrl,
+                                point.jointPositionsRad,
+                                true,
+                                &returnErr,
+                                QStringLiteral("auto return-to-pin after wrist sweep"));
                         if (returnPin.stopped)
                         {
                             if (stopRequested_.load(std::memory_order_acquire))
@@ -2014,36 +2438,48 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                         }
                         if (!returnPin.ok || returnPin.skipped)
                         {
-                            const QString reason = returnPin.errorMessage.isEmpty()
-                                                       ? QStringLiteral("could not return to pin")
-                                                       : returnPin.errorMessage;
+                            ok = false;
+                            errorMessage = returnErr.isEmpty()
+                                               ? QStringLiteral(
+                                                     "return to nominal pin after wrist sweep failed")
+                                               : returnErr;
                             QMetaObject::invokeMethod(
                                 this,
-                                [this, pointIndex, reason]() {
+                                [this, pointIndex, reason = errorMessage]() {
                                     host_->appendLog(
                                         QStringLiteral(
                                             "UR3e scan wrist sweep pin %1: return-to-pin "
-                                            "failed — %2 (next pin may start from offset)")
+                                            "failed — %2 (aborting; will not start next pin "
+                                            "from offset)")
                                             .arg(pointIndex)
                                             .arg(reason));
                                 },
                                 Qt::QueuedConnection);
+                            returnHomeAfterScan = true;
+                            goto scan_execute_loop_done;
                         }
-                        else
-                        {
-                            QMetaObject::invokeMethod(
-                                this,
-                                [this, pointIndex]() {
-                                    host_->appendLog(
-                                        QStringLiteral(
-                                            "UR3e scan wrist sweep pin %1: back at "
-                                            "nominal pin pose.")
-                                            .arg(pointIndex));
-                                },
-                                Qt::QueuedConnection);
-                            std::this_thread::sleep_for(
-                                std::chrono::milliseconds(stabilizeMs));
-                        }
+                        QMetaObject::invokeMethod(
+                            this,
+                            [this, pointIndex]() {
+                                host_->appendLog(
+                                    QStringLiteral(
+                                        "UR3e scan wrist sweep pin %1: back at "
+                                        "nominal pin pose.")
+                                        .arg(pointIndex));
+                            },
+                            Qt::QueuedConnection);
+                        std::this_thread::sleep_for(
+                            std::chrono::milliseconds(stabilizeMs));
+                    }
+                    else if (sessionActive())
+                    {
+                        // Stop mid-sweep: still try to recenter wrists before home retreat.
+                        ur3eExecuteHardwareJointMove(
+                            serverUrl,
+                            point.jointPositionsRad,
+                            true,
+                            nullptr,
+                            QStringLiteral("auto return-to-pin after stop"));
                     }
                 }
 
@@ -2154,6 +2590,359 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
     return true;
 }
 
+void Ur3ePanelController::refreshSemiFixedPreview()
+{
+    if (host_ == nullptr || host_->ur3eHemisphereScanSettings_ == nullptr
+        || host_->ur3eScanRoutePlanWidget_ == nullptr)
+        return;
+    if (host_->ur3eHemisphereScanSettings_->scanExecuteMode() != Ur3eScanExecuteMode::SemiFixed)
+        return;
+
+    QVector<Ur3eSemiFixedPreviewRing> rings;
+    // Prefer full plan preview so unreachable latitudes stay visible (blue).
+    if (!plannedScanPlan_.points.empty())
+    {
+        rings = previewSemiFixedRingsFromHemispherePlan(plannedScanPlan_);
+    }
+    else
+    {
+        const Ur3eSemiFixedRoute route = host_->ur3eHemisphereScanSettings_->semiFixedRoute();
+        if (!route.rings.isEmpty())
+            rings = inferSemiFixedPreviewRings(route);
+        else
+        {
+            rings = previewSemiFixedRingsFromScanParams(
+                host_->ur3eHemisphereScanSettings_->semiPlanParams());
+        }
+    }
+    host_->ur3eScanRoutePlanWidget_->setSemiFixedPreviewRings(rings);
+}
+
+void Ur3ePanelController::onAddSemiFixedRingRequested()
+{
+    if (host_ == nullptr || host_->ur3eHemisphereScanSettings_ == nullptr || !robotConnected_
+        || serverManager_ == nullptr)
+    {
+        if (host_ != nullptr)
+            host_->appendLog(QStringLiteral("UR3e semi-fixed: connect robot before adding a ring."));
+        return;
+    }
+
+    const QString serverUrl = serverManager_->serverUrl();
+    const Ur3eJointsState joints = ur3eGetJoints(serverUrl);
+    if (!joints.ok || joints.positionsRad.size() != 6)
+    {
+        host_->appendLog(QStringLiteral("UR3e semi-fixed: could not read joints — %1")
+                             .arg(joints.errorMessage));
+        return;
+    }
+
+    Ur3eScanTcpPose tcp{};
+    bool hasTcp = false;
+    const Ur3ePoseResult pose = ur3eGetTcpPose(serverUrl);
+    if (pose.ok)
+    {
+        tcp = scanTcpFromLivePose(pose.pose, Ur3eScanTcpPose{});
+        hasTcp = true;
+    }
+
+    host_->ur3eHemisphereScanSettings_->appendSemiFixedRing(joints.positionsRad, tcp, hasTcp);
+    host_->appendLog(QStringLiteral("UR3e semi-fixed: added ring entry from current pose."));
+    refreshSemiFixedPreview();
+    updateRobotUi();
+}
+
+bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteOptions &options)
+{
+    if (host_ == nullptr || host_->ur3eHemisphereScanSettings_ == nullptr || busy_
+        || !robotConnected_ || serverManager_ == nullptr || scanExecuting_)
+        return false;
+
+    const Ur3eSemiFixedRoute routeRaw = host_->ur3eHemisphereScanSettings_->semiFixedRoute();
+    Ur3eSemiFixedRoute route = routeRaw;
+    ensureSemiFixedTopPose(route);
+    if (route.rings.isEmpty())
+    {
+        host_->appendLog(
+            QStringLiteral("UR3e semi-fixed execute rejected: add at least one ring entry."));
+        return false;
+    }
+
+    const QString captureDir = options.captureOutputDir.trimmed();
+    const bool captureStills = !captureDir.isEmpty();
+    const hf::HardwareConfig::Ur3eConfig &ur3eCfg = hf::hardwareConfig().ur3e;
+    const int stabilizeMs =
+        options.stabilizeMs > 0
+            ? options.stabilizeMs
+            : (ur3eCfg.scanCaptureStabilizeMs >= 0 ? ur3eCfg.scanCaptureStabilizeMs
+                                                   : kScanCaptureStabilizeMs);
+
+    if (captureStills)
+    {
+        if (host_->bfsPanel() == nullptr || !host_->bfsPanel()->isCameraConnected())
+        {
+            host_->appendLog(QStringLiteral(
+                "UR3e semi-fixed execute rejected: BFS camera must be connected for 3D capture."));
+            return false;
+        }
+        QDir().mkpath(captureDir);
+    }
+
+    refreshSemiFixedPreview();
+
+    const QString serverUrl = serverManager_->serverUrl();
+    stopRequested_.store(false, std::memory_order_release);
+    scanExecuting_ = true;
+    scanExecuteSuppressUiSummary_ = options.suppressUiSummary;
+    Ur3eWristSweepParams wristSweep{};
+    if (host_->ur3eHemisphereScanSettings_ != nullptr)
+        wristSweep = host_->ur3eHemisphereScanSettings_->wristSweepParams();
+    if (host_->ur3eScanRoutePlanWidget_ != nullptr)
+    {
+        const int samplesPerRing = semiFixedSampleCount(
+            route.intervalDeg > 0.0 ? route.intervalDeg : 10.0);
+        const int basePins = 1 + route.rings.size() * samplesPerRing; // top + pan samples
+        const int plannedPins = basePins * std::max(1, wristSweep.imagesPerPin());
+        host_->ur3eScanRoutePlanWidget_->beginScanExecution(plannedPins);
+    }
+    setBusy(true);
+    setJointPollIntervalMs(kMotionPollIntervalMs);
+
+    const int sessionId = ++scanExecuteSessionId_;
+
+    if (wristSweep.enabled && wristSweep.enabledAxisCount() > 0)
+    {
+        QString axes;
+        if (wristSweep.wrist1)
+            axes += QStringLiteral("w1 ");
+        if (wristSweep.wrist2)
+            axes += QStringLiteral("w2 ");
+        if (wristSweep.wrist3)
+            axes += QStringLiteral("w3 ");
+        host_->appendLog(QStringLiteral(
+                             "UR3e semi-fixed: wrist sweep ON (%1±%2° %3)")
+                             .arg(wristSweep.stepDeg, 0, 'f', 0)
+                             .arg(wristSweep.stepsEachWay)
+                             .arg(axes.trimmed()));
+    }
+    else
+    {
+        host_->appendLog(QStringLiteral("UR3e semi-fixed: wrist sweep OFF"));
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(scanExecuteThreadMutex_);
+        if (scanExecuteThread_.joinable())
+            scanExecuteThread_.join();
+
+        scanExecuteThread_ = std::thread([this, serverUrl, route, sessionId, captureDir,
+                                          captureStills, stabilizeMs, wristSweep]() {
+            int captured = 0;
+            TransformsJsonDocument transformsDoc;
+
+            const auto sessionActive = [this, sessionId]() {
+                return !shutdownRequested_.load(std::memory_order_acquire)
+                       && sessionId == scanExecuteSessionId_.load(std::memory_order_acquire);
+            };
+
+            const auto finishWithCapture = [this, &transformsDoc, captureStills, captureDir,
+                                            &captured](bool finishOk, const QString &finishError,
+                                                       int executedCount, bool stopped,
+                                                       int /*capturedFromExec*/,
+                                                       qint64 elapsedMs) {
+                if (captureStills && !transformsDoc.frames.empty())
+                {
+                    QString writeError;
+                    if (!writeTransformsJson(captureDir, transformsDoc, &writeError))
+                    {
+                        QMetaObject::invokeMethod(
+                            this,
+                            [this, writeError]() {
+                                host_->appendLog(
+                                    QStringLiteral(
+                                        "UR3e semi-fixed capture: transforms.json failed — %1")
+                                        .arg(writeError));
+                            },
+                            Qt::QueuedConnection);
+                    }
+                }
+                QMetaObject::invokeMethod(this, "scanExecuteFinish", Qt::QueuedConnection,
+                                          Q_ARG(bool, finishOk), Q_ARG(QString, finishError),
+                                          Q_ARG(int, executedCount), Q_ARG(bool, stopped),
+                                          Q_ARG(int, captured), Q_ARG(qint64, elapsedMs));
+            };
+
+            const auto captureStillAtPose = [&](const Ur3eScanTcpPose &plannedTcp,
+                                                const int ringIndex,
+                                                const int sampleIndex) -> bool {
+                if (!captureStills)
+                    return true;
+
+                hf::bfs::BfsRgbFrame frame;
+                bool gotFrame = false;
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, &frame, &gotFrame]() {
+                        if (host_->bfsPanel() != nullptr)
+                            gotFrame = host_->bfsPanel()->tryCopyLastFrame(frame);
+                    },
+                    Qt::BlockingQueuedConnection);
+
+                if (!gotFrame)
+                {
+                    QMetaObject::invokeMethod(
+                        this,
+                        [this, ringIndex, sampleIndex]() {
+                            if (ringIndex < 0)
+                            {
+                                host_->appendLog(QStringLiteral(
+                                    "UR3e semi-fixed capture: no BFS frame at top — "
+                                    "skipping still."));
+                            }
+                            else
+                            {
+                                host_->appendLog(
+                                    QStringLiteral(
+                                        "UR3e semi-fixed capture: no BFS frame at ring %1 "
+                                        "sample %2 — skipping still.")
+                                        .arg(ringIndex)
+                                        .arg(sampleIndex));
+                            }
+                        },
+                        Qt::QueuedConnection);
+                    return true;
+                }
+
+                Ur3eScanTcpPose tcpForPose = plannedTcp;
+                QString poseSource = QStringLiteral("planned_world_fallback");
+                const Ur3ePoseResult livePose = ur3eGetTcpPose(serverUrl);
+                if (livePose.ok)
+                {
+                    tcpForPose = scanTcpFromLivePose(livePose.pose, plannedTcp);
+                    poseSource = QStringLiteral("live_tf_base_hyperfusion_tcp");
+                }
+
+                const QString stem =
+                    QStringLiteral("%1").arg(captured, 5, 10, QLatin1Char('0'));
+                const QString tiffPath =
+                    QDir(captureDir).filePath(stem + QStringLiteral(".tif"));
+                const std::string saveError = hf::bfs::saveRgb8AsTiff(
+                    tiffPath, frame.width, frame.height, frame.rgb.data(), frame.rgb.size());
+                if (!saveError.empty())
+                    return false;
+
+                const auto &cfg = hf::hardwareConfig().ur3e;
+                CameraIntrinsics intrinsics;
+                intrinsics.fx = cfg.bfsCameraFx;
+                intrinsics.fy = cfg.bfsCameraFy;
+                intrinsics.width = frame.width;
+                intrinsics.height = frame.height;
+                intrinsics.cx = cfg.bfsCameraCx > 0.0
+                                    ? cfg.bfsCameraCx
+                                    : (frame.width > 0 ? 0.5 * static_cast<double>(frame.width)
+                                                       : 0.0);
+                intrinsics.cy = cfg.bfsCameraCy > 0.0
+                                    ? cfg.bfsCameraCy
+                                    : (frame.height > 0 ? 0.5 * static_cast<double>(frame.height)
+                                                        : 0.0);
+                intrinsics.distortion = cfg.bfsCameraDistortion;
+
+                const Mat4 c2w = cameraToWorldOpenGlFromTcp(tcpForPose);
+                const CameraExtrinsicsRt extrinsics = cameraExtrinsicsOpenCvFromTcp(tcpForPose);
+                const QString imageName = stem + QStringLiteral(".tif");
+                const QString poseJsonPath =
+                    QDir(captureDir).filePath(stem + QStringLiteral(".json"));
+                QString poseError;
+                if (!writeCameraPoseJson(poseJsonPath, tcpForPose, c2w, extrinsics, intrinsics,
+                                         imageName, poseSource, &plannedTcp, &poseError))
+                    return false;
+
+                if (transformsDoc.intrinsics.width <= 0)
+                    transformsDoc.intrinsics = intrinsics;
+                TransformsJsonFrame entry;
+                entry.filePathStem = stem;
+                entry.transformMatrix = c2w;
+                entry.extrinsics = extrinsics;
+                transformsDoc.frames.push_back(std::move(entry));
+                ++captured;
+                return true;
+            };
+
+            SemiFixedScanExecuteInput input;
+            input.serverUrl = serverUrl;
+            input.route = route;
+            input.captureDir = captureDir;
+            input.stabilizeMs = stabilizeMs;
+            input.sessionId = sessionId;
+            input.wristSweep = wristSweep;
+
+            SemiFixedScanExecuteHost hostHooks;
+            hostHooks.sessionActive = sessionActive;
+            hostHooks.stopRequested = [this]() {
+                return stopRequested_.load(std::memory_order_acquire);
+            };
+            hostHooks.clearStopRequested = [this]() {
+                stopRequested_.store(false, std::memory_order_release);
+            };
+            hostHooks.setReturningHome = [this](const bool on) {
+                scanReturningHome_.store(on, std::memory_order_release);
+            };
+            // Run on the worker thread (same as Auto). ensureRobotAtHomeSync may
+            // BlockingQueued syncHomeJointTargetSliders — nesting that on the UI thread
+            // deadlocks (Windows then kills the hung app.exe).
+            hostHooks.ensureHomeBeforeScan = [this]() {
+                const HomeEnsureOutcome outcome =
+                    ensureRobotAtHomeSync(HomeEnsureContext::BeforeScanExecute);
+                return !outcome.cancelled;
+            };
+            hostHooks.syncHomeSliders = [this]() {
+                QMetaObject::invokeMethod(this, &Ur3ePanelController::syncHomeJointTargetSliders,
+                                          Qt::QueuedConnection);
+            };
+            hostHooks.log = [this](const QString &msg) {
+                QMetaObject::invokeMethod(
+                    this, [this, msg]() { host_->appendLog(msg); }, Qt::QueuedConnection);
+            };
+            hostHooks.setActiveRing = [this](const int ringIndex) {
+                QMetaObject::invokeMethod(this, "scanExecuteSetActivePoint", Qt::QueuedConnection,
+                                          Q_ARG(int, ringIndex));
+            };
+            hostHooks.markRingCompleted = [this](const int ringIndex) {
+                QMetaObject::invokeMethod(this, "scanExecuteMarkCompleted", Qt::QueuedConnection,
+                                          Q_ARG(int, ringIndex));
+            };
+            hostHooks.markRingFailed = [this](const int ringIndex) {
+                QMetaObject::invokeMethod(this, "scanExecuteMarkFailed", Qt::QueuedConnection,
+                                          Q_ARG(int, ringIndex));
+            };
+            hostHooks.markPinCompleted = [this]() {
+                QMetaObject::invokeMethod(
+                    this,
+                    [this]() {
+                        if (host_ != nullptr && host_->ur3eScanRoutePlanWidget_ != nullptr)
+                            host_->ur3eScanRoutePlanWidget_->markPinCompleted();
+                    },
+                    Qt::QueuedConnection);
+            };
+            hostHooks.markPinFailed = [this]() {
+                QMetaObject::invokeMethod(
+                    this,
+                    [this]() {
+                        if (host_ != nullptr && host_->ur3eScanRoutePlanWidget_ != nullptr)
+                            host_->ur3eScanRoutePlanWidget_->markPinFailed();
+                    },
+                    Qt::QueuedConnection);
+            };
+            hostHooks.captureStill = captureStillAtPose;
+            hostHooks.finish = finishWithCapture;
+
+            runSemiFixedScanExecute(input, hostHooks);
+        });
+    }
+
+    return true;
+}
+
 void Ur3ePanelController::scanExecuteSetActivePoint(const int pointIndex)
 {
     if (!scanExecuting_)
@@ -2168,6 +2957,7 @@ void Ur3ePanelController::scanExecuteMarkCompleted(const int pointIndex)
     if (!scanExecuting_)
         return;
 
+    // Preview ring/pin color only — imaging-pose progress is marked per center/sweep.
     if (host_->ur3eScanRoutePlanWidget_ != nullptr)
         host_->ur3eScanRoutePlanWidget_->markScanPointCompleted(pointIndex);
 }
@@ -2986,8 +3776,14 @@ Ur3ePanelController::HomeEnsureOutcome Ur3ePanelController::ensureRobotAtHomeSyn
                                 ? QStringLiteral("UR3e: verified at scan home position.")
                                 : QStringLiteral("UR3e: moved to scan home position."));
             pollJointsSync();
-            QMetaObject::invokeMethod(
-                this, &Ur3ePanelController::syncHomeJointTargetSliders, Qt::BlockingQueuedConnection);
+            if (QThread::currentThread() == thread())
+                syncHomeJointTargetSliders();
+            else
+            {
+                QMetaObject::invokeMethod(this,
+                                          &Ur3ePanelController::syncHomeJointTargetSliders,
+                                          Qt::BlockingQueuedConnection);
+            }
             return outcome;
         }
 

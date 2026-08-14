@@ -191,6 +191,8 @@ void Ur3eHemisphereScanPreviewWidget::setScanParams(const hf::ur3e::Ur3eHemisphe
 
 void Ur3eHemisphereScanPreviewWidget::setScanPlan(const hf::ur3e::Ur3eHemisphereScanPlan &plan)
 {
+    semiFixedPreviewActive_ = false;
+    semiFixedRings_.clear();
     executionActive_ = false;
     executionResultsVisible_ = false;
     executionActivePointIndex_ = -1;
@@ -224,14 +226,58 @@ void Ur3eHemisphereScanPreviewWidget::beginScanExecution()
         entry.executionCompleted = false;
         entry.executionFailed = false;
     }
+    for (PreviewSemiFixedRing &entry : semiFixedRings_)
+    {
+        entry.executionCompleted = false;
+        entry.executionFailed = false;
+    }
     update();
+}
+
+int Ur3eHemisphereScanPreviewWidget::mapSemiExecuteIndexToPreview(const int executeIndex) const
+{
+    if (executeIndex < 0)
+        return -1;
+
+    // Execute order: sweep-OK latitude rings (θ ascending), then top.
+    // Plan-unreachable latitudes are preview-only and skipped here.
+    std::vector<int> executable;
+    int topPreview = -1;
+    executable.reserve(semiFixedRings_.size());
+    for (int i = 0; i < static_cast<int>(semiFixedRings_.size()); ++i)
+    {
+        const hf::ur3e::Ur3eSemiFixedPreviewRing &ring =
+            semiFixedRings_[static_cast<std::size_t>(i)].ring;
+        if (ring.isTopPose)
+        {
+            topPreview = i;
+            continue;
+        }
+        if (ring.reachabilityKnown && !ring.reachable)
+            continue;
+        executable.push_back(i);
+    }
+
+    if (executeIndex >= 0 && executeIndex < static_cast<int>(executable.size()))
+        return executable[static_cast<std::size_t>(executeIndex)];
+    if (executeIndex == static_cast<int>(executable.size()))
+        return topPreview;
+    return -1;
 }
 
 void Ur3eHemisphereScanPreviewWidget::setActiveScanPoint(const int pointIndex)
 {
     if (!executionActive_)
         return;
-    if (pointIndex < 0 || pointIndex >= static_cast<int>(scanPoints_.size()))
+
+    int previewIndex = pointIndex;
+    if (semiFixedPreviewActive_)
+        previewIndex = mapSemiExecuteIndexToPreview(pointIndex);
+
+    const int maxIndex = semiFixedPreviewActive_
+                             ? static_cast<int>(semiFixedRings_.size())
+                             : static_cast<int>(scanPoints_.size());
+    if (previewIndex < 0 || previewIndex >= maxIndex)
     {
         executionActivePointIndex_ = -1;
         if (flashTimer_ != nullptr)
@@ -240,7 +286,7 @@ void Ur3eHemisphereScanPreviewWidget::setActiveScanPoint(const int pointIndex)
         return;
     }
 
-    executionActivePointIndex_ = pointIndex;
+    executionActivePointIndex_ = previewIndex;
     flashPulse_ = 0;
     if (flashTimer_ != nullptr && !flashTimer_->isActive())
         flashTimer_->start();
@@ -249,32 +295,68 @@ void Ur3eHemisphereScanPreviewWidget::setActiveScanPoint(const int pointIndex)
 
 void Ur3eHemisphereScanPreviewWidget::markScanPointCompleted(const int pointIndex)
 {
-    if (pointIndex < 0 || pointIndex >= static_cast<int>(scanPoints_.size()))
-        return;
-    PreviewScanPoint &entry = scanPoints_[static_cast<std::size_t>(pointIndex)];
-    entry.executionCompleted = true;
-    entry.executionFailed = false;
-    if (executionActivePointIndex_ == pointIndex)
+    if (semiFixedPreviewActive_)
     {
-        executionActivePointIndex_ = -1;
-        if (flashTimer_ != nullptr)
-            flashTimer_->stop();
+        const int previewIndex = mapSemiExecuteIndexToPreview(pointIndex);
+        if (previewIndex < 0 || previewIndex >= static_cast<int>(semiFixedRings_.size()))
+            return;
+        PreviewSemiFixedRing &entry = semiFixedRings_[static_cast<std::size_t>(previewIndex)];
+        entry.executionCompleted = true;
+        entry.executionFailed = false;
+        if (executionActivePointIndex_ == previewIndex)
+        {
+            executionActivePointIndex_ = -1;
+            if (flashTimer_ != nullptr)
+                flashTimer_->stop();
+        }
+    }
+    else
+    {
+        if (pointIndex < 0 || pointIndex >= static_cast<int>(scanPoints_.size()))
+            return;
+        PreviewScanPoint &entry = scanPoints_[static_cast<std::size_t>(pointIndex)];
+        entry.executionCompleted = true;
+        entry.executionFailed = false;
+        if (executionActivePointIndex_ == pointIndex)
+        {
+            executionActivePointIndex_ = -1;
+            if (flashTimer_ != nullptr)
+                flashTimer_->stop();
+        }
     }
     update();
 }
 
 void Ur3eHemisphereScanPreviewWidget::markScanPointFailed(const int pointIndex)
 {
-    if (pointIndex < 0 || pointIndex >= static_cast<int>(scanPoints_.size()))
-        return;
-    PreviewScanPoint &entry = scanPoints_[static_cast<std::size_t>(pointIndex)];
-    entry.executionFailed = true;
-    entry.executionCompleted = false;
-    if (executionActivePointIndex_ == pointIndex)
+    if (semiFixedPreviewActive_)
     {
-        executionActivePointIndex_ = -1;
-        if (flashTimer_ != nullptr)
-            flashTimer_->stop();
+        const int previewIndex = mapSemiExecuteIndexToPreview(pointIndex);
+        if (previewIndex < 0 || previewIndex >= static_cast<int>(semiFixedRings_.size()))
+            return;
+        PreviewSemiFixedRing &entry = semiFixedRings_[static_cast<std::size_t>(previewIndex)];
+        entry.executionFailed = true;
+        entry.executionCompleted = false;
+        if (executionActivePointIndex_ == previewIndex)
+        {
+            executionActivePointIndex_ = -1;
+            if (flashTimer_ != nullptr)
+                flashTimer_->stop();
+        }
+    }
+    else
+    {
+        if (pointIndex < 0 || pointIndex >= static_cast<int>(scanPoints_.size()))
+            return;
+        PreviewScanPoint &entry = scanPoints_[static_cast<std::size_t>(pointIndex)];
+        entry.executionFailed = true;
+        entry.executionCompleted = false;
+        if (executionActivePointIndex_ == pointIndex)
+        {
+            executionActivePointIndex_ = -1;
+            if (flashTimer_ != nullptr)
+                flashTimer_->stop();
+        }
     }
     update();
 }
@@ -290,6 +372,86 @@ void Ur3eHemisphereScanPreviewWidget::endScanExecution()
     update();
 }
 
+int Ur3eHemisphereScanPreviewWidget::plannedExecutionCount() const
+{
+    if (semiFixedPreviewActive_)
+    {
+        int count = 0;
+        bool hasTop = false;
+        for (const PreviewSemiFixedRing &entry : semiFixedRings_)
+        {
+            if (entry.ring.isTopPose)
+            {
+                hasTop = true;
+                continue;
+            }
+            if (entry.ring.reachabilityKnown && !entry.ring.reachable)
+                continue;
+            ++count;
+        }
+        if (hasTop)
+            ++count;
+        return count;
+    }
+
+    int count = 0;
+    for (const PreviewScanPoint &entry : scanPoints_)
+    {
+        if (entry.reachabilityKnown && !entry.reachable)
+            continue;
+        ++count;
+    }
+    return count;
+}
+
+int Ur3eHemisphereScanPreviewWidget::completedExecutionCount() const
+{
+    int count = 0;
+    if (semiFixedPreviewActive_)
+    {
+        for (const PreviewSemiFixedRing &entry : semiFixedRings_)
+        {
+            if (entry.ring.reachabilityKnown && !entry.ring.reachable && !entry.ring.isTopPose)
+                continue;
+            if (entry.executionCompleted)
+                ++count;
+        }
+        return count;
+    }
+    for (const PreviewScanPoint &entry : scanPoints_)
+    {
+        if (entry.reachabilityKnown && !entry.reachable)
+            continue;
+        if (entry.executionCompleted)
+            ++count;
+    }
+    return count;
+}
+
+int Ur3eHemisphereScanPreviewWidget::failedExecutionCount() const
+{
+    int count = 0;
+    if (semiFixedPreviewActive_)
+    {
+        for (const PreviewSemiFixedRing &entry : semiFixedRings_)
+        {
+            if (entry.ring.reachabilityKnown && !entry.ring.reachable && !entry.ring.isTopPose)
+                continue;
+            if (entry.executionFailed)
+                ++count;
+        }
+        return count;
+    }
+    for (const PreviewScanPoint &entry : scanPoints_)
+    {
+        if (entry.reachabilityKnown && !entry.reachable)
+            continue;
+        if (entry.executionFailed)
+            ++count;
+    }
+    return count;
+}
+
 void Ur3eHemisphereScanPreviewWidget::clearScanPlan()
 {
     executionActive_ = false;
@@ -299,6 +461,31 @@ void Ur3eHemisphereScanPreviewWidget::clearScanPlan()
     if (flashTimer_ != nullptr)
         flashTimer_->stop();
     rebuildScanPoints();
+    update();
+}
+
+void Ur3eHemisphereScanPreviewWidget::setSemiFixedPreviewRings(
+    const QVector<hf::ur3e::Ur3eSemiFixedPreviewRing> &rings)
+{
+    semiFixedPreviewActive_ = true;
+    semiFixedRings_.clear();
+    semiFixedRings_.reserve(static_cast<std::size_t>(rings.size()));
+    for (const hf::ur3e::Ur3eSemiFixedPreviewRing &ring : rings)
+    {
+        PreviewSemiFixedRing entry;
+        entry.ring = ring;
+        semiFixedRings_.push_back(entry);
+    }
+    executionActive_ = false;
+    executionResultsVisible_ = false;
+    executionActivePointIndex_ = -1;
+    update();
+}
+
+void Ur3eHemisphereScanPreviewWidget::clearSemiFixedPreviewRings()
+{
+    semiFixedPreviewActive_ = false;
+    semiFixedRings_.clear();
     update();
 }
 
@@ -395,13 +582,27 @@ void Ur3eHemisphereScanPreviewWidget::paintEvent(QPaintEvent *event)
     if (workspaceBoundary_.enabled)
         drawWorkspaceBoundary(painter, bounds, scale);
     drawTray(painter, bounds, scale);
-    drawHemisphere(painter, bounds, scale);
-    drawScanNormals(painter, bounds, scale);
+    if (semiFixedPreviewActive_)
+        drawSemiFixedRings(painter, bounds, scale);
+    else
+    {
+        drawHemisphere(painter, bounds, scale);
+        drawScanNormals(painter, bounds, scale);
+    }
     drawLegend(painter);
 }
 
 bool Ur3eHemisphereScanPreviewWidget::hasReachabilityLegend() const
 {
+    if (semiFixedPreviewActive_)
+    {
+        for (const PreviewSemiFixedRing &entry : semiFixedRings_)
+        {
+            if (entry.ring.reachabilityKnown)
+                return true;
+        }
+        return false;
+    }
     for (const PreviewScanPoint &entry : scanPoints_)
     {
         if (entry.reachabilityKnown)
@@ -412,7 +613,9 @@ bool Ur3eHemisphereScanPreviewWidget::hasReachabilityLegend() const
 
 void Ur3eHemisphereScanPreviewWidget::drawLegend(QPainter &painter) const
 {
-    if (scanPoints_.empty())
+    if (!semiFixedPreviewActive_ && scanPoints_.empty())
+        return;
+    if (semiFixedPreviewActive_ && semiFixedRings_.empty())
         return;
 
     struct LegendEntry
@@ -663,6 +866,119 @@ void Ur3eHemisphereScanPreviewWidget::drawTray(QPainter &painter,
         painter.setPen(QPen(face.color.darker(115), 1.0));
         painter.setBrush(face.color);
         painter.drawPath(path);
+    }
+}
+
+void Ur3eHemisphereScanPreviewWidget::drawSemiFixedRings(QPainter &painter,
+                                                         const QRectF &bounds,
+                                                         const double scale) const
+{
+    constexpr int kSegments = 64;
+    for (int i = 0; i < static_cast<int>(semiFixedRings_.size()); ++i)
+    {
+        const PreviewSemiFixedRing &entry = semiFixedRings_[static_cast<std::size_t>(i)];
+        const auto &ring = entry.ring;
+
+        // Same execute palette as Auto pins: pending yellow, current purple pulse,
+        // done green, failed red. Plan-unreachable latitudes stay blue.
+        QColor color(80, 180, 255);
+        const bool planUnreachable = ring.reachabilityKnown && !ring.reachable;
+        const bool isActive = executionActive_ && executionActivePointIndex_ == i;
+        double lineWidth = isActive ? 2.5 : 1.8;
+        if (planUnreachable)
+        {
+            color = QColor(70, 130, 220);
+        }
+        else if (executionActive_ || executionResultsVisible_)
+        {
+            if (entry.executionFailed)
+                color = QColor(210, 45, 45);
+            else if (entry.executionCompleted)
+                color = QColor(60, 180, 75);
+            else if (isActive)
+            {
+                const double pulse =
+                    0.5 + 0.5 * std::sin(static_cast<double>(flashPulse_) * kPi / 8.0);
+                const int red = static_cast<int>(std::clamp(150.0 + pulse * 70.0, 0.0, 255.0));
+                const int green = static_cast<int>(std::clamp(55.0 + pulse * 35.0, 0.0, 255.0));
+                const int blue = static_cast<int>(std::clamp(200.0 + pulse * 55.0, 0.0, 255.0));
+                color = QColor(red, green, blue);
+                lineWidth = 3.0;
+            }
+            else
+                color = QColor(220, 190, 40); // pending
+        }
+        else if (ring.reachabilityKnown)
+        {
+            if (!ring.reachable)
+                color = QColor(70, 130, 220);
+            else if (!ring.homePathOk)
+                color = QColor(230, 150, 40);
+            else
+                color = QColor(60, 180, 75);
+        }
+
+        if (ring.isTopPose || ring.radiusM < 1.0e-3)
+        {
+            // Apex / top init pose: short look-down pin (same green when reachable).
+            double centerXM = 0.0;
+            double centerYM = 0.0;
+            hf::ur3e::scanCenterOffsetM(centerXM, centerYM);
+            const Vec3 sphereCenter = mapScenePoint(Vec3{centerXM, centerYM, kTrayHeightM});
+            const Vec3 surface = mapScenePoint(Vec3{ring.centerXM, ring.centerYM, ring.centerZM});
+            double dirX = surface.x - sphereCenter.x;
+            double dirY = surface.y - sphereCenter.y;
+            double dirZ = surface.z - sphereCenter.z;
+            const double length = std::sqrt(dirX * dirX + dirY * dirY + dirZ * dirZ);
+            if (length > 1.0e-9)
+            {
+                dirX /= length;
+                dirY /= length;
+                dirZ /= length;
+                const double halfLen = kNormalDisplayLengthM * 0.5;
+                const Vec3 pinStart{surface.x - dirX * halfLen,
+                                    surface.y - dirY * halfLen,
+                                    surface.z - dirZ * halfLen};
+                const Vec3 pinEnd{surface.x + dirX * halfLen,
+                                  surface.y + dirY * halfLen,
+                                  surface.z + dirZ * halfLen};
+                painter.setPen(QPen(color, lineWidth, Qt::SolidLine, Qt::RoundCap));
+                painter.drawLine(projectPoint(pinStart, bounds, scale).screen,
+                                 projectPoint(pinEnd, bounds, scale).screen);
+            }
+            const QPointF tip = projectPoint(Vec3{ring.centerXM, ring.centerYM, ring.centerZM},
+                                             bounds,
+                                             scale)
+                                    .screen;
+            painter.setBrush(color);
+            painter.setPen(Qt::NoPen);
+            painter.drawEllipse(tip, isActive ? 6.0 : 5.0, isActive ? 6.0 : 5.0);
+            continue;
+        }
+
+        QPainterPath path;
+        for (int s = 0; s <= kSegments; ++s)
+        {
+            const double ang = (2.0 * kPi * static_cast<double>(s)) / static_cast<double>(kSegments);
+            const Vec3 p{ring.centerXM + ring.radiusM * std::cos(ang),
+                         ring.centerYM + ring.radiusM * std::sin(ang),
+                         ring.centerZM};
+            const QPointF screen = projectPoint(p, bounds, scale).screen;
+            if (s == 0)
+                path.moveTo(screen);
+            else
+                path.lineTo(screen);
+        }
+        painter.setPen(QPen(color, lineWidth));
+        painter.setBrush(Qt::NoBrush);
+        painter.drawPath(path);
+
+        // Entry marker at +X on the ring.
+        const Vec3 entryPt{ring.centerXM + ring.radiusM, ring.centerYM, ring.centerZM};
+        const QPointF entryScreen = projectPoint(entryPt, bounds, scale).screen;
+        painter.setBrush(color);
+        painter.setPen(Qt::NoPen);
+        painter.drawEllipse(entryScreen, isActive ? 5.0 : 4.0, isActive ? 5.0 : 4.0);
     }
 }
 

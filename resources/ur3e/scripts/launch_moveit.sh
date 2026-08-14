@@ -28,6 +28,10 @@ fi
 
 source "/opt/ros/${ROS_DISTRO}/setup.bash"
 export ROS_LOCALHOST_ONLY=1
+# Ensure a visible Windows window under WSLg (see wslg_display_env.sh).
+# Strip CRLF so Windows-edited scripts still source cleanly in bash.
+# shellcheck source=/dev/null
+source <(sed 's/\r$//' "${SCRIPT_DIR}/wslg_display_env.sh")
 
 "${SCRIPT_DIR}/wait_for_joint_states.sh" "${ROS_DISTRO}" 120
 
