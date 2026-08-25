@@ -1,7 +1,7 @@
-// BFS settings tab orchestration: Spinnaker worker, connect, RGB preview.
+﻿// BFS settings tab orchestration: Spinnaker worker, connect, RGB preview.
 #pragma once
 
-#include "backend/3dscanning/BfsCameraTypes.hpp"
+#include "backend/multiview/BfsCameraTypes.hpp"
 #include "frontend/streaming/StreamFpsTracker.hpp"
 
 #include <QObject>
@@ -30,7 +30,7 @@ public:
     void wireSettingsTabConnections();
     [[nodiscard]] bool isCameraConnected() const;
 
-    /// Thread-safe copy of the latest streamed RGB frame (for Capture 3D stills).
+    /// Thread-safe copy of the latest streamed RGB frame (for Capture Multiview stills).
     [[nodiscard]] bool tryCopyLastFrame(BfsRgbFrame &out) const;
 
 private:

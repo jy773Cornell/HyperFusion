@@ -14,11 +14,16 @@ constexpr int kAxisCount = 2;
 constexpr double kTravelLengthMm = 2000.0;
 constexpr double kTravelMinimumMm = 0.0;
 // All HyperFusion commanded motion uses this speed except Capture scanning (user-set)
-// and homing (ZML lockstep.home() — SDK/firmware approach settings).
+// and the final homing creep (kHomingApproachSpeedMmPerSec).
 constexpr double kMaxSpeedMmPerSec = 100.0;
 /// Axis accel + per-move Lockstep acceleration (mm/s²). Lower = gentler start/stop.
 /// ZML: accel setting; move options acceleration=0 falls back to this value.
 constexpr double kDefaultMotionAccelerationMmPerSec2 = 30.0;
+/// When the axis is already referenced, cruise at kMaxSpeedMmPerSec to this
+/// standoff, then search the home sensor at kHomingApproachSpeedMmPerSec.
+constexpr double kHomingApproachDistanceMm = 80.0;
+/// Firmware lockstep.home() follows axis maxspeed; this is the sensor-approach cap.
+constexpr double kHomingApproachSpeedMmPerSec = 20.0;
 constexpr double kHomeOffsetMm = 0.0;
 constexpr double kLockstepSecondaryOffsetMm = 0.0;
 

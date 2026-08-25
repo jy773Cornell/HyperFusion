@@ -80,12 +80,12 @@ def write_segmented_rgb_patch(rgb: np.ndarray, mask: np.ndarray, path: Path) -> 
 
 
 def z_order_sort_indices(boxes_xyxy: np.ndarray) -> List[int]:
-    """Row-major order from the left-upper corner.
+    """Row-major order from the right-upper corner.
 
-    We cluster detections into rows using the Y center of each box, then sort
-    within each row by X center. ROI ids are assigned after this reorder, so:
+    We cluster detections into rows using the Y of each box's top-left, then sort
+    within each row by X right-to-left. ROI ids are assigned after this reorder, so:
       - row #1 is the top-most objects
-      - within a row, left-to-right is ROI increasing
+      - within a row, right-to-left is ROI increasing (1..5, then 6..10, ...)
     """
 
     count = int(boxes_xyxy.shape[0])
@@ -137,9 +137,9 @@ def z_order_sort_indices(boxes_xyxy: np.ndarray) -> List[int]:
     if current_row:
         rows.append(current_row)
 
-    # Sort each row left-to-right.
+    # Sort each row right-to-left.
     for r in rows:
-        r.sort(key=lambda i: x_tl[i])
+        r.sort(key=lambda i: x_tl[i], reverse=True)
 
     # Flatten rows in top-to-bottom order.
     ordered: list[int] = []

@@ -1,6 +1,7 @@
 """Tool-flange payload (URDF collision mesh) env for ROS launch subprocesses."""
 from __future__ import annotations
 
+import math
 import os
 import subprocess
 import sys
@@ -11,13 +12,17 @@ from pathlib import Path
 TOOL_PAYLOAD_LINK = "hyperfusion_tool_payload"
 TOOL_TCP_LINK = "hyperfusion_tcp"
 TOOL_PAYLOAD_HEMISPHERE_MESH = "tool_payload_hemisphere.stl"
-DEFAULT_MESH_FILE = "ur_bfs_tool_payload.stl"
-# Max vertex distance from flange origin for ur_bfs_tool_payload.stl (~77 mm).
+DEFAULT_MESH_FILE = "ur_tool_payload.stl"
+# Pinch sphere is the C403A0 flange↔forearm guard, not mesh size.
+# ur_tool_payload.stl max vertex distance from flange origin is ~133 mm.
 DEFAULT_MESH_PINCH_RADIUS_M = 0.077
-# BFS sensor-face centroid in tool0 (Fusion CAD (0, 56.035, 20) mm after mesh pan-180).
-DEFAULT_TOOL_TCP_X_M = 0.0
-DEFAULT_TOOL_TCP_Y_M = -0.056035
-DEFAULT_TOOL_TCP_Z_M = 0.020
+# BFS optical origin in tool0 (Tsai hand-eye, metres + URDF rpy deg).
+DEFAULT_TOOL_TCP_X_M = 0.000715
+DEFAULT_TOOL_TCP_Y_M = -0.054197
+DEFAULT_TOOL_TCP_Z_M = 0.073755
+DEFAULT_TOOL_TCP_ROLL_DEG = -1.9138
+DEFAULT_TOOL_TCP_PITCH_DEG = 0.7450
+DEFAULT_TOOL_TCP_YAW_DEG = 0.2868
 
 
 def _env_bool(name: str, default: bool) -> bool:
@@ -36,11 +41,14 @@ def _env_float(name: str, default: float) -> float:
 
 @dataclass(frozen=True)
 class ToolTcpConfig:
-    """Optical TCP offset from tool0 (metres), used for MoveIt scan IK tip."""
+    """Optical TCP from tool0 (metres + URDF rpy deg), used for MoveIt scan IK tip."""
 
     x_m: float = DEFAULT_TOOL_TCP_X_M
     y_m: float = DEFAULT_TOOL_TCP_Y_M
     z_m: float = DEFAULT_TOOL_TCP_Z_M
+    roll_deg: float = DEFAULT_TOOL_TCP_ROLL_DEG
+    pitch_deg: float = DEFAULT_TOOL_TCP_PITCH_DEG
+    yaw_deg: float = DEFAULT_TOOL_TCP_YAW_DEG
 
     @classmethod
     def from_env(cls) -> ToolTcpConfig:
@@ -48,23 +56,59 @@ class ToolTcpConfig:
             x_m=_env_float("HYPERFUSION_TOOL_TCP_X_M", DEFAULT_TOOL_TCP_X_M),
             y_m=_env_float("HYPERFUSION_TOOL_TCP_Y_M", DEFAULT_TOOL_TCP_Y_M),
             z_m=_env_float("HYPERFUSION_TOOL_TCP_Z_M", DEFAULT_TOOL_TCP_Z_M),
+            roll_deg=_env_float("HYPERFUSION_TOOL_TCP_ROLL_DEG", DEFAULT_TOOL_TCP_ROLL_DEG),
+            pitch_deg=_env_float("HYPERFUSION_TOOL_TCP_PITCH_DEG", DEFAULT_TOOL_TCP_PITCH_DEG),
+            yaw_deg=_env_float("HYPERFUSION_TOOL_TCP_YAW_DEG", DEFAULT_TOOL_TCP_YAW_DEG),
         )
 
     @classmethod
-    def from_mm(cls, x_mm: float, y_mm: float, z_mm: float) -> ToolTcpConfig:
-        return cls(x_m=float(x_mm) / 1000.0, y_m=float(y_mm) / 1000.0, z_m=float(z_mm) / 1000.0)
+    def from_mm(
+        cls,
+        x_mm: float,
+        y_mm: float,
+        z_mm: float,
+        roll_deg: float = DEFAULT_TOOL_TCP_ROLL_DEG,
+        pitch_deg: float = DEFAULT_TOOL_TCP_PITCH_DEG,
+        yaw_deg: float = DEFAULT_TOOL_TCP_YAW_DEG,
+    ) -> ToolTcpConfig:
+        return cls(
+            x_m=float(x_mm) / 1000.0,
+            y_m=float(y_mm) / 1000.0,
+            z_m=float(z_mm) / 1000.0,
+            roll_deg=float(roll_deg),
+            pitch_deg=float(pitch_deg),
+            yaw_deg=float(yaw_deg),
+        )
 
     def apply_to_environ(self) -> None:
         os.environ["HYPERFUSION_TOOL_TCP_X_M"] = f"{self.x_m:.6f}"
         os.environ["HYPERFUSION_TOOL_TCP_Y_M"] = f"{self.y_m:.6f}"
         os.environ["HYPERFUSION_TOOL_TCP_Z_M"] = f"{self.z_m:.6f}"
+        os.environ["HYPERFUSION_TOOL_TCP_ROLL_DEG"] = f"{self.roll_deg:.6f}"
+        os.environ["HYPERFUSION_TOOL_TCP_PITCH_DEG"] = f"{self.pitch_deg:.6f}"
+        os.environ["HYPERFUSION_TOOL_TCP_YAW_DEG"] = f"{self.yaw_deg:.6f}"
 
     def bash_exports(self) -> str:
         return (
             f"export HYPERFUSION_TOOL_TCP_X_M='{self.x_m:.6f}' && "
             f"export HYPERFUSION_TOOL_TCP_Y_M='{self.y_m:.6f}' && "
             f"export HYPERFUSION_TOOL_TCP_Z_M='{self.z_m:.6f}' && "
+            f"export HYPERFUSION_TOOL_TCP_ROLL_DEG='{self.roll_deg:.6f}' && "
+            f"export HYPERFUSION_TOOL_TCP_PITCH_DEG='{self.pitch_deg:.6f}' && "
+            f"export HYPERFUSION_TOOL_TCP_YAW_DEG='{self.yaw_deg:.6f}' && "
         )
+
+    @property
+    def roll_rad(self) -> float:
+        return math.radians(self.roll_deg)
+
+    @property
+    def pitch_rad(self) -> float:
+        return math.radians(self.pitch_deg)
+
+    @property
+    def yaw_rad(self) -> float:
+        return math.radians(self.yaw_deg)
 
 
 @dataclass(frozen=True)

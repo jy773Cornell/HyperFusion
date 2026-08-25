@@ -1,4 +1,4 @@
-#include "backend/HyperFusionConfig.hpp"
+﻿#include "backend/HyperFusionConfig.hpp"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -147,9 +147,15 @@ bool resolveSampleStagePositions(const SampleStagePositionDraft &draft,
     ok = require(QStringLiteral("temp_stop_position_mm"), config.tempStopPositionMm,
                  QStringLiteral("temp_stop_position_mm"))
          && ok;
-    ok = require(QStringLiteral("sample_3d_scanning_position_mm"),
-                 config.sample3dScanningPositionMm,
-                 QStringLiteral("sample_3d_scanning_position_mm"))
+    if (!resolved.contains(QStringLiteral("sample_multiview_position_mm"))
+        && resolved.contains(QStringLiteral("sample_3d_scanning_position_mm")))
+    {
+        resolved.insert(QStringLiteral("sample_multiview_position_mm"),
+                        resolved.value(QStringLiteral("sample_3d_scanning_position_mm")));
+    }
+    ok = require(QStringLiteral("sample_multiview_position_mm"),
+                 config.sampleMultiviewPositionMm,
+                 QStringLiteral("sample_multiview_position_mm"))
          && ok;
 
     config.cameraPositionMm[0] = config.whiteRefMm[0];
@@ -897,10 +903,14 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
             else
                 warnings.push_back(QStringLiteral("Unknown key in [fusion]: %1").arg(key));
         }
-        else if (section == QStringLiteral("3d scanning") || section == QStringLiteral("ur3e"))
+        else if (section == QStringLiteral("multiview")
+                 || section == QStringLiteral("3d scanning")
+                 || section == QStringLiteral("ur3e"))
         {
-            if (key == QStringLiteral("use_3d_scanning") || key == QStringLiteral("use_ur3e"))
-                config.ur3e.use3dScanning =
+            if (key == QStringLiteral("use_multiview")
+                || key == QStringLiteral("use_3d_scanning")
+                || key == QStringLiteral("use_ur3e"))
+                config.ur3e.useMultiview =
                     value.trimmed().toLower() == QStringLiteral("true") || value.trimmed() == QStringLiteral("1")
                     || value.trimmed().toLower() == QStringLiteral("yes");
             else if (key == QStringLiteral("wsl_distro"))
@@ -1031,6 +1041,27 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                     warnings.push_back(QStringLiteral("Invalid ur3e tool_tcp_z_mm: %1").arg(value));
                 else
                     config.ur3e.toolTcpZMm = numericValue;
+            }
+            else if (key == QStringLiteral("tool_tcp_roll_deg"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid ur3e tool_tcp_roll_deg: %1").arg(value));
+                else
+                    config.ur3e.toolTcpRollDeg = numericValue;
+            }
+            else if (key == QStringLiteral("tool_tcp_pitch_deg"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid ur3e tool_tcp_pitch_deg: %1").arg(value));
+                else
+                    config.ur3e.toolTcpPitchDeg = numericValue;
+            }
+            else if (key == QStringLiteral("tool_tcp_yaw_deg"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid ur3e tool_tcp_yaw_deg: %1").arg(value));
+                else
+                    config.ur3e.toolTcpYawDeg = numericValue;
             }
             else if (key == QStringLiteral("workspace_boundary_enabled"))
             {
@@ -1304,7 +1335,7 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 }
             }
             else
-                warnings.push_back(QStringLiteral("Unknown key in [3d scanning]: %1").arg(key));
+                warnings.push_back(QStringLiteral("Unknown key in [multiview]: %1").arg(key));
         }
         else if (section.isEmpty())
         {
@@ -1383,7 +1414,7 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "sample_scanning_starting_position_fx10e_mm = 840\n"
         << "sample_scanning_starting_position_swir3_mm = sample_scanning_starting_position_fx10e_mm - distance_dual_camera_mm\n"
         << "temp_stop_position_mm = 500\n"
-        << "sample_3d_scanning_position_mm = 1600\n"
+        << "sample_multiview_position_mm = 1600\n"
         << "\n"
         << "[scanning_settings]\n"
         << "operation_scanning_speed_mm_per_sec = 80\n"
@@ -1440,10 +1471,10 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "fusion_margin_mm = 5.0\n"
         << "fusion_timeout_ms = 3600000\n"
         << "\n"
-        << "[3d scanning]\n"
-        << "# Set use_3d_scanning = false to hide 3D Scanning UI (UR3e + BFS) and skip WSL sidecar/driver.\n"
-        << "# Legacy section [ur3e] / key use_ur3e still accepted.\n"
-        << "use_3d_scanning = true\n"
+        << "[multiview]\n"
+        << "# Set use_multiview = false to hide Multiview UI (UR3e + BFS) and skip WSL sidecar/driver.\n"
+        << "# Legacy section [3d scanning] / [ur3e] and keys use_3d_scanning / use_ur3e still accepted.\n"
+        << "use_multiview = true\n"
         << "# UR3e WSL sidecar (ROS 2). See resources/ur3e/README.md.\n"
         << "wsl_distro = Ubuntu\n"
         << "wsl_bash_command = \n"
@@ -1464,12 +1495,15 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "max_joint_velocity_deg_s = 60\n"
         << "# Real BFS tool collision mesh on tool0 (urdf/meshes/). Pinch uses flange-flat hemisphere of this radius.\n"
         << "tool_payload_shape = mesh\n"
-        << "tool_payload_mesh = ur_bfs_tool_payload.stl\n"
+        << "tool_payload_mesh = ur_tool_payload.stl\n"
         << "tool_payload_radius_mm = 77\n"
-        << "# Optical TCP in tool0 (mm). Fusion CAD (0, 56.035, 20) after mesh pan-180 → (0, -56.035, 20).\n"
-        << "tool_tcp_x_mm = 0\n"
-        << "tool_tcp_y_mm = -56.035\n"
-        << "tool_tcp_z_mm = 20\n"
+        << "# Optical TCP in tool0 (mm + URDF rpy deg). Tsai hand-eye.\n"
+        << "tool_tcp_x_mm = 0.715\n"
+        << "tool_tcp_y_mm = -54.197\n"
+        << "tool_tcp_z_mm = 73.755\n"
+        << "tool_tcp_roll_deg = -1.9138\n"
+        << "tool_tcp_pitch_deg = 0.7450\n"
+        << "tool_tcp_yaw_deg = 0.2868\n"
         << "# Robot mount height (mm): world Z of base_link / ceiling plane. Tray/sample stage stays at Z=0.\n"
         << "ceiling_mount_height_mm = 650\n"
         << "# Workspace collision box (mm): X/Y centered on tray; Z depth extends downward from mount.\n"
@@ -1497,13 +1531,13 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "# Semi Plan: φ candidates per θ ring (evenly over 360°). e.g. 260 ≈ every 1.4°.\n"
         << "semi_ring_search_candidates = 360\n"
         << "remember_last_scan_plan = true\n"
-        << "# BFS OpenCV intrinsics for multiview JSON (pixels). fx/fy=0 until calibrated.\n"
-        << "bfs_camera_fx = 0\n"
-        << "bfs_camera_fy = 0\n"
-        << "bfs_camera_cx = 0\n"
-        << "bfs_camera_cy = 0\n"
-        << "# Optional Brown-Conrady: k1,k2,p1,p2,k3\n"
-        << "bfs_camera_distortion =\n";
+        << "# BFS OpenCV intrinsics for multiview JSON (pixels). Tsai checkerboard calibration.\n"
+        << "bfs_camera_fx = 1787.820905328422\n"
+        << "bfs_camera_fy = 1787.499380533722\n"
+        << "bfs_camera_cx = 2084.4011955271963\n"
+        << "bfs_camera_cy = 1526.0259879957282\n"
+        << "# Brown-Conrady: k1,k2,p1,p2,k3\n"
+        << "bfs_camera_distortion = -0.16223465, 0.10156067, 0.0025228506, 0.00068692294, -0.029189458\n";
 
     if (!file.commit())
     {

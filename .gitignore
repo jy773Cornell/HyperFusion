@@ -1,4 +1,4 @@
-# --- OS / shell ---
+﻿# --- OS / shell ---
 Thumbs.db
 ehthumbs.db
 Desktop.ini
@@ -88,6 +88,7 @@ resources/sam2/
 
 # --- HyperFusion local runtime / capture data ---
 /processing/
+app/calibration/multiview/results/undistort_preview/
 
 # Logs / temp
 *.log

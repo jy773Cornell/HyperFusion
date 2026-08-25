@@ -1,4 +1,4 @@
-// Capture tab orchestration: recorder, stage scan sequence, writer, and post-processing.
+﻿// Capture tab orchestration: recorder, stage scan sequence, writer, and post-processing.
 // UI widgets remain on MainWindow; this controller owns capture state and sequence logic.
 #pragma once
 
@@ -72,8 +72,8 @@ public:
         SampleScan,
         /// Single stage pass: white ref then sample windows per camera (dual or single).
         CombinedRecordScan,
-        /// Absolute move to sample_3d_scanning_position_mm before hemisphere BFS capture.
-        MoveTo3dScanningPosition,
+        /// Absolute move to sample_multiview_position_mm before hemisphere BFS capture.
+        MoveToMultiviewPosition,
     };
 
     enum class CaptureRecorderMode
@@ -106,8 +106,8 @@ public:
     void updateDualCameraSyncControls();
     void updateScanningSpeedControls();
     void updateCaptureStreamLayout();
-    /// @param source Checkbox that changed (BFS or 3D RGB), or nullptr for availability refresh.
-    void syncBfsAnd3dRgbCaptureControls(QObject *source = nullptr);
+    /// @param source Checkbox that changed (BFS or Multiview RGB), or nullptr for availability refresh.
+    void syncBfsAndMultiviewRgbCaptureControls(QObject *source = nullptr);
     [[nodiscard]] bool isBfsCaptureSelected() const;
     [[nodiscard]] bool isCaptureStreamWaterfallVisible(std::size_t cameraIndex) const;
     [[nodiscard]] bool dualCameraScanSyncActive() const;
@@ -153,11 +153,11 @@ private:
     bool confirmCaptureHoodPreparation(CaptureIlluminationMode mode,
                                        bool betweenReflectanceAndTransmittance);
     bool confirmContinuousCaptureWithoutStage() const;
-    [[nodiscard]] bool confirmContinueWith3dScanningAfterHsi() const;
+    [[nodiscard]] bool confirmContinueWithMultiviewAfterHsi() const;
     [[nodiscard]] QString buildScanningProcedureSummary(
         const LighthouseControllerPowerStatus *powerStatus = nullptr) const;
-    void finishRecordAfterSkipping3d();
-    void startHemisphere3dCaptureAfterStageMove();
+    void finishRecordAfterSkippingMultiview();
+    void startHemisphereMultiviewCaptureAfterStageMove();
     void startCurrentCaptureMode();
     void beginCaptureModeMotion();
     void beginCaptureMoveToTempStopPosition();
@@ -196,18 +196,18 @@ private:
                                   CaptureScanPhase capturePhaseOnMoveStart = CaptureScanPhase::Idle);
     void onCaptureRelativeScanComplete();
     void completeCaptureSequence();
-    void begin3dScanningCapturePhase();
-    void on3dScanningCaptureFinished(bool ok,
+    void beginMultiviewCapturePhase();
+    void onMultiviewCaptureFinished(bool ok,
                                      const QString &detail,
                                      int capturedFrameCount,
                                      int successfulPins,
                                      qint64 elapsedMs);
-    void finishCaptureSequenceAfterOptional3d();
-    [[nodiscard]] bool is3dRgbCaptureSelected() const;
-    [[nodiscard]] bool canRun3dRgbCapture() const;
+    void finishCaptureSequenceAfterOptionalMultiview();
+    [[nodiscard]] bool isMultiviewRgbCaptureSelected() const;
+    [[nodiscard]] bool canRunMultiviewRgbCapture() const;
     [[nodiscard]] bool hasHsiCaptureSelection() const;
-    [[nodiscard]] QString capture3dScanningOutputDir() const;
-    bool begin3dOnlyDatasetSession(QString &errorMessage);
+    [[nodiscard]] QString captureMultiviewOutputDir() const;
+    bool beginMultiviewOnlyDatasetSession(QString &errorMessage);
     void runCapturePostProcessingIfEnabled();
     void failCaptureSequence(const QString &message);
     void setSelectedCameraShutters(bool open);
@@ -309,18 +309,18 @@ private:
     std::array<int, 2> lastPreviewCompleteSampleFrames_ = {0, 0};
     std::vector<std::size_t> lastPreviewCompleteCameraIndices_;
     bool applyingDualCameraScanSync_ = false;
-    bool syncingBfs3dSelection_ = false;
-    bool capture3dPending_ = false;
-    bool capture3dOnlySession_ = false;
-    bool capture3dInProgress_ = false;
-    /// After HSI: stage moves to 3D pose first; confirm dialog runs when that move completes.
-    bool capture3dAwaitingOperatorConfirm_ = false;
-    /// Filled after Capture-driven 3D scan; merged into Recording complete (empty if 3D skipped).
-    QString lastCapture3dSummaryText_;
-    /// True after HSI dump ended and post-process was queued for this session (may run during 3D).
+    bool syncingBfsMultiviewSelection_ = false;
+    bool captureMultiviewPending_ = false;
+    bool captureMultiviewOnlySession_ = false;
+    bool captureMultiviewInProgress_ = false;
+    /// After HSI: stage moves to Multiview pose first; confirm dialog runs when that move completes.
+    bool captureMultiviewAwaitingOperatorConfirm_ = false;
+    /// Filled after Capture-driven Multiview; merged into Recording complete (empty if Multiview skipped).
+    QString lastCaptureMultiviewSummaryText_;
+    /// True after HSI dump ended and post-process was queued for this session (may run during Multiview).
     bool capturePostProcessStartedForSession_ = false;
     bool capturePostProcessInFlight_ = false;
-    QString capture3dSessionDirectory_;
+    QString captureMultiviewSessionDirectory_;
     bool dualCameraScanSyncHardwareApplied_ = false;
     bool dualCameraSyncHardwareApplyPending_ = false;
     double lastAppliedSwir3SyncFrameRateHz_ = -1.0;

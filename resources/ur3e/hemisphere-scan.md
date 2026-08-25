@@ -1,4 +1,4 @@
-#  Hemisphere Scan — Technical Report
+﻿#  Hemisphere Scan — Technical Report
 
 **HyperFusion** | Ceiling-mounted UR3e | MoveIt-backed dome scan over sample tray
 
@@ -139,11 +139,11 @@ Three different “tool” concepts:
 
 Scan pins target **`hyperfusion_tcp`**, not the flange (`tool0`). The CAD mesh may use a **180° pan about Z** so Fusion XY matches `tool0`; TCP offsets in cfg are in **tool0** after that pan (Fusion CAD `(x,y,z)` → tool0 `(−x,−y,z)`).
 
-Example (`hyperfusion.cfg` `[3d scanning]`):
+Example (`hyperfusion.cfg` `[multiview]`):
 
 ```ini
 tool_payload_shape = mesh
-tool_payload_mesh = ur_bfs_tool_payload.stl
+tool_payload_mesh = ur_tool_payload.stl
 tool_payload_radius_mm = 50          # pinch sphere only
 tool_tcp_x_mm = 0                    # optical TCP in tool0 (mm)
 tool_tcp_y_mm = -56.035              # Fusion +56.035 after pan-180
@@ -165,7 +165,7 @@ For each grid point, `tcpPoseForHemispherePoint` sets:
 
 ### 3.5 Workspace boundary and robot mount
 
-Robot mount height and the MoveIt workspace box are **separate** settings in `hyperfusion.cfg` `[3d scanning]` (alias `[ur3e]`):
+Robot mount height and the MoveIt workspace box are **separate** settings in `hyperfusion.cfg` `[multiview]` (alias `[ur3e]`):
 
 ```ini
 # World Z of robot base / ceiling mount. Tray + hemisphere stay at Z=0 / 20 mm.
@@ -200,7 +200,7 @@ MoveIt adds thin collision slabs on **all six faces** (floor, ceiling, four wall
 
 ### 3.6 Mount orientation (align RViz with real robot)
 
-The robot base is placed in the URDF via a **world → base_link** transform at `Z = ceiling_mount_height_mm`. Defaults match a ceiling mount (roll = 180°). If RViz/simulation looks rotated or mirrored vs your real install, tune these keys in `hyperfusion.cfg` `[3d scanning]`:
+The robot base is placed in the URDF via a **world → base_link** transform at `Z = ceiling_mount_height_mm`. Defaults match a ceiling mount (roll = 180°). If RViz/simulation looks rotated or mirrored vs your real install, tune these keys in `hyperfusion.cfg` `[multiview]`:
 
 ```ini
 mount_roll_deg = 180
@@ -222,7 +222,7 @@ Restart the UR3e sidecar and reopen MoveIt/RViz after changing mount height or o
 
 ### 3.7 Scan home pose
 
-From `hyperfusion.cfg` `[3d scanning]`:
+From `hyperfusion.cfg` `[multiview]`:
 
 ```ini
 home_joints_deg = 90, -180, 145, -55, 90, -90
@@ -378,7 +378,7 @@ UR joints have multiple valid representations (e.g. 209° vs −151°). The plan
 | **Unreachable** | Blue        | No IK, collision, invalid joints, or Semi gate fail |
 | **Plan joints** | —             | 6 stored joint angles (rad) per reachable pin     |
 
-**Remember last plan** (`remember_last_scan_plan` in `hyperfusion.cfg`, default on): after a successful **Auto** Plan, results are written to `ur3e_last_scan_plan.json` beside the app. On the next startup the plan is reloaded automatically only if the current scan UI params and robot geometry keys in `hyperfusion.cfg` `[3d scanning]` match the fingerprint stored with the cache (TCP, payload, mount, workspace, home, `ur_type`, mock flag). Changing grid/radius/θ or those cfg keys invalidates the cache until you Plan again.
+**Remember last plan** (`remember_last_scan_plan` in `hyperfusion.cfg`, default on): after a successful **Auto** Plan, results are written to `ur3e_last_scan_plan.json` beside the app. On the next startup the plan is reloaded automatically only if the current scan UI params and robot geometry keys in `hyperfusion.cfg` `[multiview]` match the fingerprint stored with the cache (TCP, payload, mount, workspace, home, `ur_type`, mock flag). Changing grid/radius/θ or those cfg keys invalidates the cache until you Plan again.
 
 ### 5.6 Semi Plan gates (`semi_ring_sweep`)
 
@@ -479,22 +479,22 @@ Scan complete (summary: executed / skipped)
 
 ### 6.4 Per-pin timing
 
-- **Settle** at each pose from `scan_capture_stabilize_ms` in `[3d scanning]` (default **500 ms**), for both motion-only Execute and BFS still capture
+- **Settle** at each pose from `scan_capture_stabilize_ms` in `[multiview]` (default **500 ms**), for both motion-only Execute and BFS still capture
 - **Wrist sweep** (Scanning GUI): after the nominal pin, permute selected wrists by ±steps×step → **(2N)^k+1** poses per pin; wrist hops are **hardware** joint moves; failed offsets skipped; return-to-nominal abort on failure
-- **UR3e Execute + BFS connected:** folder dialog → `3d_scanning_yyyyMMdd_HHmmss/` → settle + BFS TIFF + `transforms.json` (same still pipeline as Capture Record 3D); works motion-only when no capture folder
+- **UR3e Execute + BFS connected:** folder dialog → `multiview_yyyyMMdd_HHmmss/` → settle + BFS TIFF + `transforms.json` (same still pipeline as Capture Record Multiview); works motion-only when no capture folder
 - Joint poll ~**100 ms** during motion (async, non-blocking UI)
 - MoveIt motion timeout up to **120 s** per leg
 
-### 6.4.1 Capture tab — 3D RGB record
+### 6.4.1 Capture tab — Multiview RGB record
 
-When **3D RGB** is enabled on the Capture tab (BFS + UR3e connected + plan ready + stage connected):
+When **Multiview RGB** is enabled on the Capture tab (BFS + UR3e connected + plan ready + stage connected):
 
 | Button | Behavior |
 | ------ | -------- |
 | **Preview** | Same as UR3e **Execute** (motion only; no photos; wrist sweep still runs) |
-| **Record** | If HSI modes/cameras selected → existing HSI Record first; then stage → `sample_3d_scanning_position_mm` (default **1600**), hemisphere scan with cfg settle + wrist grid + BFS TIFF per pose |
+| **Record** | If HSI modes/cameras selected → existing HSI Record first; then stage → `sample_multiview_position_mm` (default **1600**), hemisphere scan with cfg settle + wrist grid + BFS TIFF per pose |
 
-Stills land in `{dataset}/3d_scanning/00000.tif` + matching `00000.json` (per-image optical TCP pose) plus aggregate `transforms.json` (OpenGL `camera_to_world`). 3D-only Record (no HSI) creates the dataset folder and writes only `3d_scanning/`.
+Stills land in `{dataset}/multiview/00000.tif` + matching `00000.json` (per-image optical TCP pose) plus aggregate `transforms.json` (OpenGL `camera_to_world`). Multiview-only Record (no HSI) creates the dataset folder and writes only `multiview/`.
 
 
 
@@ -669,7 +669,7 @@ The **Move** button calls `/execute_scan_waypoint` with **`direct_only: true`**:
 
 
 
-### 9.1 Settings panel (3D Scanning)
+### 9.1 Settings panel (Multiview)
 
 - Mode: **Auto** vs **Semi**
 - Sphere radius, grid (H × V), θ range; Semi: pan interval / direction
@@ -804,7 +804,7 @@ If the pendant shows **External Control speed limit** on **joint 5** (wrist_3) o
 
 ## 12. Operational checklist
 
-1. Start sidecar / connect UR3e (3D Scanning tab)
+1. Start sidecar / connect UR3e (Multiview tab)
 2. Set `ceiling_mount_height_mm`, workspace box, `tool_tcp_*_mm`, and payload mesh in `hyperfusion.cfg`
 3. Set `home_joints_deg` to match robot (6 values; must be collision-free and pinch-safe in workspace)
 4. **Connect** — confirm homing succeeds (or fix pose via dialog)
@@ -858,7 +858,7 @@ If the pendant shows **External Control speed limit** on **joint 5** (wrist_3) o
 
 | Layer          | Main files                                                                          |
 | -------------- | ----------------------------------------------------------------------------------- |
-| Config         | `app/hyperfusion.cfg` `[3d scanning]`, `HyperFusionConfig.cpp`                      |
+| Config         | `app/hyperfusion.cfg` `[multiview]`, `HyperFusionConfig.cpp`                      |
 | Grid / TCP     | `Ur3eHemisphereScan.cpp`, `Ur3eHemisphereScanReachability.cpp`                      |
 | Semi route     | `Ur3eSemiFixedScan.cpp`, `Ur3eSemiFixedScan.hpp`                                    |
 | Semi execute   | `Ur3eSemiFixedScanExecute.cpp`                                                      |

@@ -1,11 +1,11 @@
-// Scan-route planning pane for the UR3e stream tab (frontend/ui layer).
+﻿// Scan-route planning pane for the UR3e stream tab (frontend/ui layer).
 #pragma once
 
-#include "backend/3dscanning/Ur3eHemisphereScan.hpp"
-#include "backend/3dscanning/Ur3eHemisphereScanReachability.hpp"
-#include "backend/3dscanning/Ur3eMountTransform.hpp"
-#include "backend/3dscanning/Ur3eSemiFixedScan.hpp"
-#include "backend/3dscanning/Ur3eWorkspaceBoundary.hpp"
+#include "backend/multiview/Ur3eHemisphereScan.hpp"
+#include "backend/multiview/Ur3eHemisphereScanReachability.hpp"
+#include "backend/multiview/Ur3eMountTransform.hpp"
+#include "backend/multiview/Ur3eSemiFixedScan.hpp"
+#include "backend/multiview/Ur3eWorkspaceBoundary.hpp"
 
 #include <QVector>
 #include <QWidget>

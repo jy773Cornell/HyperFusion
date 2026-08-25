@@ -123,8 +123,8 @@ void applyTravelLimits(zaber::motion::ascii::Axis &axis)
 void applyMotionSpeedLimits(zaber::motion::ascii::Axis &axis)
 {
     // limit.approach.maxspeed is not writable at the default direct-serial access level
-    // (NOACCESS). Homing uses min(limit.approach.maxspeed, maxspeed), so maxspeed alone
-    // caps approach speed when it is the lower value.
+    // (NOACCESS). Firmware home follows maxspeed; ZaberStageHoming temporarily lowers
+    // it for the sensor search, then restores kMaxSpeedMmPerSec.
     zaber::motion::ascii::AxisSettings settings = axis.getSettings();
     settings.set(MAXSPEED, zaber_stage::kMaxSpeedMmPerSec, Units::VELOCITY_MILLIMETRES_PER_SECOND);
 }

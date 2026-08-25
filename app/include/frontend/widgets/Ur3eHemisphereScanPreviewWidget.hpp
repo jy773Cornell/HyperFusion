@@ -1,11 +1,11 @@
-// 3D preview of UR3e hemisphere / semi-fixed scan over the sample tray (frontend/ui).
+﻿// 3D preview of UR3e hemisphere / semi-fixed scan over the sample tray (frontend/ui).
 #pragma once
 
-#include "backend/3dscanning/Ur3eHemisphereScan.hpp"
-#include "backend/3dscanning/Ur3eHemisphereScanReachability.hpp"
-#include "backend/3dscanning/Ur3eMountTransform.hpp"
-#include "backend/3dscanning/Ur3eSemiFixedScan.hpp"
-#include "backend/3dscanning/Ur3eWorkspaceBoundary.hpp"
+#include "backend/multiview/Ur3eHemisphereScan.hpp"
+#include "backend/multiview/Ur3eHemisphereScanReachability.hpp"
+#include "backend/multiview/Ur3eMountTransform.hpp"
+#include "backend/multiview/Ur3eSemiFixedScan.hpp"
+#include "backend/multiview/Ur3eWorkspaceBoundary.hpp"
 
 #include <QPoint>
 #include <QTimer>

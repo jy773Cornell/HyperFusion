@@ -9,7 +9,7 @@ Endpoints:
   GET  /connect/status -> poll async connect progress
   POST /connect/cancel -> cancel async connect
   POST /disconnect  -> safe disconnect
-  GET  /pose        -> base_link→hyperfusion_tcp [x,y,z,rx,ry,rz] (UR rotvec)
+  GET  /pose        -> base_link→hyperfusion_tcp [x,y,z,rx,ry,rz]; also tool0 + joints
   GET  /joints      -> current joint names + positions (rad)
   POST /move_l      -> linear move in TCP frame
   POST /move_j      -> joint-space move
@@ -121,26 +121,44 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--tool-payload-mesh-file",
-        default=str(cfg.get("tool_payload_mesh", "ur_bfs_tool_payload.stl")),
+        default=str(cfg.get("tool_payload_mesh", "ur_tool_payload.stl")),
         help="STL filename under urdf/meshes/ when shape=mesh.",
     )
     parser.add_argument(
         "--tool-tcp-x-mm",
         type=float,
-        default=float(cfg.get("tool_tcp_x_mm", 0.0)),
+        default=float(cfg.get("tool_tcp_x_mm", 0.715)),
         help="BFS optical TCP X offset in tool0 (mm).",
     )
     parser.add_argument(
         "--tool-tcp-y-mm",
         type=float,
-        default=float(cfg.get("tool_tcp_y_mm", -56.035)),
+        default=float(cfg.get("tool_tcp_y_mm", -54.197)),
         help="BFS optical TCP Y offset in tool0 (mm).",
     )
     parser.add_argument(
         "--tool-tcp-z-mm",
         type=float,
-        default=float(cfg.get("tool_tcp_z_mm", 20.0)),
+        default=float(cfg.get("tool_tcp_z_mm", 73.755)),
         help="BFS optical TCP Z offset in tool0 (mm).",
+    )
+    parser.add_argument(
+        "--tool-tcp-roll-deg",
+        type=float,
+        default=float(cfg.get("tool_tcp_roll_deg", -1.9138)),
+        help="BFS optical TCP roll in tool0 (deg, URDF Rx).",
+    )
+    parser.add_argument(
+        "--tool-tcp-pitch-deg",
+        type=float,
+        default=float(cfg.get("tool_tcp_pitch_deg", 0.7450)),
+        help="BFS optical TCP pitch in tool0 (deg, URDF Ry).",
+    )
+    parser.add_argument(
+        "--tool-tcp-yaw-deg",
+        type=float,
+        default=float(cfg.get("tool_tcp_yaw_deg", 0.2868)),
+        help="BFS optical TCP yaw in tool0 (deg, URDF Rz).",
     )
     parser.add_argument("--ros-distro", default=str(cfg.get("ros_distro", "jazzy")))
     parser.add_argument("--ur-type", default=str(cfg.get("ur_type", "ur3e")))
@@ -275,10 +293,15 @@ def main() -> None:
     ToolPayloadConfig.from_radius_mm(
         args.tool_payload_radius_mm,
         shape=str(args.tool_payload_shape).strip().lower() or "mesh",
-        mesh_file=str(args.tool_payload_mesh_file).strip() or "ur_bfs_tool_payload.stl",
+        mesh_file=str(args.tool_payload_mesh_file).strip() or "ur_tool_payload.stl",
     ).apply_to_environ()
     ToolTcpConfig.from_mm(
-        args.tool_tcp_x_mm, args.tool_tcp_y_mm, args.tool_tcp_z_mm
+        args.tool_tcp_x_mm,
+        args.tool_tcp_y_mm,
+        args.tool_tcp_z_mm,
+        roll_deg=args.tool_tcp_roll_deg,
+        pitch_deg=args.tool_tcp_pitch_deg,
+        yaw_deg=args.tool_tcp_yaw_deg,
     ).apply_to_environ()
     args.initial_joint_deg = _parse_initial_joint_deg(args.initial_joint_deg)
 

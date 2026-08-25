@@ -1,11 +1,11 @@
-// Hemisphere / semi-fixed scan parameters for UR3e (frontend/ui layer).
+﻿// Hemisphere / semi-fixed scan parameters for UR3e (frontend/ui layer).
 #include "frontend/widgets/Ur3eHemisphereScanSettingsWidget.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/3dscanning/Ur3eHemisphereScan.hpp"
-#include "backend/3dscanning/Ur3eScanPlanCache.hpp"
-#include "backend/3dscanning/Ur3eSemiFixedScan.hpp"
-#include "backend/3dscanning/Ur3eWorkspaceBoundary.hpp"
+#include "backend/multiview/Ur3eHemisphereScan.hpp"
+#include "backend/multiview/Ur3eScanPlanCache.hpp"
+#include "backend/multiview/Ur3eSemiFixedScan.hpp"
+#include "backend/multiview/Ur3eWorkspaceBoundary.hpp"
 
 #include "frontend/settings/AppSettingsStore.hpp"
 
@@ -38,7 +38,7 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(6);
 
-    auto *group = new QGroupBox(QStringLiteral("Scanning"), this);
+    auto *group = new QGroupBox(QStringLiteral("Multiview"), this);
     auto *form = new QFormLayout(group);
     form->setLabelAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     form->setFormAlignment(Qt::AlignLeft | Qt::AlignTop);

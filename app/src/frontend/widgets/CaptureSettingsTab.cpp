@@ -1,4 +1,4 @@
-// Capture / recorder settings tab (scan parameters, metadata, preprocessing).
+﻿// Capture / recorder settings tab (scan parameters, metadata, preprocessing).
 // MainWindow method definitions extracted from MainWindow.cpp for clarity.
 #include "frontend/controllers/CapturePanelController.hpp"
 #include "frontend/controllers/CameraPanelController.hpp"
@@ -117,7 +117,7 @@ QWidget *MainWindow::createCaptureSettingsTab()
     connect(captureCamera2Check_, &QCheckBox::toggled, this, refreshRecorder);
     connect(captureBfsCheck_, &QCheckBox::toggled, this, [this, refreshRecorder](bool) {
         if (capturePanel() != nullptr)
-            capturePanel()->syncBfsAnd3dRgbCaptureControls(captureBfsCheck_);
+            capturePanel()->syncBfsAndMultiviewRgbCaptureControls(captureBfsCheck_);
         refreshRecorder();
     });
     camerasLayout->addWidget(captureCamerasEmptyLabel_);
@@ -166,26 +166,26 @@ QWidget *MainWindow::createCaptureSettingsTab()
     modesLayout->setSpacing(16);
     captureReflectanceCheck_ = new QCheckBox(QStringLiteral("Reflectance"), captureModesBox_);
     captureTransmittanceCheck_ = new QCheckBox(QStringLiteral("Transmittance"), captureModesBox_);
-    capture3dRgbCheck_ = new QCheckBox(QStringLiteral("3D RGB"), captureModesBox_);
+    captureMultiviewRgbCheck_ = new QCheckBox(QStringLiteral("Multiview RGB"), captureModesBox_);
     captureReflectanceCheck_->setChecked(true);
     captureTransmittanceCheck_->setChecked(true);
-    capture3dRgbCheck_->setChecked(false);
-    capture3dRgbCheck_->setEnabled(false);
+    captureMultiviewRgbCheck_->setChecked(false);
+    captureMultiviewRgbCheck_->setEnabled(false);
     captureReflectanceCheck_->setToolTip(
         tr("Include reflectance scan (requires connected camera, stage, and stage recording)"));
     captureTransmittanceCheck_->setToolTip(
         tr("Include transmittance scan (requires connected camera, stage, and stage recording)"));
-    capture3dRgbCheck_->setToolTip(
-        tr("BFS RGB for 3D scanning. Enabled after a successful UR3e scan plan with reachable poses."));
+    captureMultiviewRgbCheck_->setToolTip(
+        tr("BFS RGB for Multiview. Enabled after a successful UR3e scan plan with reachable poses."));
     modesLayout->addWidget(captureReflectanceCheck_);
     modesLayout->addWidget(captureTransmittanceCheck_);
-    modesLayout->addWidget(capture3dRgbCheck_);
+    modesLayout->addWidget(captureMultiviewRgbCheck_);
     modesLayout->addStretch(1);
     connect(captureReflectanceCheck_, &QCheckBox::toggled, this, refreshRecorder);
     connect(captureTransmittanceCheck_, &QCheckBox::toggled, this, refreshRecorder);
-    connect(capture3dRgbCheck_, &QCheckBox::toggled, this, [this, refreshRecorder](bool) {
+    connect(captureMultiviewRgbCheck_, &QCheckBox::toggled, this, [this, refreshRecorder](bool) {
         if (capturePanel() != nullptr)
-            capturePanel()->syncBfsAnd3dRgbCaptureControls(capture3dRgbCheck_);
+            capturePanel()->syncBfsAndMultiviewRgbCaptureControls(captureMultiviewRgbCheck_);
         refreshRecorder();
     });
 

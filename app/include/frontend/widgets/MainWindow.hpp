@@ -1,4 +1,4 @@
-// Main application window UI layout and control wiring.
+﻿// Main application window UI layout and control wiring.
 #pragma once
 
 #include "adapters/lumo/LumoDeviceTypes.hpp"
@@ -161,13 +161,13 @@ private:
     static constexpr int kStreamTabCamera2 = 1;
     static constexpr int kStreamTabCaptureWhenUr3eEnabled = 3;
 
-    bool use3dScanning_ = true;
+    bool useMultiview_ = true;
     int ur3eSettingsTabIndex_ = -1;
     int ur3eStreamTabIndex_ = -1;
     int captureSettingsTabIndex_ = kSettingsTabCaptureWhenUr3eEnabled;
     int captureStreamTabIndex_ = kStreamTabCaptureWhenUr3eEnabled;
 
-    [[nodiscard]] bool use3dScanningEnabled() const { return use3dScanning_; }
+    [[nodiscard]] bool useMultiviewEnabled() const { return useMultiview_; }
     [[nodiscard]] int captureStreamTabIndex() const { return captureStreamTabIndex_; }
 
     // UR3e stream tab
@@ -263,7 +263,7 @@ private:
     QCheckBox *captureCamera1Check_ = nullptr;
     QCheckBox *captureCamera2Check_ = nullptr;
     QCheckBox *captureBfsCheck_ = nullptr;
-    QCheckBox *capture3dRgbCheck_ = nullptr;
+    QCheckBox *captureMultiviewRgbCheck_ = nullptr;
     QCheckBox *captureDualCameraAutoCheck_ = nullptr;
     QDoubleSpinBox *captureTargetLengthSpin_ = nullptr;
     QDoubleSpinBox *captureScanningSpeedSpin_ = nullptr;

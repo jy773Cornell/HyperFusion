@@ -1,10 +1,10 @@
-// BFS settings tab orchestration: Spinnaker worker, connect, RGB preview.
+﻿// BFS settings tab orchestration: Spinnaker worker, connect, RGB preview.
 #include "frontend/controllers/BfsPanelController.hpp"
 
-#include "backend/3dscanning/BfsCameraWorker.hpp"
-#include "backend/3dscanning/BfsSpinnakerCamera.hpp"
-#include "backend/3dscanning/BfsTiffIo.hpp"
-#include "backend/3dscanning/Ur3eCameraTransforms.hpp"
+#include "backend/multiview/BfsCameraWorker.hpp"
+#include "backend/multiview/BfsSpinnakerCamera.hpp"
+#include "backend/multiview/BfsTiffIo.hpp"
+#include "backend/multiview/Ur3eCameraTransforms.hpp"
 #include "backend/HyperFusionConfig.hpp"
 #include "frontend/controllers/Ur3ePanelController.hpp"
 #include "frontend/logging/AppLog.hpp"
@@ -276,8 +276,9 @@ void BfsPanelController::onCaptureClicked()
     if (host_->ur3ePanel() != nullptr && host_->ur3ePanel()->isRobotConnected())
     {
         hf::ur3e::Ur3eScanTcpPose tcp{};
+        hf::ur3e::CalibrationCaptureExtras calib;
         QString poseError;
-        if (!host_->ur3ePanel()->tryGetLiveOpticalTcpPose(&tcp, &poseError))
+        if (!host_->ur3ePanel()->tryGetLiveOpticalTcpPose(&tcp, &poseError, &calib))
         {
             host_->appendLog(
                 hf::log::Channel::Ur3e,
@@ -320,7 +321,8 @@ void BfsPanelController::onCaptureClicked()
                                                imageName,
                                                QStringLiteral("live_tf_base_hyperfusion_tcp"),
                                                nullptr,
-                                               &writeError))
+                                               &writeError,
+                                               &calib))
             {
                 host_->appendLog(
                     hf::log::Channel::Ur3e,
@@ -328,8 +330,18 @@ void BfsPanelController::onCaptureClicked()
             }
             else
             {
-                host_->appendLog(hf::log::Channel::Ur3e,
-                                 QStringLiteral("BFS capture pose JSON: %1").arg(jsonPath));
+                if (!calib.haveFlange)
+                    host_->appendLog(
+                        hf::log::Channel::Ur3e,
+                        QStringLiteral("BFS capture: %1 has no base_T_flange (live tool0 TF "
+                                       "missing) — not usable for hand-eye.")
+                            .arg(jsonPath));
+                else
+                    host_->appendLog(
+                        hf::log::Channel::Ur3e,
+                        QStringLiteral("BFS capture pose JSON: %1 (hand_eye_ready, "
+                                       "base_T_flange=tool0)")
+                            .arg(jsonPath));
             }
         }
     }

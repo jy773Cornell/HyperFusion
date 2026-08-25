@@ -1,4 +1,4 @@
-// 3D Scanning settings: nested UR3e robot panel + BFS camera settings (UI
+﻿// Multiview settings: nested UR3e robot panel + BFS camera settings (UI
 // only).
 #include "frontend/widgets/BfsCameraSettingsWidget.hpp"
 #include "frontend/widgets/MainWindow.hpp"

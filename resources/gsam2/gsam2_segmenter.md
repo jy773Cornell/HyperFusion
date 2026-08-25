@@ -297,7 +297,7 @@ GroundingDINO returns detections in model/score order. Before masks are written,
 
 ```text
 top-to-bottom rows
-left-to-right within each row
+right-to-left within each row
 ```
 
 Then ROI IDs are assigned:

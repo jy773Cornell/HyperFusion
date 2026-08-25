@@ -1,4 +1,4 @@
-// 3D Scanning live stream tab: scan-route planner (left) + RGB preview (right).
+﻿// Multiview live stream tab: scan-route planner (left) + RGB preview (right).
 #include "frontend/widgets/MainWindow.hpp"
 #include "frontend/widgets/StreamPaneHelpers.hpp"
 #include "frontend/widgets/Ur3eScanRoutePlanWidget.hpp"

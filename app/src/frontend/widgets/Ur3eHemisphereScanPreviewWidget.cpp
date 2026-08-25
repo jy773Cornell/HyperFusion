@@ -1,11 +1,11 @@
-// 3D preview of UR3e hemisphere scan over the sample tray (frontend/ui layer).
+﻿// 3D preview of UR3e hemisphere scan over the sample tray (frontend/ui layer).
 #include "frontend/widgets/Ur3eHemisphereScanPreviewWidget.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/3dscanning/Ur3eHemisphereScan.hpp"
-#include "backend/3dscanning/Ur3eHemisphereScanReachability.hpp"
-#include "backend/3dscanning/Ur3eMountTransform.hpp"
-#include "backend/3dscanning/Ur3eWorkspaceBoundary.hpp"
+#include "backend/multiview/Ur3eHemisphereScan.hpp"
+#include "backend/multiview/Ur3eHemisphereScanReachability.hpp"
+#include "backend/multiview/Ur3eMountTransform.hpp"
+#include "backend/multiview/Ur3eWorkspaceBoundary.hpp"
 
 #include <QWheelEvent>
 #include <QFont>

@@ -1,22 +1,22 @@
-// UR3e tab orchestration implementation.
+﻿// UR3e tab orchestration implementation.
 #include "frontend/controllers/Ur3ePanelController.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
-#include "backend/3dscanning/Ur3eClient.hpp"
-#include "backend/3dscanning/Ur3eHemisphereScan.hpp"
-#include "backend/3dscanning/Ur3eHemisphereScanReachability.hpp"
-#include "backend/3dscanning/Ur3eMountTransform.hpp"
-#include "backend/3dscanning/Ur3eWorkspaceBoundary.hpp"
-#include "backend/3dscanning/Ur3eMoveItManager.hpp"
-#include "backend/3dscanning/Ur3eRvizManager.hpp"
-#include "backend/3dscanning/Ur3eServerManager.hpp"
-#include "backend/3dscanning/Ur3eWslSetup.hpp"
-#include "backend/3dscanning/Ur3eCameraTransforms.hpp"
-#include "backend/3dscanning/Ur3eScanPlanCache.hpp"
-#include "backend/3dscanning/Ur3eAutoHemisphereScanExecute.hpp"
-#include "backend/3dscanning/Ur3eSemiFixedScan.hpp"
-#include "backend/3dscanning/Ur3eSemiFixedScanExecute.hpp"
-#include "backend/3dscanning/BfsTiffIo.hpp"
+#include "backend/multiview/Ur3eClient.hpp"
+#include "backend/multiview/Ur3eHemisphereScan.hpp"
+#include "backend/multiview/Ur3eHemisphereScanReachability.hpp"
+#include "backend/multiview/Ur3eMountTransform.hpp"
+#include "backend/multiview/Ur3eWorkspaceBoundary.hpp"
+#include "backend/multiview/Ur3eMoveItManager.hpp"
+#include "backend/multiview/Ur3eRvizManager.hpp"
+#include "backend/multiview/Ur3eServerManager.hpp"
+#include "backend/multiview/Ur3eWslSetup.hpp"
+#include "backend/multiview/Ur3eCameraTransforms.hpp"
+#include "backend/multiview/Ur3eScanPlanCache.hpp"
+#include "backend/multiview/Ur3eAutoHemisphereScanExecute.hpp"
+#include "backend/multiview/Ur3eSemiFixedScan.hpp"
+#include "backend/multiview/Ur3eSemiFixedScanExecute.hpp"
+#include "backend/multiview/BfsTiffIo.hpp"
 #include "frontend/controllers/BfsPanelController.hpp"
 #include "frontend/widgets/MainWindow.hpp"
 #include "frontend/widgets/Ur3eExternalControlWaitDialog.hpp"
@@ -94,6 +94,24 @@ Ur3eScanTcpPose scanTcpFromLivePose(const Ur3eTcpPose &live, const Ur3eScanTcpPo
     tcp.toolZMy = ext.R[1][2];
     tcp.toolZMz = ext.R[2][2];
     return tcp;
+}
+
+CalibrationCaptureExtras extrasFromLivePose(const Ur3ePoseResult &live)
+{
+    CalibrationCaptureExtras extras;
+    if (live.hasTool0)
+    {
+        extras.haveFlange = true;
+        extras.flangeX = live.tool0.x;
+        extras.flangeY = live.tool0.y;
+        extras.flangeZ = live.tool0.z;
+        extras.flangeRx = live.tool0.rx;
+        extras.flangeRy = live.tool0.ry;
+        extras.flangeRz = live.tool0.rz;
+    }
+    extras.jointNames = live.jointNames;
+    extras.jointsRad = live.jointsRad;
+    return extras;
 }
 
 void appendScanPlanFailureReport(MainWindow *host, const Ur3eHemisphereScanPlan &plan)
@@ -244,7 +262,8 @@ bool Ur3ePanelController::isScanPlanReady() const
 }
 
 bool Ur3ePanelController::tryGetLiveOpticalTcpPose(Ur3eScanTcpPose *out,
-                                                   QString *errorMessage) const
+                                                   QString *errorMessage,
+                                                   CalibrationCaptureExtras *calibOut) const
 {
     if (out == nullptr)
     {
@@ -264,6 +283,8 @@ bool Ur3ePanelController::tryGetLiveOpticalTcpPose(Ur3eScanTcpPose *out,
         return false;
 
     *out = scanTcpFromLivePose(livePose.pose, Ur3eScanTcpPose{});
+    if (calibOut != nullptr)
+        *calibOut = extrasFromLivePose(livePose);
     return true;
 }
 
@@ -287,7 +308,7 @@ void Ur3ePanelController::startSidecarOnLaunch()
         return;
 
     const hf::HardwareConfig::Ur3eConfig &cfg = hf::hardwareConfig().ur3e;
-    if (!cfg.use3dScanning)
+    if (!cfg.useMultiview)
         return;
 
     host_->appendLog(QStringLiteral(
@@ -318,7 +339,7 @@ void Ur3ePanelController::refreshUi()
 
 bool Ur3ePanelController::shutdownSync()
 {
-    if (!hf::hardwareConfig().ur3e.use3dScanning)
+    if (!hf::hardwareConfig().ur3e.useMultiview)
         return true;
 
     shutdownRequested_.store(true, std::memory_order_release);
@@ -477,7 +498,7 @@ void Ur3ePanelController::wireSettingsTabConnections()
                             refreshSemiFixedPreview();
                         updateRobotUi();
                         if (host_->capturePanel() != nullptr)
-                            host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
+                            host_->capturePanel()->syncBfsAndMultiviewRgbCaptureControls();
                         return;
                     }
                     scanPlanReady_ = false;
@@ -497,7 +518,7 @@ void Ur3ePanelController::wireSettingsTabConnections()
                     scheduleManualTargetPreview();
                     updateRobotUi();
                     if (host_->capturePanel() != nullptr)
-                        host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
+                        host_->capturePanel()->syncBfsAndMultiviewRgbCaptureControls();
                 });
         connect(host_->ur3eHemisphereScanSettings_,
                 &ui::Ur3eHemisphereScanSettingsWidget::scanModeChanged,
@@ -518,7 +539,7 @@ void Ur3ePanelController::wireSettingsTabConnections()
                     }
                     updateRobotUi();
                     if (host_->capturePanel() != nullptr)
-                        host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
+                        host_->capturePanel()->syncBfsAndMultiviewRgbCaptureControls();
                 });
         connect(host_->ur3eHemisphereScanSettings_,
                 &ui::Ur3eHemisphereScanSettingsWidget::semiFixedRouteChanged,
@@ -527,7 +548,7 @@ void Ur3ePanelController::wireSettingsTabConnections()
                     refreshSemiFixedPreview();
                     updateRobotUi();
                     if (host_->capturePanel() != nullptr)
-                        host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
+                        host_->capturePanel()->syncBfsAndMultiviewRgbCaptureControls();
                 });
         connect(host_->ur3eHemisphereScanSettings_,
                 &ui::Ur3eHemisphereScanSettingsWidget::addSemiFixedRingRequested,
@@ -1256,7 +1277,7 @@ void Ur3ePanelController::finishScanPlan(const Ur3eHemisphereScanPlan &plan,
         scanPlanReady_ = false;
         updateRobotUi();
         if (host_->capturePanel() != nullptr)
-            host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
+            host_->capturePanel()->syncBfsAndMultiviewRgbCaptureControls();
         return;
     }
 
@@ -1284,7 +1305,7 @@ void Ur3ePanelController::finishScanPlan(const Ur3eHemisphereScanPlan &plan,
     {
         updateRobotUi();
         if (host_->capturePanel() != nullptr)
-            host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
+            host_->capturePanel()->syncBfsAndMultiviewRgbCaptureControls();
         return;
     }
 
@@ -1310,7 +1331,7 @@ void Ur3ePanelController::finishScanPlan(const Ur3eHemisphereScanPlan &plan,
 
     updateRobotUi();
     if (host_->capturePanel() != nullptr)
-        host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
+        host_->capturePanel()->syncBfsAndMultiviewRgbCaptureControls();
 }
 
 void Ur3ePanelController::finishSemiScanPlan(const Ur3eHemisphereScanPlan &plan,
@@ -1415,7 +1436,7 @@ void Ur3ePanelController::finishSemiScanPlan(const Ur3eHemisphereScanPlan &plan,
     refreshSemiFixedPreview();
     updateRobotUi();
     if (host_->capturePanel() != nullptr)
-        host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
+        host_->capturePanel()->syncBfsAndMultiviewRgbCaptureControls();
 }
 
 void Ur3ePanelController::saveCachedScanPlan()
@@ -1514,7 +1535,7 @@ void Ur3ePanelController::onLoadScanRouteRequested(const QString &routePath)
     host_->ur3eHemisphereScanSettings_->refreshAvailableRoutes();
     updateRobotUi();
     if (host_->capturePanel() != nullptr)
-        host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
+        host_->capturePanel()->syncBfsAndMultiviewRgbCaptureControls();
 }
 
 void Ur3ePanelController::onLoadPlannedRouteAsSemiFixedRequested(const QString &routePath)
@@ -1601,7 +1622,7 @@ void Ur3ePanelController::onLoadPlannedRouteAsSemiFixedRequested(const QString &
             .arg(routeParams.thetaMaxDeg, 0, 'f', 0));
     updateRobotUi();
     if (host_->capturePanel() != nullptr)
-        host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
+        host_->capturePanel()->syncBfsAndMultiviewRgbCaptureControls();
 }
 
 void Ur3ePanelController::tryLoadCachedScanPlan()
@@ -1633,7 +1654,7 @@ void Ur3ePanelController::tryLoadCachedScanPlan()
                         .arg(route.rings.size()));
                 updateRobotUi();
                 if (host_->capturePanel() != nullptr)
-                    host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
+                    host_->capturePanel()->syncBfsAndMultiviewRgbCaptureControls();
                 return;
             }
         }
@@ -1696,7 +1717,7 @@ void Ur3ePanelController::tryLoadCachedScanPlan()
 
     updateRobotUi();
     if (host_->capturePanel() != nullptr)
-        host_->capturePanel()->syncBfsAnd3dRgbCaptureControls();
+        host_->capturePanel()->syncBfsAndMultiviewRgbCaptureControls();
 }
 
 void Ur3ePanelController::onExecuteHemisphereScanRequested()
@@ -1713,7 +1734,7 @@ void Ur3ePanelController::onExecuteHemisphereScanRequested()
 
     const QString parentDir = QFileDialog::getExistingDirectory(
         host_,
-        QStringLiteral("Save 3D scanning images"),
+        QStringLiteral("Save Multiview images"),
         QString(),
         QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
     if (parentDir.isEmpty())
@@ -1725,7 +1746,7 @@ void Ur3ePanelController::onExecuteHemisphereScanRequested()
     const QString stamp =
         QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
     const QString captureDir =
-        QDir(parentDir).filePath(QStringLiteral("3d_scanning_%1").arg(stamp));
+        QDir(parentDir).filePath(QStringLiteral("multiview_%1").arg(stamp));
     if (!QDir().mkpath(captureDir))
     {
         host_->appendLog(
@@ -1794,7 +1815,7 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
         if (host_->bfsPanel() == nullptr || !host_->bfsPanel()->isCameraConnected())
         {
             host_->appendLog(QStringLiteral(
-                "UR3e scan execute rejected: BFS camera must be connected for 3D capture."));
+                "UR3e scan execute rejected: BFS camera must be connected for Multiview capture."));
             return false;
         }
         QDir().mkpath(captureDir);
@@ -2023,6 +2044,20 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                 const QString poseJsonPath =
                     QDir(captureDir).filePath(stem + QStringLiteral(".json"));
                 QString poseError;
+                const CalibrationCaptureExtras calib = extrasFromLivePose(livePose);
+                if (!calib.haveFlange)
+                {
+                    QMetaObject::invokeMethod(
+                        this,
+                        [this, poseJsonPath]() {
+                            host_->appendLog(
+                                QStringLiteral(
+                                    "UR3e scan capture: no base_T_flange (live tool0 TF "
+                                    "missing) — %1 not usable for hand-eye.")
+                                    .arg(QFileInfo(poseJsonPath).fileName()));
+                        },
+                        Qt::QueuedConnection);
+                }
                 if (!writeCameraPoseJson(poseJsonPath,
                                          tcpForPose,
                                          c2w,
@@ -2031,7 +2066,8 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                                          imageName,
                                          poseSource,
                                          &plannedTcp,
-                                         &poseError))
+                                         &poseError,
+                                         &calib))
                 {
                     ok = false;
                     errorMessage =
@@ -2682,7 +2718,7 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
         if (host_->bfsPanel() == nullptr || !host_->bfsPanel()->isCameraConnected())
         {
             host_->appendLog(QStringLiteral(
-                "UR3e semi-fixed execute rejected: BFS camera must be connected for 3D capture."));
+                "UR3e semi-fixed execute rejected: BFS camera must be connected for Multiview capture."));
             return false;
         }
         QDir().mkpath(captureDir);
@@ -2853,8 +2889,20 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
                 const QString poseJsonPath =
                     QDir(captureDir).filePath(stem + QStringLiteral(".json"));
                 QString poseError;
+                const CalibrationCaptureExtras calib = extrasFromLivePose(livePose);
+                if (!calib.haveFlange)
+                {
+                    QMetaObject::invokeMethod(
+                        this,
+                        [this]() {
+                            host_->appendLog(QStringLiteral(
+                                "UR3e semi-fixed capture: no base_T_flange (live tool0 TF "
+                                "missing) — still not usable for hand-eye."));
+                        },
+                        Qt::QueuedConnection);
+                }
                 if (!writeCameraPoseJson(poseJsonPath, tcpForPose, c2w, extrinsics, intrinsics,
-                                         imageName, poseSource, &plannedTcp, &poseError))
+                                         imageName, poseSource, &plannedTcp, &poseError, &calib))
                     return false;
 
                 if (transformsDoc.intrinsics.width <= 0)
@@ -3117,7 +3165,7 @@ void Ur3ePanelController::finishScanExecute(const bool ok,
             .arg(capturedFrameCount)
             .arg(durationText);
 
-    // Capture-driven 3D merges the success/stopped summary into Recording complete.
+    // Capture-driven Multiview merges the success/stopped summary into Recording complete.
     // Still show failures immediately so the operator sees the error.
     if (!(scanExecuteSuppressUiSummary_ && ok))
     {

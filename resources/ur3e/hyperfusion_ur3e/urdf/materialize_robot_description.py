@@ -137,7 +137,10 @@ def materialize_runtime_robot_description(
         f"tool_payload_mesh_dir:='{mesh_dir}' "
         f"tool_tcp_x_m:={tcp.x_m:.6f} "
         f"tool_tcp_y_m:={tcp.y_m:.6f} "
-        f"tool_tcp_z_m:={tcp.z_m:.6f}"
+        f"tool_tcp_z_m:={tcp.z_m:.6f} "
+        f"tool_tcp_roll_rad:={tcp.roll_rad:.8f} "
+        f"tool_tcp_pitch_rad:={tcp.pitch_rad:.8f} "
+        f"tool_tcp_yaw_rad:={tcp.yaw_rad:.8f}"
     )
     proc = subprocess.run(
         ["bash", "-lc", cmd],

@@ -1,8 +1,8 @@
-# UR3e WSL sidecar (ROS 2) for HyperFusion
+﻿# UR3e WSL sidecar (ROS 2) for HyperFusion
 
 HyperFusion controls a **Universal Robots UR3e** via a **WSL sidecar**: the Windows app starts `ur3e_server` in Ubuntu through `wsl.exe`, mirroring the GSAM2 pattern. The sidecar always uses **ROS 2 / ur_robot_driver**. Set `use_mock_hardware = true` for simulation (no physical robot) or `false` for the real arm.
 
-UI lives under **3D Scanning** (UR3e robot + BFS camera). Hemisphere scan planning/execute uses **MoveIt** with a CAD tool mesh and an optical TCP at the BFS sensor face.
+UI lives under **Multiview** (UR3e robot + BFS camera). Hemisphere scan planning/execute uses **MoveIt** with a CAD tool mesh and an optical TCP at the BFS sensor face.
 
 ---
 
@@ -107,7 +107,7 @@ cd /mnt/d/Pototypy/HyperFusion/resources/ur3e
 ./scripts/launch_moveit.sh jazzy ur3e    # ros_distro, ur_type
 ```
 
-Or from the HyperFusion **3D Scanning → UR3e** tab: **Start MoveIt** / **Stop MoveIt**. Closing the RViz window stops MoveIt.
+Or from the HyperFusion **Multiview → UR3e** tab: **Start MoveIt** / **Stop MoveIt**. Closing the RViz window stops MoveIt.
 
 Preflight (WSL):
 
@@ -137,7 +137,7 @@ Scan IK / MoveIt tip the **BFS sensor face**, not the flange center.
 
 **Mesh**
 
-- File: `urdf/meshes/ur_bfs_tool_payload.stl` (metres, flange origin)
+- File: `urdf/meshes/ur_tool_payload.stl` (metres, flange origin)
 - Shape: `tool_payload_shape = mesh`
 - Visual/collision origins apply a **180° pan about Z** so CAD XY matches `tool0` after export
 - `tool_payload_radius_mm` is the **C403A0 pinch-guard sphere only**, not mesh size
@@ -169,10 +169,10 @@ Before connecting to hardware (`use_mock_hardware = false`):
 
 ## HyperFusion config
 
-In `app/hyperfusion.cfg` → `[3d scanning]` (alias `[ur3e]` still accepted):
+In `app/hyperfusion.cfg` → `[multiview]` (aliases `[3d scanning]` and `[ur3e]` still accepted):
 
 ```ini
-use_3d_scanning = true
+use_multiview = true
 wsl_distro = Ubuntu
 ur3e_repo_linux =                          ; empty = auto (/mnt/d/.../resources/ur3e)
 server_port = 8766
@@ -189,7 +189,7 @@ max_linear_accel_m_per_s2 = 0.3
 max_joint_velocity_deg_s = 60
 
 tool_payload_shape = mesh
-tool_payload_mesh = ur_bfs_tool_payload.stl
+tool_payload_mesh = ur_tool_payload.stl
 tool_payload_radius_mm = 50                ; pinch sphere only
 tool_tcp_x_mm = 0                          ; optical TCP in tool0 (mm)
 tool_tcp_y_mm = -56.035
@@ -223,7 +223,7 @@ The Windows app launches:
 cd <ur3e_repo_linux> && source /opt/ros/<ros_distro>/setup.bash && ./venv/bin/ur3e_server ...
 ```
 
-The WSL sidecar starts automatically when HyperFusion launches (if `use_3d_scanning = true`). Sidecar status is written to the **3D Scanning** log channel.
+The WSL sidecar starts automatically when HyperFusion launches (if `use_multiview = true`). Sidecar status is written to the **Multiview** log channel.
 
 Set `use_mock_hardware = false` only when the robot is powered, networked, and ready.
 
@@ -261,7 +261,7 @@ resources/ur3e/
   urdf/
     hyperfusion_ur3e.urdf.xacro    # ceiling mount + payload + hyperfusion_tcp
     hyperfusion_tool_payload.xacro
-    meshes/ur_bfs_tool_payload.stl
+    meshes/ur_tool_payload.stl
   srdf/hyperfusion_ur.srdf.xacro
   config/
     runtime_robot_description.urdf # rematerialized on sidecar/MoveIt start
@@ -303,7 +303,7 @@ Legacy root shims (`ur3e_server.py`, …) may still exist but are **not** used �
 
 ## Safety
 
-- **No motion on sidecar start** — connect is explicit via `/connect` or the 3D Scanning / UR3e tab.
+- **No motion on sidecar start** — connect is explicit via `/connect` or the Multiview / UR3e tab.
 - Keep **E-stop** on the teach pendant accessible.
 - Use conservative `max_linear_speed_m_per_s` / `max_joint_velocity_deg_s` until the rig is validated.
 - UR **C403A0** pinch stop (flange vs forearm) cannot be disabled; HyperFusion enforces a matching guard using `tool_payload_radius_mm`.

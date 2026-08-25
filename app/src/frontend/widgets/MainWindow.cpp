@@ -1,4 +1,4 @@
-// Qt main window: settings tabs, stream previews, camera controls, and application log.
+﻿// Qt main window: settings tabs, stream previews, camera controls, and application log.
 // Hardware access goes through CameraCoordinator; this file is UI layout and wiring only.
 #include "frontend/widgets/MainWindow.hpp"
 
@@ -153,10 +153,10 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     setMinimumSize(1180, 760);
 
     (void)hf::loadHardwareConfig();
-    use3dScanning_ = hf::hardwareConfig().ur3e.use3dScanning;
+    useMultiview_ = hf::hardwareConfig().ur3e.useMultiview;
 
     stagePanel_ = std::make_unique<hf::stage::StagePanelController>(this);
-    if (use3dScanning_)
+    if (useMultiview_)
     {
         ur3ePanel_ = std::make_unique<hf::ur3e::Ur3ePanelController>(this);
         bfsPanel_ = std::make_unique<hf::bfs::BfsPanelController>(this);
@@ -221,7 +221,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 
     stagePanel_->initializeWorker();
     stagePanel_->wireSettingsTabConnections();
-    if (use3dScanning_)
+    if (useMultiview_)
     {
         ur3ePanel_->applyHardwareConfigToUi();
         ur3ePanel_->wireSettingsTabConnections();
@@ -241,7 +241,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
             appendLog(hf::log::Channel::App,
                       QStringLiteral("Session log file: %1").arg(sessionLog_.filePath()));
         }
-        if (use3dScanning_ && ur3ePanel_ != nullptr)
+        if (useMultiview_ && ur3ePanel_ != nullptr)
             ur3ePanel_->startSidecarOnLaunch();
     });
 
@@ -333,10 +333,10 @@ QWidget *MainWindow::createStreamTabsPanel()
     streamTabs_->addTab(ui::CameraStreamTabBuilder::buildCameraStreamTab(
                             this, cameraPanel_->profileTabNameForUi(camera2Ui_), camera2Ui_, streamHooks),
                         cameraPanel_->profileTabNameForUi(camera2Ui_));
-    if (use3dScanning_)
+    if (useMultiview_)
     {
         ur3eStreamTabIndex_ = streamTabs_->count();
-        streamTabs_->addTab(createUr3eStreamTab(), QStringLiteral("3D Scanning"));
+        streamTabs_->addTab(createUr3eStreamTab(), QStringLiteral("Multiview"));
     }
     else
     {
@@ -420,7 +420,7 @@ bool MainWindow::performGracefulShutdown()
     }
 
     // Release Spinnaker before stage/light/UR3e teardown so GigE camera is free on exit.
-    if (use3dScanning_ && bfsPanel_ != nullptr)
+    if (useMultiview_ && bfsPanel_ != nullptr)
     {
         waitDialog.setStatusText(tr("Disconnecting BFS camera\u2026"));
         QApplication::processEvents();
@@ -456,7 +456,7 @@ bool MainWindow::performGracefulShutdown()
         });
     }
 
-    if (use3dScanning_ && ur3ePanel_ != nullptr)
+    if (useMultiview_ && ur3ePanel_ != nullptr)
     {
         if (ur3ePanel_->isRobotConnected())
         {

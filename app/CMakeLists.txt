@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.16)
+﻿cmake_minimum_required(VERSION 3.16)
 
 project(app VERSION 0.1 LANGUAGES CXX)
 
@@ -171,26 +171,26 @@ qt_add_executable(app WIN32
     src/backend/camera/processing/Gsam2RoiAnalysis.cpp
     src/backend/camera/processing/Gsam2SpectrumPlot.cpp
     src/backend/camera/processing/GsamWslPathUtil.cpp
-    src/backend/3dscanning/Ur3eClient.cpp
-    src/backend/3dscanning/Ur3eHemisphereScan.cpp
-    src/backend/3dscanning/Ur3eHomeScanCenter.cpp
-    src/backend/3dscanning/Ur3eHemisphereScanReachability.cpp
-    src/backend/3dscanning/Ur3eWorkspaceBoundary.cpp
-    src/backend/3dscanning/Ur3eMountTransform.cpp
-    src/backend/3dscanning/Ur3eMoveItManager.cpp
-    src/backend/3dscanning/Ur3eRvizManager.cpp
-    src/backend/3dscanning/Ur3eServerManager.cpp
-    src/backend/3dscanning/Ur3eWslSetup.cpp
-    src/backend/3dscanning/Ur3eWslLogUtil.cpp
-    src/backend/3dscanning/Ur3eWslPathUtil.cpp
-    src/backend/3dscanning/BfsSpinnakerCamera.cpp
-    src/backend/3dscanning/BfsCameraWorker.cpp
-    src/backend/3dscanning/BfsTiffIo.cpp
-    src/backend/3dscanning/Ur3eCameraTransforms.cpp
-    src/backend/3dscanning/Ur3eScanPlanCache.cpp
-    src/backend/3dscanning/Ur3eSemiFixedScan.cpp
-    src/backend/3dscanning/Ur3eSemiFixedScanExecute.cpp
-    src/backend/3dscanning/Ur3eAutoHemisphereScanExecute.cpp
+    src/backend/multiview/Ur3eClient.cpp
+    src/backend/multiview/Ur3eHemisphereScan.cpp
+    src/backend/multiview/Ur3eHomeScanCenter.cpp
+    src/backend/multiview/Ur3eHemisphereScanReachability.cpp
+    src/backend/multiview/Ur3eWorkspaceBoundary.cpp
+    src/backend/multiview/Ur3eMountTransform.cpp
+    src/backend/multiview/Ur3eMoveItManager.cpp
+    src/backend/multiview/Ur3eRvizManager.cpp
+    src/backend/multiview/Ur3eServerManager.cpp
+    src/backend/multiview/Ur3eWslSetup.cpp
+    src/backend/multiview/Ur3eWslLogUtil.cpp
+    src/backend/multiview/Ur3eWslPathUtil.cpp
+    src/backend/multiview/BfsSpinnakerCamera.cpp
+    src/backend/multiview/BfsCameraWorker.cpp
+    src/backend/multiview/BfsTiffIo.cpp
+    src/backend/multiview/Ur3eCameraTransforms.cpp
+    src/backend/multiview/Ur3eScanPlanCache.cpp
+    src/backend/multiview/Ur3eSemiFixedScan.cpp
+    src/backend/multiview/Ur3eSemiFixedScanExecute.cpp
+    src/backend/multiview/Ur3eAutoHemisphereScanExecute.cpp
     src/backend/camera/processing/IlluminantTables.cpp
     src/backend/camera/processing/ReferenceBuilder.cpp
     src/backend/camera/processing/EnviBilWriter.cpp
@@ -221,23 +221,23 @@ qt_add_executable(app WIN32
     include/backend/camera/processing/Gsam2RoiAnalysis.hpp
     include/backend/camera/processing/Gsam2SpectrumPlot.hpp
     include/backend/camera/processing/GsamWslPathUtil.hpp
-    include/backend/3dscanning/Ur3eClient.hpp
-    include/backend/3dscanning/Ur3eHemisphereScan.hpp
-    include/backend/3dscanning/Ur3eHemisphereScanReachability.hpp
-    include/backend/3dscanning/Ur3eWorkspaceBoundary.hpp
-    include/backend/3dscanning/Ur3eMountTransform.hpp
-    include/backend/3dscanning/Ur3eServerManager.hpp
-    include/backend/3dscanning/Ur3eWslSetup.hpp
-    include/backend/3dscanning/Ur3eMoveItManager.hpp
-    include/backend/3dscanning/Ur3eRvizManager.hpp
-    include/backend/3dscanning/Ur3eWslLogUtil.hpp
-    include/backend/3dscanning/Ur3eWslPathUtil.hpp
-    include/backend/3dscanning/BfsCameraTypes.hpp
-    include/backend/3dscanning/BfsSpinnakerCamera.hpp
-    include/backend/3dscanning/BfsCameraWorker.hpp
-    include/backend/3dscanning/BfsTiffIo.hpp
-    include/backend/3dscanning/Ur3eCameraTransforms.hpp
-    include/backend/3dscanning/Ur3eScanPlanCache.hpp
+    include/backend/multiview/Ur3eClient.hpp
+    include/backend/multiview/Ur3eHemisphereScan.hpp
+    include/backend/multiview/Ur3eHemisphereScanReachability.hpp
+    include/backend/multiview/Ur3eWorkspaceBoundary.hpp
+    include/backend/multiview/Ur3eMountTransform.hpp
+    include/backend/multiview/Ur3eServerManager.hpp
+    include/backend/multiview/Ur3eWslSetup.hpp
+    include/backend/multiview/Ur3eMoveItManager.hpp
+    include/backend/multiview/Ur3eRvizManager.hpp
+    include/backend/multiview/Ur3eWslLogUtil.hpp
+    include/backend/multiview/Ur3eWslPathUtil.hpp
+    include/backend/multiview/BfsCameraTypes.hpp
+    include/backend/multiview/BfsSpinnakerCamera.hpp
+    include/backend/multiview/BfsCameraWorker.hpp
+    include/backend/multiview/BfsTiffIo.hpp
+    include/backend/multiview/Ur3eCameraTransforms.hpp
+    include/backend/multiview/Ur3eScanPlanCache.hpp
     include/backend/camera/processing/CapturePostProcessor.hpp
     include/backend/camera/processing/HfFusionRunner.hpp
     include/backend/camera/processing/HfFusionWorker.hpp

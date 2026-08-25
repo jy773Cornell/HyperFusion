@@ -1,8 +1,8 @@
-// Blackfly S (BFS) camera settings panel UI (frontend/ui layer).
+﻿// Blackfly S (BFS) camera settings panel UI (frontend/ui layer).
 // Layout mirrors SpinView; values persist via QSettings. Backend wired by BfsPanelController.
 #pragma once
 
-#include "backend/3dscanning/BfsCameraTypes.hpp"
+#include "backend/multiview/BfsCameraTypes.hpp"
 
 #include <QWidget>
 

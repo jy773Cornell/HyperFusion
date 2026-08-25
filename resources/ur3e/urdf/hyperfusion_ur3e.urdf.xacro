@@ -63,14 +63,17 @@
   <xacro:arg name="tool_payload_z_m" default="0"/>
   <xacro:arg name="tool_payload_collision_gap_m" default="0.0"/>
   <xacro:arg name="tool_payload_mesh_dir" default="meshes/"/>
-  <xacro:arg name="tool_payload_mesh_file" default="ur_bfs_tool_payload.stl"/>
+  <xacro:arg name="tool_payload_mesh_file" default="ur_tool_payload.stl"/>
   <xacro:arg name="tool_payload_roll_rad" default="0"/>
   <xacro:arg name="tool_payload_pitch_rad" default="0"/>
   <xacro:arg name="tool_payload_yaw_rad" default="0"/>
-  <!-- Optical TCP (BFS sensor face centroid) in tool0 metres. -->
-  <xacro:arg name="tool_tcp_x_m" default="0"/>
-  <xacro:arg name="tool_tcp_y_m" default="-0.056035"/>
-  <xacro:arg name="tool_tcp_z_m" default="0.020"/>
+  <!-- Optical TCP (BFS optical origin) in tool0 metres + URDF rpy. Tsai hand-eye. -->
+  <xacro:arg name="tool_tcp_x_m" default="0.000715"/>
+  <xacro:arg name="tool_tcp_y_m" default="-0.054197"/>
+  <xacro:arg name="tool_tcp_z_m" default="0.073755"/>
+  <xacro:arg name="tool_tcp_roll_rad" default="-0.03340168"/>
+  <xacro:arg name="tool_tcp_pitch_rad" default="0.01300337"/>
+  <xacro:arg name="tool_tcp_yaw_rad" default="0.00500528"/>
   <xacro:property name="hf_pi" value="3.14159265358979323846"/>
 
   <xacro:property name="initial_positions_file" default="$(arg initial_positions_file)"/>
@@ -149,7 +152,7 @@
     />
   </xacro:if>
 
-  <!-- Scan / MoveIt tip: BFS sensor-face centroid (same +Z as tool0). -->
+  <!-- Scan / MoveIt tip: BFS optical origin (calibrated xyz + rpy vs tool0). -->
   <link name="$(arg tf_prefix)hyperfusion_tcp">
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
@@ -164,7 +167,8 @@
   <joint name="$(arg tf_prefix)tool0-hyperfusion_tcp" type="fixed">
     <parent link="$(arg tf_prefix)tool0"/>
     <child link="$(arg tf_prefix)hyperfusion_tcp"/>
-    <origin xyz="$(arg tool_tcp_x_m) $(arg tool_tcp_y_m) $(arg tool_tcp_z_m)" rpy="0 0 0"/>
+    <origin xyz="$(arg tool_tcp_x_m) $(arg tool_tcp_y_m) $(arg tool_tcp_z_m)"
+            rpy="$(arg tool_tcp_roll_rad) $(arg tool_tcp_pitch_rad) $(arg tool_tcp_yaw_rad)"/>
   </joint>
 
 </robot>

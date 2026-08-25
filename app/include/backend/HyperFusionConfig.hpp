@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QString>
 #include <QStringList>
@@ -17,8 +17,8 @@ struct HardwareConfig
     double brightRefMm[2] = {760.0, 570.0};
     double sampleScanStartMm[2] = {840.0, 650.0};
     double tempStopPositionMm = 500.0;
-    /// Stage absolute pose (mm) for Capture 3D RGB / hemisphere BFS stills.
-    double sample3dScanningPositionMm = 1600.0;
+    /// Stage absolute pose (mm) for Capture Multiview RGB / hemisphere BFS stills.
+    double sampleMultiviewPositionMm = 1600.0;
     /// Legacy UI mirror of whiteRefMm (capture position spin boxes).
     double cameraPositionMm[2] = {735.0, 545.0};
     double sampleWindowMaxLengthMm = 500.0;
@@ -106,8 +106,8 @@ struct HardwareConfig
 
     struct Ur3eConfig
     {
-        /// When false, 3D Scanning tabs (UR3e + BFS) and WSL sidecar/driver are disabled.
-        bool use3dScanning = true;
+        /// When false, Multiview tabs (UR3e + BFS) and WSL sidecar/driver are disabled.
+        bool useMultiview = true;
         QString wslDistro = QStringLiteral("Ubuntu");
         QString wslBashCommand;
         QString ur3eRepoLinux;
@@ -131,11 +131,14 @@ struct HardwareConfig
         /// Pinch-guard bounding sphere at tool0 (mm). MoveIt collision uses toolPayloadMesh.
         double toolPayloadRadiusMm = 77.0;
         QString toolPayloadShape = QStringLiteral("mesh");
-        QString toolPayloadMesh = QStringLiteral("ur_bfs_tool_payload.stl");
-        /// Optical TCP (BFS sensor face) in tool0 frame (mm). Fusion CAD (0, 56.035, 20) after pan-180.
-        double toolTcpXMm = 0.0;
-        double toolTcpYMm = -56.035;
-        double toolTcpZMm = 20.0;
+        QString toolPayloadMesh = QStringLiteral("ur_tool_payload.stl");
+        /// Optical TCP (BFS optical origin) in tool0: Tsai translation (mm) + URDF rpy (deg).
+        double toolTcpXMm = 0.715;
+        double toolTcpYMm = -54.197;
+        double toolTcpZMm = 73.755;
+        double toolTcpRollDeg = -1.9138;
+        double toolTcpPitchDeg = 0.7450;
+        double toolTcpYawDeg = 0.2868;
         /// Robot base mount height in world frame (mm). Z=0 is tray surface; mount plane is at this height.
         double ceilingMountHeightMm = 650.0;
         /// MoveIt workspace collision cube (mm). Extends downward from the mount plane (relative to robot).
@@ -180,12 +183,13 @@ struct HardwareConfig
         bool rememberLastScanPlan = true;
         /// BFS OpenCV intrinsics for multiview pose JSON / transforms.json (pixels).
         /// fx/fy ≤ 0 → width/height (+ optional cx/cy defaults) only until calibrated.
-        double bfsCameraFx = 0.0;
-        double bfsCameraFy = 0.0;
-        double bfsCameraCx = 0.0;
-        double bfsCameraCy = 0.0;
+        double bfsCameraFx = 1787.820905328422;
+        double bfsCameraFy = 1787.499380533722;
+        double bfsCameraCx = 2084.4011955271963;
+        double bfsCameraCy = 1526.0259879957282;
         /// Brown-Conrady distortion: k1,k2,p1,p2,k3 (optional).
-        std::vector<double> bfsCameraDistortion;
+        std::vector<double> bfsCameraDistortion{-0.16223465, 0.10156067, 0.0025228506,
+                                                0.00068692294, -0.029189458};
     };
 
     Ur3eConfig ur3e;

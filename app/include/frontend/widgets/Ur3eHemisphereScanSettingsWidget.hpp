@@ -1,11 +1,11 @@
-// Hemisphere / semi-fixed scan parameters for UR3e (frontend/ui layer).
+﻿// Hemisphere / semi-fixed scan parameters for UR3e (frontend/ui layer).
 #pragma once
 
-#include "backend/3dscanning/Ur3eAutoHemisphereScanExecute.hpp"
-#include "backend/3dscanning/Ur3eHemisphereScan.hpp"
-#include "backend/3dscanning/Ur3eScanPlanCache.hpp"
-#include "backend/3dscanning/Ur3eSemiFixedScan.hpp"
-#include "backend/3dscanning/Ur3eWorkspaceBoundary.hpp"
+#include "backend/multiview/Ur3eAutoHemisphereScanExecute.hpp"
+#include "backend/multiview/Ur3eHemisphereScan.hpp"
+#include "backend/multiview/Ur3eScanPlanCache.hpp"
+#include "backend/multiview/Ur3eSemiFixedScan.hpp"
+#include "backend/multiview/Ur3eWorkspaceBoundary.hpp"
 #include "frontend/settings/AppSettingsStore.hpp"
 
 #include <QWidget>

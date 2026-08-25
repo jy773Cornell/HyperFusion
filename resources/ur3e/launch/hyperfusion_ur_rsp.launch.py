@@ -110,11 +110,20 @@ def generate_launch_description():
     _tool_payload_collision_gap_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_COLLISION_GAP_M", "0.0")
     _tool_payload_mesh_dir = str(_pkg_root / "urdf" / "meshes").replace("\\", "/") + "/"
     _tool_payload_mesh_file = os.environ.get(
-        "HYPERFUSION_TOOL_PAYLOAD_MESH_FILE", "ur_bfs_tool_payload.stl"
+        "HYPERFUSION_TOOL_PAYLOAD_MESH_FILE", "ur_tool_payload.stl"
     )
-    _tool_tcp_x_m = os.environ.get("HYPERFUSION_TOOL_TCP_X_M", "0")
-    _tool_tcp_y_m = os.environ.get("HYPERFUSION_TOOL_TCP_Y_M", "-0.056035")
-    _tool_tcp_z_m = os.environ.get("HYPERFUSION_TOOL_TCP_Z_M", "0.020")
+    _tool_tcp_x_m = os.environ.get("HYPERFUSION_TOOL_TCP_X_M", "0.000715")
+    _tool_tcp_y_m = os.environ.get("HYPERFUSION_TOOL_TCP_Y_M", "-0.054197")
+    _tool_tcp_z_m = os.environ.get("HYPERFUSION_TOOL_TCP_Z_M", "0.073755")
+    _tool_tcp_roll_rad = str(
+        math.radians(float(os.environ.get("HYPERFUSION_TOOL_TCP_ROLL_DEG", "-1.9138")))
+    )
+    _tool_tcp_pitch_rad = str(
+        math.radians(float(os.environ.get("HYPERFUSION_TOOL_TCP_PITCH_DEG", "0.7450")))
+    )
+    _tool_tcp_yaw_rad = str(
+        math.radians(float(os.environ.get("HYPERFUSION_TOOL_TCP_YAW_DEG", "0.2868")))
+    )
     _use_mock_hardware = os.environ.get("HYPERFUSION_USE_MOCK_HARDWARE", "false").lower()
     _mock_sensor_commands = os.environ.get(
         "HYPERFUSION_MOCK_SENSOR_COMMANDS",
@@ -308,6 +317,15 @@ def generate_launch_description():
                 " ",
                 "tool_tcp_z_m:=",
                 _tool_tcp_z_m,
+                " ",
+                "tool_tcp_roll_rad:=",
+                _tool_tcp_roll_rad,
+                " ",
+                "tool_tcp_pitch_rad:=",
+                _tool_tcp_pitch_rad,
+                " ",
+                "tool_tcp_yaw_rad:=",
+                _tool_tcp_yaw_rad,
                 " ",
             ]
         )

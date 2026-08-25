@@ -1,4 +1,4 @@
-// Capture tab orchestration implementation (recorder, stage scan sequence,
+﻿// Capture tab orchestration implementation (recorder, stage scan sequence,
 // writer).
 #include "frontend/controllers/CapturePanelController.hpp"
 
@@ -952,12 +952,12 @@ void hf::capture::CapturePanelController::
                  "modes"));
   }
 
-  // 3D RGB is independent of stage illumination modes; refresh enablement last.
-  syncBfsAnd3dRgbCaptureControls();
+  // Multiview RGB is independent of stage illumination modes; refresh enablement last.
+  syncBfsAndMultiviewRgbCaptureControls();
   if (host_->captureModesBox_ != nullptr) {
-    const bool threeDEnabled = host_->capture3dRgbCheck_ != nullptr &&
-                               host_->capture3dRgbCheck_->isEnabled();
-    host_->captureModesBox_->setEnabled((modesBoxEnabled || threeDEnabled) &&
+    const bool multiviewEnabled = host_->captureMultiviewRgbCheck_ != nullptr &&
+                               host_->captureMultiviewRgbCheck_->isEnabled();
+    host_->captureModesBox_->setEnabled((modesBoxEnabled || multiviewEnabled) &&
                                         !scanActive);
   }
 }
@@ -1107,12 +1107,12 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
 
   if (host_->captureRecorderPreviewBtn_ != nullptr) {
     const bool preview3d =
-        is3dRgbCaptureSelected() && canRun3dRgbCapture() && !scanActive;
+        isMultiviewRgbCaptureSelected() && canRunMultiviewRgbCapture() && !scanActive;
     host_->captureRecorderPreviewBtn_->setEnabled(
         (useStage && !scanActive) || preview3d);
     if (preview3d) {
       host_->captureRecorderPreviewBtn_->setToolTip(
-          tr("3D RGB: same as UR3e Execute (motion only, no photos)"));
+          tr("Multiview RGB: same as UR3e Execute (motion only, no photos)"));
     } else if (!stageConnected) {
       host_->captureRecorderPreviewBtn_->setToolTip(
           tr("Connect the stage on the Stage tab to enable preview"));
@@ -1129,14 +1129,14 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
 
   if (host_->captureRecorderRecordBtn_ != nullptr) {
     const bool record3d =
-        is3dRgbCaptureSelected() && canRun3dRgbCapture() && !scanActive
+        isMultiviewRgbCaptureSelected() && canRunMultiviewRgbCapture() && !scanActive
         && !backgroundJobActive;
     host_->captureRecorderRecordBtn_->setEnabled(
         ((anyCameraConnected || record3d) && !scanActive && !backgroundJobActive));
     if (record3d && !anyCameraConnected) {
       host_->captureRecorderRecordBtn_->setToolTip(
-          tr("3D RGB: move stage to 3D pose, run hemisphere scan, save BFS "
-             "stills under dataset/3d_scanning/"));
+          tr("Multiview RGB: move stage to Multiview pose, run hemisphere scan, save BFS "
+             "stills under dataset/multiview/"));
     } else if (!anyCameraConnected) {
       host_->captureRecorderRecordBtn_->setToolTip(tr(
           "Connect at least one camera on the Camera tab to enable recording"));
@@ -1156,7 +1156,7 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
   }
 
   if (host_->captureRecorderStopBtn_ != nullptr)
-    host_->captureRecorderStopBtn_->setEnabled(scanActive || capture3dInProgress_);
+    host_->captureRecorderStopBtn_->setEnabled(scanActive || captureMultiviewInProgress_);
 
   if (captureRecorderStatusTimer_ != nullptr) {
     if (scanActive)
@@ -1454,8 +1454,8 @@ void hf::capture::CapturePanelController::updateRecorderStatus() {
       phaseDetail = tr("sample scan\u2026");
     }
     break;
-  case CaptureScanPhase::MoveTo3dScanningPosition:
-    phaseDetail = tr("moving to 3D scanning stage pose\u2026");
+  case CaptureScanPhase::MoveToMultiviewPosition:
+    phaseDetail = tr("moving to Multiview stage pose\u2026");
     break;
   }
 
@@ -1488,7 +1488,7 @@ void hf::capture::CapturePanelController::updateRecorderStatus() {
 
 void hf::capture::CapturePanelController::notifyRecordComplete() {
   const CaptureWriterSessionSummary &summary = lastEndedCaptureSessionSummary_;
-  if (summary.sessionDirectory.isEmpty() && lastCapture3dSummaryText_.isEmpty()) {
+  if (summary.sessionDirectory.isEmpty() && lastCaptureMultiviewSummaryText_.isEmpty()) {
     QMessageBox::information(host_, tr("Recording complete"),
                              tr("The capture scan sequence finished."));
     return;
@@ -1509,11 +1509,11 @@ void hf::capture::CapturePanelController::notifyRecordComplete() {
     if (!streamLines.isEmpty())
       sections.push_back(streamLines.join(QLatin1Char('\n')));
   }
-  if (!lastCapture3dSummaryText_.isEmpty())
-    sections.push_back(lastCapture3dSummaryText_);
+  if (!lastCaptureMultiviewSummaryText_.isEmpty())
+    sections.push_back(lastCaptureMultiviewSummaryText_);
 
   const QString details = sections.join(QStringLiteral("\n\n"));
-  lastCapture3dSummaryText_.clear();
+  lastCaptureMultiviewSummaryText_.clear();
 
   QMessageBox box(host_);
   box.setIcon(QMessageBox::Information);
@@ -1553,7 +1553,7 @@ void hf::capture::CapturePanelController::notifyPreviewComplete() {
 void hf::capture::CapturePanelController::beginRecordCompleteNotify() {
   pendingCaptureRecordCompleteNotify_ = true;
 
-  // Post-process may already be running (started at HSI end) or already finished during 3D.
+  // Post-process may already be running (started at HSI end) or already finished during Multiview.
   captureRecordCompletePostProcessPending_ = capturePostProcessInFlight_;
 
   captureRecordCompleteHomingPending_ =
@@ -1833,8 +1833,8 @@ QString hf::capture::CapturePanelController::buildScanningProcedureSummary(
     sections.push_back(
         QStringLiteral("Hyperspectral: %1")
             .arg(modeLabels.join(QStringLiteral(" \u2192 "))));
-  } else if (capture3dOnlySession_ || capture3dPending_) {
-    sections.push_back(QStringLiteral("Hyperspectral: (none — 3D only)"));
+  } else if (captureMultiviewOnlySession_ || captureMultiviewPending_) {
+    sections.push_back(QStringLiteral("Hyperspectral: (none — Multiview only)"));
   }
 
   QStringList cameraLines;
@@ -1862,17 +1862,17 @@ QString hf::capture::CapturePanelController::buildScanningProcedureSummary(
             .arg(captureScanPlan_.recordScanSpeedMmPerSec, 0, 'f', 1));
   }
 
-  if (capture3dPending_ && canRun3dRgbCapture()) {
-    QStringList threeDLines;
-    threeDLines.push_back(
-        QStringLiteral("3D RGB: UR3e / BFS hemisphere scan"));
-    threeDLines.push_back(
-        QStringLiteral("Stage 3D pose: %1 mm")
-            .arg(hf::hardwareConfig().sample3dScanningPositionMm, 0, 'f', 1));
+  if (captureMultiviewPending_ && canRunMultiviewRgbCapture()) {
+    QStringList multiviewLines;
+    multiviewLines.push_back(
+        QStringLiteral("Multiview RGB: UR3e / BFS hemisphere scan"));
+    multiviewLines.push_back(
+        QStringLiteral("Stage Multiview pose: %1 mm")
+            .arg(hf::hardwareConfig().sampleMultiviewPositionMm, 0, 'f', 1));
 
     if (host_->ur3eHemisphereScanSettings_ != nullptr) {
       const auto params = host_->ur3eHemisphereScanSettings_->params();
-      threeDLines.push_back(
+      multiviewLines.push_back(
           QStringLiteral("Route grid: R%1 mm, %2×%3, θ%4–%5°")
               .arg(qRound(params.sphereRadiusM * 1000.0))
               .arg(params.horizontalPoints)
@@ -1883,20 +1883,15 @@ QString hf::capture::CapturePanelController::buildScanningProcedureSummary(
         const int reachable =
             host_->ur3eHemisphereScanSettings_->plannedReachablePins();
         if (reachable > 0) {
-          threeDLines.push_back(
+          multiviewLines.push_back(
               QStringLiteral("Reachable pins: %1").arg(reachable));
         } else {
-          threeDLines.push_back(QStringLiteral("Plan: ready"));
+          multiviewLines.push_back(QStringLiteral("Plan: ready"));
         }
       }
     }
 
-    if (!capture3dOnlySession_) {
-      threeDLines.push_back(
-          QStringLiteral(
-              "After HSI: stage moves to 3D pose, then you confirm Continue/Skip 3D"));
-    }
-    sections.push_back(threeDLines.join(QLatin1Char('\n')));
+    sections.push_back(multiviewLines.join(QLatin1Char('\n')));
   }
 
   if (host_->capturePreprocessAfterScanCheck_ != nullptr &&
@@ -1995,37 +1990,37 @@ bool hf::capture::CapturePanelController::confirmContinuousCaptureWithoutStage()
   return box.exec() == QMessageBox::Ok;
 }
 
-bool hf::capture::CapturePanelController::confirmContinueWith3dScanningAfterHsi()
+bool hf::capture::CapturePanelController::confirmContinueWithMultiviewAfterHsi()
     const {
   QMessageBox box(host_);
   box.setIcon(QMessageBox::Question);
-  box.setWindowTitle(tr("Continue with 3D scanning?"));
-  box.setText(tr("Stage is at the 3D scanning position."));
+  box.setWindowTitle(tr("Continue with Multiview?"));
+  box.setText(tr("Stage is at the Multiview position."));
   box.setInformativeText(
       tr("Hyperspectral acquisition is complete.\n\n"
          "Continue to run the UR3e / BFS hemisphere scan?\n\n"
-         "Choose Skip 3D to keep only the hyperspectral data "
+         "Choose Skip Multiview to keep only the hyperspectral data "
          "(preprocessing already continues in the background when enabled)."));
   box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
   box.setDefaultButton(QMessageBox::Yes);
   if (QAbstractButton *yesButton = box.button(QMessageBox::Yes))
-    yesButton->setText(tr("Continue 3D"));
+    yesButton->setText(tr("Continue Multiview"));
   if (QAbstractButton *noButton = box.button(QMessageBox::No))
-    noButton->setText(tr("Skip 3D"));
+    noButton->setText(tr("Skip Multiview"));
 
   return box.exec() == QMessageBox::Yes;
 }
 
-void hf::capture::CapturePanelController::finishRecordAfterSkipping3d() {
+void hf::capture::CapturePanelController::finishRecordAfterSkippingMultiview() {
   host_->appendLog(QStringLiteral(
-      "Capture record: 3D scanning skipped by operator — keeping "
+      "Capture record: Multiview skipped by operator — keeping "
       "hyperspectral data only."));
-  capture3dAwaitingOperatorConfirm_ = false;
-  capture3dPending_ = false;
-  capture3dOnlySession_ = false;
-  capture3dInProgress_ = false;
-  capture3dSessionDirectory_.clear();
-  lastCapture3dSummaryText_.clear();
+  captureMultiviewAwaitingOperatorConfirm_ = false;
+  captureMultiviewPending_ = false;
+  captureMultiviewOnlySession_ = false;
+  captureMultiviewInProgress_ = false;
+  captureMultiviewSessionDirectory_.clear();
+  lastCaptureMultiviewSummaryText_.clear();
 
   if (isStageRecordingEnabledInUi() && host_->stageWorker() != nullptr)
     host_->stageWorker()->requestStopMotion();
@@ -2345,18 +2340,18 @@ void hf::capture::CapturePanelController::onCaptureAbsoluteMoveComplete(
     return;
   }
 
-  if (completedPhase == CaptureScanPhase::MoveTo3dScanningPosition) {
-    if (capture3dAwaitingOperatorConfirm_) {
-      capture3dAwaitingOperatorConfirm_ = false;
-      if (!confirmContinueWith3dScanningAfterHsi()) {
-        finishRecordAfterSkipping3d();
+  if (completedPhase == CaptureScanPhase::MoveToMultiviewPosition) {
+    if (captureMultiviewAwaitingOperatorConfirm_) {
+      captureMultiviewAwaitingOperatorConfirm_ = false;
+      if (!confirmContinueWithMultiviewAfterHsi()) {
+        finishRecordAfterSkippingMultiview();
         return;
       }
       host_->appendLog(QStringLiteral(
-          "Capture record: operator confirmed 3D — starting hemisphere capture…"));
+          "Capture record: operator confirmed Multiview — starting hemisphere capture…"));
     }
 
-    startHemisphere3dCaptureAfterStageMove();
+    startHemisphereMultiviewCaptureAfterStageMove();
     return;
   }
 }
@@ -3099,17 +3094,17 @@ void hf::capture::CapturePanelController::completeCaptureSequence() {
   capturePendingIlluminationModes_.clear();
   captureCurrentModeIndex_ = 0;
 
-  if (wasRecord && capture3dPending_ && canRun3dRgbCapture()) {
-    // Close HSI dump now so preprocessing can run while stage moves / 3D proceeds.
-    if (capture3dSessionDirectory_.isEmpty() && captureWriterWorker_ != nullptr)
-      capture3dSessionDirectory_ = captureWriterWorker_->sessionDirectory();
+  if (wasRecord && captureMultiviewPending_ && canRunMultiviewRgbCapture()) {
+    // Close HSI dump now so preprocessing can run while stage moves / Multiview proceeds.
+    if (captureMultiviewSessionDirectory_.isEmpty() && captureWriterWorker_ != nullptr)
+      captureMultiviewSessionDirectory_ = captureWriterWorker_->sessionDirectory();
     endCaptureRawDumpSession();
     runCapturePostProcessingIfEnabled();
 
     host_->appendLog(QStringLiteral(
-        "Capture record: HSI finished — moving stage to 3D pose, then confirm…"));
-    capture3dAwaitingOperatorConfirm_ = true;
-    begin3dScanningCapturePhase();
+        "Capture record: HSI finished — moving stage to Multiview pose, then confirm…"));
+    captureMultiviewAwaitingOperatorConfirm_ = true;
+    beginMultiviewCapturePhase();
     return;
   }
 
@@ -3117,14 +3112,14 @@ void hf::capture::CapturePanelController::completeCaptureSequence() {
     host_->stageWorker()->requestStopMotion();
 
   captureRecorderMode_ = CaptureRecorderMode::Idle;
-  capture3dPending_ = false;
-  capture3dOnlySession_ = false;
+  captureMultiviewPending_ = false;
+  captureMultiviewOnlySession_ = false;
   updateRecorderControls();
   host_->lightPanel()->updateConnectionDisplay();
   host_->lightPanel()->updateControlsEnabled();
 
   if (wasRecord) {
-    if (!capture3dOnlySession_)
+    if (!captureMultiviewOnlySession_)
       endCaptureRawDumpSession();
     runCapturePostProcessingIfEnabled();
     host_->appendLog(QStringLiteral("Capture record: scan sequence finished."));
@@ -3139,14 +3134,14 @@ void hf::capture::CapturePanelController::completeCaptureSequence() {
   }
 }
 
-void hf::capture::CapturePanelController::finishCaptureSequenceAfterOptional3d() {
+void hf::capture::CapturePanelController::finishCaptureSequenceAfterOptionalMultiview() {
   const bool wasRecord = captureRecorderMode_ == CaptureRecorderMode::Record;
-  const bool threeDOnly = capture3dOnlySession_;
-  const QString threeDSessionDir = capture3dSessionDirectory_;
-  capture3dInProgress_ = false;
-  capture3dPending_ = false;
-  capture3dOnlySession_ = false;
-  capture3dSessionDirectory_.clear();
+  const bool multiviewOnly = captureMultiviewOnlySession_;
+  const QString multiviewSessionDir = captureMultiviewSessionDirectory_;
+  captureMultiviewInProgress_ = false;
+  captureMultiviewPending_ = false;
+  captureMultiviewOnlySession_ = false;
+  captureMultiviewSessionDirectory_.clear();
 
   if (isStageRecordingEnabledInUi() && host_->stageWorker() != nullptr)
     host_->stageWorker()->requestStopMotion();
@@ -3158,11 +3153,11 @@ void hf::capture::CapturePanelController::finishCaptureSequenceAfterOptional3d()
   host_->lightPanel()->updateControlsEnabled();
 
   if (wasRecord) {
-    if (!threeDOnly)
+    if (!multiviewOnly)
       endCaptureRawDumpSession(); // no-op if already closed after HSI
-    else if (!threeDSessionDir.isEmpty())
-      lastEndedCaptureSessionSummary_.sessionDirectory = threeDSessionDir;
-    // HSI+3D already started post-process at HSI end; 3D-only starts it here.
+    else if (!multiviewSessionDir.isEmpty())
+      lastEndedCaptureSessionSummary_.sessionDirectory = multiviewSessionDir;
+    // HSI+Multiview already started post-process at HSI end; Multiview-only starts it here.
     if (!capturePostProcessStartedForSession_)
       runCapturePostProcessingIfEnabled();
     host_->appendLog(QStringLiteral("Capture record: scan sequence finished."));
@@ -3280,11 +3275,11 @@ void hf::capture::CapturePanelController::startPreview() {
   if (captureRecorderMode_ != CaptureRecorderMode::Idle)
     return;
 
-  if (is3dRgbCaptureSelected() && canRun3dRgbCapture()) {
+  if (isMultiviewRgbCaptureSelected() && canRunMultiviewRgbCapture()) {
     if (host_->ur3ePanel() == nullptr)
       return;
     host_->appendLog(QStringLiteral(
-        "Capture preview: 3D RGB enabled — running UR3e scan execute (motion only)…"));
+        "Capture preview: Multiview RGB enabled — running UR3e scan execute (motion only)…"));
     if (!host_->ur3ePanel()->startHemisphereScanExecute({}))
       host_->appendLog(QStringLiteral("Capture preview: UR3e scan execute rejected."));
     return;
@@ -4161,13 +4156,13 @@ void hf::capture::CapturePanelController::startRecord() {
     return;
   }
 
-  const bool want3d = is3dRgbCaptureSelected() && canRun3dRgbCapture();
+  const bool wantMultiview = isMultiviewRgbCaptureSelected() && canRunMultiviewRgbCapture();
   const bool wantHsi = hasHsiCaptureSelection();
 
-  if (!want3d && !wantHsi) {
+  if (!wantMultiview && !wantHsi) {
     notifyRecordBlocked(
         tr("Select reflectance/transmittance with a connected HSI camera, "
-           "and/or enable 3D RGB with a planned UR3e route."));
+           "and/or enable Multiview RGB with a planned UR3e route."));
     return;
   }
 
@@ -4176,18 +4171,18 @@ void hf::capture::CapturePanelController::startRecord() {
     return;
   }
 
-  capture3dPending_ = want3d;
-  capture3dOnlySession_ = want3d && !wantHsi;
-  capture3dSessionDirectory_.clear();
-  lastCapture3dSummaryText_.clear();
-  capture3dAwaitingOperatorConfirm_ = false;
+  captureMultiviewPending_ = wantMultiview;
+  captureMultiviewOnlySession_ = wantMultiview && !wantHsi;
+  captureMultiviewSessionDirectory_.clear();
+  lastCaptureMultiviewSummaryText_.clear();
+  captureMultiviewAwaitingOperatorConfirm_ = false;
   capturePostProcessStartedForSession_ = false;
   capturePostProcessInFlight_ = false;
 
   if (!wantHsi) {
-    if (!begin3dOnlyDatasetSession(errorMessage)) {
-      capture3dPending_ = false;
-      capture3dOnlySession_ = false;
+    if (!beginMultiviewOnlyDatasetSession(errorMessage)) {
+      captureMultiviewPending_ = false;
+      captureMultiviewOnlySession_ = false;
       notifyRecordBlocked(errorMessage);
       return;
     }
@@ -4199,15 +4194,15 @@ void hf::capture::CapturePanelController::startRecord() {
     QMessageBox box(host_);
     box.setIcon(QMessageBox::Information);
     box.setWindowTitle(tr("Scanning procedure"));
-    box.setText(tr("Ready to start 3D-only recording?"));
+    box.setText(tr("Ready to start Multiview-only recording?"));
     box.setInformativeText(buildScanningProcedureSummary());
     box.setStandardButtons(QMessageBox::Ok | QMessageBox::Cancel);
     box.setDefaultButton(QMessageBox::Ok);
     if (QAbstractButton *continueButton = box.button(QMessageBox::Ok))
       continueButton->setText(QStringLiteral("Continue"));
     if (box.exec() != QMessageBox::Ok) {
-      capture3dPending_ = false;
-      capture3dOnlySession_ = false;
+      captureMultiviewPending_ = false;
+      captureMultiviewOnlySession_ = false;
       captureRecorderMode_ = CaptureRecorderMode::Idle;
       updateRecorderControls();
       host_->appendLog(QStringLiteral("Capture record: cancelled by operator."));
@@ -4215,9 +4210,9 @@ void hf::capture::CapturePanelController::startRecord() {
     }
 
     host_->appendLog(
-        QStringLiteral("Capture record: 3D-only session %1")
-            .arg(capture3dSessionDirectory_));
-    begin3dScanningCapturePhase();
+        QStringLiteral("Capture record: Multiview-only session %1")
+            .arg(captureMultiviewSessionDirectory_));
+    beginMultiviewCapturePhase();
     return;
   }
 
@@ -4259,8 +4254,8 @@ void hf::capture::CapturePanelController::startRecord() {
     return;
   }
 
-  if (want3d && captureWriterWorker_ != nullptr)
-    capture3dSessionDirectory_ = captureWriterWorker_->sessionDirectory();
+  if (wantMultiview && captureWriterWorker_ != nullptr)
+    captureMultiviewSessionDirectory_ = captureWriterWorker_->sessionDirectory();
 
   resetCaptureSequenceState();
   captureRecorderMode_ = CaptureRecorderMode::Record;
@@ -4288,11 +4283,11 @@ void hf::capture::CapturePanelController::startRecord() {
                                   "transmittance when both selected)")
                        .arg(modeFolders.join(QStringLiteral(", "))));
 
-  if (want3d)
+  if (wantMultiview)
     host_->appendLog(QStringLiteral(
-        "Capture record: after HSI, stage moves to 3D pose (%1 mm), then "
-        "Continue/Skip 3D. Preprocessing can start as soon as HSI is saved.")
-                         .arg(hf::hardwareConfig().sample3dScanningPositionMm, 0, 'f', 0));
+        "Capture record: after HSI, stage moves to Multiview pose (%1 mm), then "
+        "Continue/Skip Multiview. Preprocessing can start as soon as HSI is saved.")
+                         .arg(hf::hardwareConfig().sampleMultiviewPositionMm, 0, 'f', 0));
 
   host_->appendLog(QStringLiteral("Capture record: session %1 \u2014 "
                                   "per-camera white/bright ref from cfg, "
@@ -4321,10 +4316,10 @@ void hf::capture::CapturePanelController::homeStageBeforeCapture() {
 }
 
 void hf::capture::CapturePanelController::stopRecorder() {
-  if (captureRecorderMode_ == CaptureRecorderMode::Idle && !capture3dInProgress_)
+  if (captureRecorderMode_ == CaptureRecorderMode::Idle && !captureMultiviewInProgress_)
     return;
 
-  if (capture3dInProgress_ && host_->ur3ePanel() != nullptr)
+  if (captureMultiviewInProgress_ && host_->ur3ePanel() != nullptr)
     host_->ur3ePanel()->requestStopMotion();
 
   if (captureScanTimer_ != nullptr)
@@ -4344,14 +4339,14 @@ void hf::capture::CapturePanelController::stopRecorder() {
 
   const bool wasRecord = captureRecorderMode_ == CaptureRecorderMode::Record;
   const bool wasPreview = captureRecorderMode_ == CaptureRecorderMode::Preview;
-  const bool threeDOnly = capture3dOnlySession_;
+  const bool multiviewOnly = captureMultiviewOnlySession_;
   captureRecorderMode_ = CaptureRecorderMode::Idle;
   captureStageSequenceActive_ = false;
-  capture3dInProgress_ = false;
-  capture3dPending_ = false;
-  capture3dOnlySession_ = false;
-  capture3dAwaitingOperatorConfirm_ = false;
-  capture3dSessionDirectory_.clear();
+  captureMultiviewInProgress_ = false;
+  captureMultiviewPending_ = false;
+  captureMultiviewOnlySession_ = false;
+  captureMultiviewAwaitingOperatorConfirm_ = false;
+  captureMultiviewSessionDirectory_.clear();
   resetCaptureSequenceState();
   capturePendingIlluminationModes_.clear();
   captureCurrentModeIndex_ = 0;
@@ -4360,7 +4355,7 @@ void hf::capture::CapturePanelController::stopRecorder() {
   host_->lightPanel()->updateControlsEnabled();
 
   if (wasRecord) {
-    if (!threeDOnly)
+    if (!multiviewOnly)
       endCaptureRawDumpSession();
     host_->appendLog(QStringLiteral("Capture record: stopped."));
     homeStageAfterCapture();
@@ -4434,7 +4429,7 @@ void hf::capture::CapturePanelController::updateCamerasList() {
   }
 
   updateDualCameraSyncControls();
-  syncBfsAnd3dRgbCaptureControls();
+  syncBfsAndMultiviewRgbCaptureControls();
 
   if (host_->captureCamerasEmptyLabel_ != nullptr) {
     const bool anyConnected = isConnected(host_->camera1Ui_) ||
@@ -4451,13 +4446,13 @@ bool hf::capture::CapturePanelController::isBfsCaptureSelected() const {
          host_->captureBfsCheck_->isChecked();
 }
 
-bool hf::capture::CapturePanelController::is3dRgbCaptureSelected() const {
-  return host_->capture3dRgbCheck_ != nullptr &&
-         host_->capture3dRgbCheck_->isEnabled() &&
-         host_->capture3dRgbCheck_->isChecked();
+bool hf::capture::CapturePanelController::isMultiviewRgbCaptureSelected() const {
+  return host_->captureMultiviewRgbCheck_ != nullptr &&
+         host_->captureMultiviewRgbCheck_->isEnabled() &&
+         host_->captureMultiviewRgbCheck_->isChecked();
 }
 
-bool hf::capture::CapturePanelController::canRun3dRgbCapture() const {
+bool hf::capture::CapturePanelController::canRunMultiviewRgbCapture() const {
   return host_->ur3ePanel() != nullptr && host_->ur3ePanel()->isRobotConnected()
          && host_->ur3ePanel()->isScanPlanReady() && isCaptureStageConnected()
          && host_->bfsPanel() != nullptr && host_->bfsPanel()->isCameraConnected();
@@ -4471,16 +4466,16 @@ bool hf::capture::CapturePanelController::hasHsiCaptureSelection() const {
   return selectedCaptureIlluminationModes(modes) && !modes.empty();
 }
 
-QString hf::capture::CapturePanelController::capture3dScanningOutputDir() const {
-  QString sessionDir = capture3dSessionDirectory_;
+QString hf::capture::CapturePanelController::captureMultiviewOutputDir() const {
+  QString sessionDir = captureMultiviewSessionDirectory_;
   if (sessionDir.isEmpty() && captureWriterWorker_ != nullptr)
     sessionDir = captureWriterWorker_->sessionDirectory();
   if (sessionDir.isEmpty())
     return {};
-  return QDir(sessionDir).filePath(QStringLiteral("3d_scanning"));
+  return QDir(sessionDir).filePath(QStringLiteral("multiview"));
 }
 
-bool hf::capture::CapturePanelController::begin3dOnlyDatasetSession(
+bool hf::capture::CapturePanelController::beginMultiviewOnlyDatasetSession(
     QString &errorMessage) {
   if (!validateCaptureRecordMetadata(errorMessage))
     return false;
@@ -4493,51 +4488,51 @@ bool hf::capture::CapturePanelController::begin3dOnlyDatasetSession(
         QStringLiteral("Could not create dataset folder:\n%1").arg(sessionDir);
     return false;
   }
-  const QString threeDDir = QDir(sessionDir).filePath(QStringLiteral("3d_scanning"));
-  if (!QDir().mkpath(threeDDir)) {
+  const QString multiviewDir = QDir(sessionDir).filePath(QStringLiteral("multiview"));
+  if (!QDir().mkpath(multiviewDir)) {
     errorMessage =
-        QStringLiteral("Could not create 3d_scanning folder:\n%1").arg(threeDDir);
+        QStringLiteral("Could not create multiview folder:\n%1").arg(multiviewDir);
     return false;
   }
 
-  capture3dSessionDirectory_ = sessionDir;
+  captureMultiviewSessionDirectory_ = sessionDir;
   lastEndedCaptureSessionSummary_ = {};
   lastEndedCaptureSessionSummary_.sessionDirectory = sessionDir;
   return true;
 }
 
-void hf::capture::CapturePanelController::begin3dScanningCapturePhase() {
+void hf::capture::CapturePanelController::beginMultiviewCapturePhase() {
   if (host_->stageWorker() == nullptr
       || host_->stageWorker()->currentState() != StageState::Connected) {
-    capture3dAwaitingOperatorConfirm_ = false;
-    failCaptureSequence(QStringLiteral("%1: stage is not connected for 3D scan.")
+    captureMultiviewAwaitingOperatorConfirm_ = false;
+    failCaptureSequence(QStringLiteral("%1: stage is not connected for Multiview.")
                             .arg(captureSequenceLogPrefix()));
     return;
   }
 
-  if (capture3dSessionDirectory_.isEmpty() && captureWriterWorker_ != nullptr)
-    capture3dSessionDirectory_ = captureWriterWorker_->sessionDirectory();
+  if (captureMultiviewSessionDirectory_.isEmpty() && captureWriterWorker_ != nullptr)
+    captureMultiviewSessionDirectory_ = captureWriterWorker_->sessionDirectory();
 
-  const double targetMm = hf::hardwareConfig().sample3dScanningPositionMm;
-  captureScanPhase_ = CaptureScanPhase::MoveTo3dScanningPosition;
+  const double targetMm = hf::hardwareConfig().sampleMultiviewPositionMm;
+  captureScanPhase_ = CaptureScanPhase::MoveToMultiviewPosition;
   host_->appendLog(
-      QStringLiteral("%1: moving stage to 3D scanning pose %2 mm…")
+      QStringLiteral("%1: moving stage to Multiview pose %2 mm…")
           .arg(captureSequenceLogPrefix())
           .arg(targetMm, 0, 'f', 2));
-  requestCaptureAbsoluteMove(targetMm, CaptureScanPhase::MoveTo3dScanningPosition);
+  requestCaptureAbsoluteMove(targetMm, CaptureScanPhase::MoveToMultiviewPosition);
   updateRecorderStatus();
 }
 
-void hf::capture::CapturePanelController::startHemisphere3dCaptureAfterStageMove() {
+void hf::capture::CapturePanelController::startHemisphereMultiviewCaptureAfterStageMove() {
   if (host_->ur3ePanel() == nullptr) {
-    failCaptureSequence(QStringLiteral("%1: UR3e panel unavailable for 3D scan.")
+    failCaptureSequence(QStringLiteral("%1: UR3e panel unavailable for Multiview.")
                             .arg(captureSequenceLogPrefix()));
     return;
   }
 
-  const QString outDir = capture3dScanningOutputDir();
+  const QString outDir = captureMultiviewOutputDir();
   if (outDir.isEmpty()) {
-    failCaptureSequence(QStringLiteral("%1: 3D scanning output directory is empty.")
+    failCaptureSequence(QStringLiteral("%1: Multiview output directory is empty.")
                             .arg(captureSequenceLogPrefix()));
     return;
   }
@@ -4547,38 +4542,38 @@ void hf::capture::CapturePanelController::startHemisphere3dCaptureAfterStageMove
   opts.captureOutputDir = outDir;
   opts.stabilizeMs = hf::hardwareConfig().ur3e.scanCaptureStabilizeMs;
   opts.suppressUiSummary = true;
-  capture3dInProgress_ = true;
-  lastCapture3dSummaryText_.clear();
+  captureMultiviewInProgress_ = true;
+  lastCaptureMultiviewSummaryText_.clear();
   host_->appendLog(
-      QStringLiteral("%1: hemisphere 3D capture → %2 (%3 ms settle per pose; wrist sweep if enabled)…")
+      QStringLiteral("%1: hemisphere Multiview capture → %2 (%3 ms settle per pose; wrist sweep if enabled)…")
           .arg(captureSequenceLogPrefix(), outDir)
           .arg(opts.stabilizeMs));
 
   connect(host_->ur3ePanel(),
           &hf::ur3e::Ur3ePanelController::hemisphereScanExecuteFinished,
           this,
-          &CapturePanelController::on3dScanningCaptureFinished,
+          &CapturePanelController::onMultiviewCaptureFinished,
           Qt::UniqueConnection);
 
   if (!host_->ur3ePanel()->startHemisphereScanExecute(opts)) {
-    capture3dInProgress_ = false;
+    captureMultiviewInProgress_ = false;
     failCaptureSequence(
-        QStringLiteral("%1: could not start UR3e 3D scan execute.")
+        QStringLiteral("%1: could not start UR3e Multiview execute.")
             .arg(captureSequenceLogPrefix()));
   }
 }
 
-void hf::capture::CapturePanelController::on3dScanningCaptureFinished(
+void hf::capture::CapturePanelController::onMultiviewCaptureFinished(
     const bool ok,
     const QString &detail,
     const int capturedFrameCount,
     const int successfulPins,
     const qint64 elapsedMs) {
-  if (!capture3dInProgress_)
+  if (!captureMultiviewInProgress_)
     return;
 
   host_->appendLog(
-      QStringLiteral("%1: 3D scanning %2 (%3 frame(s)) — %4")
+      QStringLiteral("%1: Multiview %2 (%3 frame(s)) — %4")
           .arg(captureSequenceLogPrefix())
           .arg(ok ? QStringLiteral("finished") : QStringLiteral("failed"))
           .arg(capturedFrameCount)
@@ -4588,8 +4583,8 @@ void hf::capture::CapturePanelController::on3dScanningCaptureFinished(
     const qint64 totalSec = (elapsedMs > 0 ? elapsedMs : qint64{0}) / 1000;
     const qint64 minutes = totalSec / 60;
     const qint64 seconds = totalSec % 60;
-    lastCapture3dSummaryText_ =
-        QStringLiteral("3D scanning\n"
+    lastCaptureMultiviewSummaryText_ =
+        QStringLiteral("Multiview\n"
                        "Successful pins: %1\n"
                        "Multiview images recorded: %2\n"
                        "Scanning time: %3:%4")
@@ -4598,23 +4593,23 @@ void hf::capture::CapturePanelController::on3dScanningCaptureFinished(
             .arg(minutes)
             .arg(seconds, 2, 10, QLatin1Char('0'));
   } else {
-    lastCapture3dSummaryText_.clear();
+    lastCaptureMultiviewSummaryText_.clear();
   }
 
   if (!ok && captureRecorderMode_ == CaptureRecorderMode::Record) {
-    capture3dInProgress_ = false;
+    captureMultiviewInProgress_ = false;
     failCaptureSequence(
-        QStringLiteral("%1: 3D scanning failed — %2")
+        QStringLiteral("%1: Multiview failed — %2")
             .arg(captureSequenceLogPrefix(), detail));
     return;
   }
 
-  finishCaptureSequenceAfterOptional3d();
+  finishCaptureSequenceAfterOptionalMultiview();
 }
 
-void hf::capture::CapturePanelController::syncBfsAnd3dRgbCaptureControls(
+void hf::capture::CapturePanelController::syncBfsAndMultiviewRgbCaptureControls(
     QObject *source) {
-  if (host_ == nullptr || syncingBfs3dSelection_)
+  if (host_ == nullptr || syncingBfsMultiviewSelection_)
     return;
 
   const bool planReady =
@@ -4624,54 +4619,54 @@ void hf::capture::CapturePanelController::syncBfsAnd3dRgbCaptureControls(
   const bool stageConnected = isCaptureStageConnected();
   const bool bfsVisible = host_->captureBfsCheck_ != nullptr &&
                           !host_->captureBfsCheck_->isHidden();
-  const bool threeDReady =
+  const bool multiviewReady =
       planReady && robotConnected && stageConnected && bfsVisible;
 
-  if (host_->capture3dRgbCheck_ != nullptr) {
-    host_->capture3dRgbCheck_->setEnabled(threeDReady);
-    if (!threeDReady) {
-      const QSignalBlocker blocker(host_->capture3dRgbCheck_);
-      host_->capture3dRgbCheck_->setChecked(false);
+  if (host_->captureMultiviewRgbCheck_ != nullptr) {
+    host_->captureMultiviewRgbCheck_->setEnabled(multiviewReady);
+    if (!multiviewReady) {
+      const QSignalBlocker blocker(host_->captureMultiviewRgbCheck_);
+      host_->captureMultiviewRgbCheck_->setChecked(false);
       if (!bfsVisible) {
-        host_->capture3dRgbCheck_->setToolTip(
-            tr("Connect the BFS camera to enable 3D RGB capture."));
+        host_->captureMultiviewRgbCheck_->setToolTip(
+            tr("Connect the BFS camera to enable Multiview RGB capture."));
       } else if (!robotConnected) {
-        host_->capture3dRgbCheck_->setToolTip(
-            tr("Connect the UR3e robot to enable 3D RGB capture."));
+        host_->captureMultiviewRgbCheck_->setToolTip(
+            tr("Connect the UR3e robot to enable Multiview RGB capture."));
       } else if (!stageConnected) {
-        host_->capture3dRgbCheck_->setToolTip(
-            tr("Connect the stage to enable 3D RGB capture."));
+        host_->captureMultiviewRgbCheck_->setToolTip(
+            tr("Connect the stage to enable Multiview RGB capture."));
       } else {
-        host_->capture3dRgbCheck_->setToolTip(
-            tr("BFS RGB for 3D scanning. Plan a UR3e scan route with reachable "
+        host_->captureMultiviewRgbCheck_->setToolTip(
+            tr("BFS RGB for Multiview. Plan a UR3e scan route with reachable "
                "poses first."));
       }
     } else {
-      host_->capture3dRgbCheck_->setToolTip(
-          tr("BFS RGB for 3D scanning (synced with the BFS camera checkbox). "
-             "Preview = UR3e Execute; Record = stage → 3D pose then stills."));
+      host_->captureMultiviewRgbCheck_->setToolTip(
+          tr("BFS RGB for Multiview (synced with the BFS camera checkbox). "
+             "Preview = UR3e Execute; Record = stage → Multiview pose then stills."));
     }
   }
 
-  syncingBfs3dSelection_ = true;
+  syncingBfsMultiviewSelection_ = true;
 
-  if (source == host_->captureBfsCheck_ && host_->capture3dRgbCheck_ != nullptr) {
-    if (isBfsCaptureSelected() && threeDReady)
-      host_->capture3dRgbCheck_->setChecked(true);
+  if (source == host_->captureBfsCheck_ && host_->captureMultiviewRgbCheck_ != nullptr) {
+    if (isBfsCaptureSelected() && multiviewReady)
+      host_->captureMultiviewRgbCheck_->setChecked(true);
     else
-      host_->capture3dRgbCheck_->setChecked(false);
-  } else if (source == host_->capture3dRgbCheck_ &&
+      host_->captureMultiviewRgbCheck_->setChecked(false);
+  } else if (source == host_->captureMultiviewRgbCheck_ &&
              host_->captureBfsCheck_ != nullptr && bfsVisible) {
     host_->captureBfsCheck_->setChecked(
-        host_->capture3dRgbCheck_ != nullptr &&
-        host_->capture3dRgbCheck_->isChecked());
-  } else if (threeDReady && isBfsCaptureSelected() &&
-             host_->capture3dRgbCheck_ != nullptr &&
-             !host_->capture3dRgbCheck_->isChecked()) {
-    host_->capture3dRgbCheck_->setChecked(true);
+        host_->captureMultiviewRgbCheck_ != nullptr &&
+        host_->captureMultiviewRgbCheck_->isChecked());
+  } else if (multiviewReady && isBfsCaptureSelected() &&
+             host_->captureMultiviewRgbCheck_ != nullptr &&
+             !host_->captureMultiviewRgbCheck_->isChecked()) {
+    host_->captureMultiviewRgbCheck_->setChecked(true);
   }
 
-  syncingBfs3dSelection_ = false;
+  syncingBfsMultiviewSelection_ = false;
 }
 
 LumoCameraUi *hf::capture::CapturePanelController::cameraUiForIndex(

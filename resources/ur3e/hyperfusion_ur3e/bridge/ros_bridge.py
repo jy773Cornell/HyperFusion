@@ -1264,13 +1264,26 @@ class Ur3eRosBridge:
         raise RuntimeError("Robot not connected.")
       # Must refresh from TF — never return the TcpPose() default (z=0.4).
       self._update_pose_from_tf_unlocked(timeout_s=1.5)
-      return {
+      payload: Dict[str, Any] = {
           "ok": True,
           "pose": self._pose.as_list(),
           "frame": "base_link",
           "tip_link": "hyperfusion_tcp",
           **self.status().to_dict(),
       }
+      # Extra fields for BFS/UR3e calibration (hand–eye uses tool0, not CAD TCP).
+      try:
+        tool0 = self._lookup_base_link_pose_unlocked("tool0", timeout_s=1.0)
+        payload["tool0"] = tool0.as_list()
+        payload["tool0_link"] = "tool0"
+      except Exception:
+        payload["tool0"] = None
+      try:
+        names, positions = self._ordered_joint_state_unlocked()
+        payload["joints"] = {"names": names, "positions": list(positions)}
+      except Exception:
+        payload["joints"] = None
+      return payload
 
   def get_joints(self) -> Dict[str, Any]:
     with self._lock:
@@ -1522,12 +1535,10 @@ class Ur3eRosBridge:
     result_future = goal_handle.get_result_async()
     self._wait_future(result_future, 30.0)
 
-  def _update_pose_from_tf_unlocked(self, timeout_s: float = 5.0) -> None:
-    """Refresh self._pose as base_link-frame optical TCP (UR rotvec).
-
-    Depth / capture JSON use robot base as origin with tip hyperfusion_tcp
-    (tool_tcp_* offset). Independent of tray/world mount height.
-    """
+  def _lookup_base_link_pose_unlocked(
+      self, child_link: str, timeout_s: float = 5.0
+  ) -> TcpPose:
+    """Live TF base_link → child (UR rotvec). Caller must hold self._lock."""
     from rclpy.duration import Duration
     import rclpy
 
@@ -1543,7 +1554,7 @@ class Ur3eRosBridge:
       try:
         transform = self._tf_buffer.lookup_transform(
             "base_link",
-            "hyperfusion_tcp",
+            child_link,
             rclpy.time.Time(),
             timeout=Duration(seconds=0.1),
         )
@@ -1554,8 +1565,7 @@ class Ur3eRosBridge:
 
     if transform is None:
       raise RuntimeError(
-          "Could not read base_link→hyperfusion_tcp from TF "
-          f"(needed for scan pose / depth JSON): {last_error}"
+          f"Could not read base_link→{child_link} from TF: {last_error}"
       )
 
     t = transform.transform.translation
@@ -1563,7 +1573,15 @@ class Ur3eRosBridge:
     rx, ry, rz = quaternion_to_rotvec(
         float(q.x), float(q.y), float(q.z), float(q.w)
     )
-    self._pose = TcpPose(float(t.x), float(t.y), float(t.z), rx, ry, rz)
+    return TcpPose(float(t.x), float(t.y), float(t.z), rx, ry, rz)
+
+  def _update_pose_from_tf_unlocked(self, timeout_s: float = 5.0) -> None:
+    """Refresh self._pose as base_link-frame optical TCP (UR rotvec).
+
+    Depth / capture JSON use robot base as origin with tip hyperfusion_tcp
+    (tool_tcp_* offset). Independent of tray/world mount height.
+    """
+    self._pose = self._lookup_base_link_pose_unlocked("hyperfusion_tcp", timeout_s)
 
   def _finish_pose_fallback(self, delay_s: float) -> None:
     time.sleep(delay_s)

@@ -1,4 +1,4 @@
-// Application log channel labels and message routing.
+﻿// Application log channel labels and message routing.
 #include "frontend/logging/AppLog.hpp"
 
 namespace hf::log
@@ -27,7 +27,7 @@ QString channelLabel(Channel channel)
     case Channel::Light:
         return QStringLiteral("Light");
     case Channel::Ur3e:
-        return QStringLiteral("3D Scanning");
+        return QStringLiteral("Multiview");
     case Channel::Capture:
         return QStringLiteral("Capture");
     }

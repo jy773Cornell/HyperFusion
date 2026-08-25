@@ -56,15 +56,23 @@ def match_by_sorted_order(
     sw_records: list[CentroidRecord],
     max_pair_distance_mm: float = 50.0,
 ) -> list[MatchedPair]:
-    fx_sorted = _sort_left_to_right(fx_records)
-    sw_sorted = _sort_left_to_right(sw_records)
-    if len(fx_sorted) != len(sw_sorted):
+    if len(fx_records) != len(sw_records):
         raise ValueError(
-            f"Object count mismatch: fx10e={len(fx_sorted)} swir3={len(sw_sorted)} "
+            f"Object count mismatch: fx10e={len(fx_records)} swir3={len(sw_records)} "
             "(Hungarian matching not implemented yet; need equal counts)"
         )
-    if len(fx_sorted) < 1:
-        raise ValueError(f"Need at least 1 matched object, got {len(fx_sorted)}")
+    if len(fx_records) < 1:
+        raise ValueError(f"Need at least 1 matched object, got {len(fx_records)}")
+
+    fx_by_roi = {record.roi: record for record in fx_records}
+    sw_by_roi = {record.roi: record for record in sw_records}
+    # GSAM assigns row-major ROI ids (top-to-bottom, right-to-left); prefer those when both cameras share the same set.
+    if set(fx_by_roi) == set(sw_by_roi):
+        fx_sorted = [fx_by_roi[roi] for roi in sorted(fx_by_roi)]
+        sw_sorted = [sw_by_roi[roi] for roi in sorted(sw_by_roi)]
+    else:
+        fx_sorted = _sort_left_to_right(fx_records)
+        sw_sorted = _sort_left_to_right(sw_records)
 
     pairs: list[MatchedPair] = []
     for index, (fx, sw) in enumerate(zip(fx_sorted, sw_sorted)):

@@ -1,0 +1,46 @@
+rms_px: 0.9584661444861872
+width: 4096
+height: 3000
+K:
+- - 1787.820905328422
+  - 0.0
+  - 2084.4011955271963
+- - 0.0
+  - 1787.499380533722
+  - 1526.0259879957282
+- - 0.0
+  - 0.0
+  - 1.0
+D:
+- -0.1622346513814648
+- 0.10156066649669089
+- 0.002522850618512478
+- 0.0006869229368931268
+- -0.029189457767694115
+model: brown_conrady_k1_k2_p1_p2_k3
+newK:
+- - 1787.820905328422
+  - 0.0
+  - 2084.4011955271963
+- - 0.0
+  - 1787.4993805337222
+  - 1526.0259879957284
+- - 0.0
+  - 0.0
+  - 1.0
+roi_xywh:
+- 0
+- 0
+- 4095
+- 2999
+hyperfusion_cfg:
+  bfs_camera_fx: 1787.820905328422
+  bfs_camera_fy: 1787.499380533722
+  bfs_camera_cx: 2084.4011955271963
+  bfs_camera_cy: 1526.0259879957282
+  bfs_camera_distortion: -0.16223465, 0.10156067, 0.0025228506, 0.00068692294, -0.029189458
+n_images: 64
+pass_rms_px_lt_0_5: false
+warning: RMS too high and/or fx far from the BFS nominal (~4638 px). Do not copy into
+  hyperfusion.cfg. Recapture with close/far poses and board near image edges; a look-at-center
+  hemisphere set is too similar.

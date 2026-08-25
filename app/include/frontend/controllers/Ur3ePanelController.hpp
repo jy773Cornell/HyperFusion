@@ -1,4 +1,4 @@
-// UR3e tab orchestration: WSL sidecar lifecycle, robot connect, pose polling, motion.
+﻿// UR3e tab orchestration: WSL sidecar lifecycle, robot connect, pose polling, motion.
 #pragma once
 
 #include <QObject>
@@ -6,9 +6,10 @@
 #include <QStringList>
 #include <QVariant>
 
-#include "backend/3dscanning/Ur3eHemisphereScanReachability.hpp"
-#include "backend/3dscanning/Ur3eServerManager.hpp"
-#include "backend/3dscanning/Ur3eClient.hpp"
+#include "backend/multiview/Ur3eHemisphereScanReachability.hpp"
+#include "backend/multiview/Ur3eServerManager.hpp"
+#include "backend/multiview/Ur3eClient.hpp"
+#include "backend/multiview/Ur3eCameraTransforms.hpp"
 
 #include <atomic>
 #include <memory>
@@ -31,7 +32,7 @@ struct HemisphereScanExecuteOptions
     QString captureOutputDir;
     /// Dwell after arriving at each pin before optional capture (ms).
     int stabilizeMs = 2000;
-    /// When true (Capture-driven 3D), skip the standalone UR3e summary dialog on success —
+    /// When true (Capture-driven Multiview), skip the standalone UR3e summary dialog on success —
     /// Capture merges the scan stats into Recording complete.
     bool suppressUiSummary = false;
 };
@@ -58,8 +59,10 @@ public:
     [[nodiscard]] bool isScanExecuting() const { return scanExecuting_; }
 
     /// Live optical TCP (base_link / hyperfusion_tcp) when robot is connected.
+    /// *calibOut* receives flange tool0 + joints when the sidecar provided them.
     [[nodiscard]] bool tryGetLiveOpticalTcpPose(Ur3eScanTcpPose *out,
-                                                QString *errorMessage = nullptr) const;
+                                                QString *errorMessage = nullptr,
+                                                CalibrationCaptureExtras *calibOut = nullptr) const;
 
     /// Start hemisphere execute. Returns false if rejected (busy / no plan / already running).
     bool startHemisphereScanExecute(const HemisphereScanExecuteOptions &options = {});
