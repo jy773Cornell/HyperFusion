@@ -33,6 +33,7 @@ This document guides how to use the HyperFusion software prototype.
 9. [SWIR3 image quality — NUC and column profile destripe](#9-swir3-image-quality--nuc-and-column-profile-destripe)
   - [Auto NUC](#auto-nuc-swir3_auto_nuc--true)
   - [Column profile destripe](#column-profile-destripe-swir3_column_profile_correct--true)
+  - [Ref-based residual BPR](#ref-based-residual-bpr-swir3_ref_bpr--true--post-process)
 10. [Optional — GSAM2 segmentation](#10-optional--gsam2-segmentation)
 11. [Dual-camera spectral fusion](#11-dual-camera-spectral-fusion)
 12. [Quick reference — daily operator flow](#12-quick-reference--daily-operator-flow)
@@ -42,12 +43,12 @@ This document guides how to use the HyperFusion software prototype.
 ## 1. Starting the application
 
 1. Run `**app.exe`** from your deployment folder (typically `app\build\Release\` on a dev machine, or a copied Release package on the lab PC).
-2. Ensure `**hyperfusion.cfg`** sits **next to `app.exe`** (copied automatically on build).
+2. Ensure `**hyperfusion.cfg`** sits **next to `app.exe`** (copied from `app/preset/` on build).
 3. On first launch, connect hardware in this order (recommended):
   - **Stage** (if used) → **Lighthouse** (if used) → **Cameras**
 4. Watch the **Log** panel at the bottom for connection status and errors.
 
-Settings in `hyperfusion.cfg` reload **on every app start**. Camera exposure, frame rate, binning, and RGB bands are saved in **app settings** and persist across sessions.
+Settings in `hyperfusion.cfg` reload **on every app start**. Edit the source file in `app/preset/`. Camera exposure, frame rate, binning, and RGB bands are saved in **app settings** and persist across sessions.
 
 ---
 
@@ -316,6 +317,7 @@ Idle, reflectance, and transmittance intensity percentages.
 | Key                                    | Meaning                                           |
 | -------------------------------------- | ------------------------------------------------- |
 | `ffc_`*, `truncate_nm`, `illuminant_d` | Flat-field correction and export                  |
+| `swir3_ref_bpr`                        | SWIR residual comb repair from white/dark refs before FFC (recommended `true`) |
 | `swir_false_color_*_nm_`*              | RGB channel wavelength ranges for SWIR PNG export |
 
 
@@ -366,6 +368,20 @@ HyperFusion’s **column comb** correction for vertical striping:
 - More conservative: raise `valley_gain_min`, raise `min_hits`, set `min_valley_dn`.
 
 Connect log shows `ColumnProfile=on, bad_columns=…` while streaming.
+
+### Ref-based residual BPR (`swir3_ref_bpr = true`) — post-process
+
+This is the **standard SWIR preprocessing** step. It runs only on SWIR3 streams during Capture post-process, **before FFC**.
+
+1. Average WHITEREF and DARKREF (uniform panel — no sample).
+2. Flag `(band, sample)` pixels that disagree with a ±2-column spatial baseline (white ratio outside 0.88–1.12, or dark residual above `max(40 DN, 4×median)`).
+3. If a column is flagged on ≥25% of bands, replace **all bands** of that column (catches the every-8th-column comb).
+4. Spatially interpolate those columns in **white, dark, and every raw sample line**.
+5. Then run FFC as usual.
+
+Does **not** look at the grape scan to decide which columns are bad. Leave live `swir3_column_profile_correct = false` for fruit trays.
+
+Re-run **Preprocess** on an existing session to apply this to already-captured SWIR cubes.
 
 ---
 

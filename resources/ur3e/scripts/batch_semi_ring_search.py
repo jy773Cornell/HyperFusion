@@ -271,7 +271,6 @@ def robot_cfg_fingerprint(cfg: dict[str, Any]) -> str:
         "scan_center_from_home_tcp": False,
         "scan_center_base_xy": True,
         "apex_over_home_tcp_xy": True,
-        "apex_radius_m": APEX_RADIUS_M,
         "home_joints_deg": [float(v) for v in home],
         "scan_camera_up_world_z": bool(cfg.get("scan_camera_up_world_z", True)),
         "pin_pose_tolerance_deg": float(cfg.get("pin_pose_tolerance_deg", 0.0)),

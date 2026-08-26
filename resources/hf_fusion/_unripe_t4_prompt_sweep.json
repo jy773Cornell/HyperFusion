@@ -1,0 +1,22 @@
+{
+  "fx": "green grape",
+  "swir": "green marble",
+  "fx_detail": [
+    -4.30654,
+    "green grape",
+    2,
+    0,
+    4366,
+    7496,
+    5503
+  ],
+  "swir_detail": [
+    -0.18152000000000001,
+    "green marble",
+    0,
+    0,
+    784,
+    1366,
+    992
+  ]
+}

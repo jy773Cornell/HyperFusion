@@ -13,6 +13,8 @@ struct Gsam2SegmentationRequest
     QString prompt;
     int maxDetections = 5;
     double boxThreshold = 0.30;
+    /// Drop DINO boxes covering >= this fraction of image area (0 = disabled).
+    double maxBoxAreaFrac = 0.0;
     QString serverUrl = QStringLiteral("http://127.0.0.1:8765");
 };
 

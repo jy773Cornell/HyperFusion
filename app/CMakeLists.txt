@@ -167,6 +167,8 @@ qt_add_executable(app WIN32
     src/backend/camera/processing/HfFusionRunner.cpp
     src/backend/camera/processing/HfFusionWorker.cpp
     src/backend/camera/processing/Gsam2SegmentationClient.cpp
+    src/backend/camera/processing/GsamPlan.cpp
+    src/backend/camera/processing/GsamPlanSegmentRunner.cpp
     src/backend/camera/processing/Gsam2ServerManager.cpp
     src/backend/camera/processing/Gsam2RoiAnalysis.cpp
     src/backend/camera/processing/Gsam2SpectrumPlot.cpp
@@ -200,6 +202,7 @@ qt_add_executable(app WIN32
     src/backend/camera/processing/SwirBprCalpackMap.cpp
     src/backend/camera/processing/SwirBprApply.cpp
     src/backend/camera/processing/SwirColumnProfileCorrector.cpp
+    src/backend/camera/processing/SwirRefBprCorrector.cpp
     include/backend/camera/CameraTypes.hpp
     include/backend/camera/ICameraController.hpp
     include/backend/camera/CameraWorker.hpp
@@ -218,6 +221,8 @@ qt_add_executable(app WIN32
     include/backend/camera/CameraCoordinator.hpp
     include/backend/camera/processing/Gsam2ServerManager.hpp
     include/backend/camera/processing/Gsam2SegmentationClient.hpp
+    include/backend/camera/processing/GsamPlan.hpp
+    include/backend/camera/processing/GsamPlanSegmentRunner.hpp
     include/backend/camera/processing/Gsam2RoiAnalysis.hpp
     include/backend/camera/processing/Gsam2SpectrumPlot.hpp
     include/backend/camera/processing/GsamWslPathUtil.hpp
@@ -245,6 +250,7 @@ qt_add_executable(app WIN32
     include/backend/camera/processing/SwirBprCalpackMap.hpp
     include/backend/camera/processing/SwirBprApply.hpp
     include/backend/camera/processing/SwirColumnProfileCorrector.hpp
+    include/backend/camera/processing/SwirRefBprCorrector.hpp
     # adapters — vendor SDK / hardware
     src/adapters/zaber/ZaberStageController.cpp
     src/adapters/zaber/ZaberStageConfigurator.cpp
@@ -405,14 +411,15 @@ if(WIN32)
         VS_RESOURCE_COMPILE_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/resources")
 endif()
 
-# Ship hyperfusion.cfg beside app.exe (hardware parameters).
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/hyperfusion.cfg")
+# Ship app/preset (hyperfusion.cfg, gsam_plans, ur3e_semi_scan_plans, …) beside app.exe.
+set(HF_PRESET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/preset")
+if(EXISTS "${HF_PRESET_DIR}")
     add_custom_command(
         TARGET app POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                "${CMAKE_CURRENT_SOURCE_DIR}/hyperfusion.cfg"
-                "$<TARGET_FILE_DIR:app>/hyperfusion.cfg"
-        COMMENT "Copying hyperfusion.cfg to output directory")
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${HF_PRESET_DIR}"
+                "$<TARGET_FILE_DIR:app>"
+        COMMENT "Copying app/preset to output directory")
 endif()
 
 # Ship calibration packs beside app.exe (RGB band dropdowns).

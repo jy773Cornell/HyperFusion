@@ -456,7 +456,7 @@ void Ur3eHemisphereScanSettingsWidget::syncModeUi()
         routeCombo_->setToolTip(
             autoMode
                 ? QStringLiteral("Saved Auto routes in ur3e_scan_routes (cfg must match).")
-                : QStringLiteral("Saved Semi plans in ur3e_semi_scan_routes (cfg must match)."));
+                : QStringLiteral("Saved Semi plans in ur3e_semi_scan_plans (cfg must match)."));
     }
     if (loadRouteBtn_ != nullptr)
     {
@@ -474,7 +474,7 @@ void Ur3eHemisphereScanSettingsWidget::syncModeUi()
                       "Generate the scan grid and check each pose with MoveIt IK + collision.")
                 : QStringLiteral(
                       "Semi Plan: MoveIt IK + base-link pan-circle check; keep first 3 "
-                      "sweep-OK pins per ring. Saves to ur3e_semi_scan_routes."));
+                      "sweep-OK pins per ring. Saves to ur3e_semi_scan_plans."));
     }
     refreshAvailableRoutes();
     updateImageEstimateLabel();

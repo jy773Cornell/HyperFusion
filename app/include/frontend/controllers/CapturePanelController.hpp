@@ -4,6 +4,7 @@
 
 #include "backend/camera/CaptureWriterTypes.hpp"
 #include "backend/camera/CameraTypes.hpp"
+#include "backend/camera/processing/CapturePostProcessor.hpp"
 
 #include <QElapsedTimer>
 #include <QObject>
@@ -101,6 +102,7 @@ public:
     void updateCamerasList();
     void updateRecorderControls();
     void updateGsamServerUi();
+    void refreshGsamPlanCombo(const QString &preferredPlanId = {});
     void tryAutoStartGsamServer();
     void wireSettingsTabConnections();
     void updateDualCameraSyncControls();
@@ -209,6 +211,7 @@ private:
     [[nodiscard]] QString captureMultiviewOutputDir() const;
     bool beginMultiviewOnlyDatasetSession(QString &errorMessage);
     void runCapturePostProcessingIfEnabled();
+    hf::processing::CapturePostProcessOptions capturePostProcessOptionsFromUi() const;
     void failCaptureSequence(const QString &message);
     void setSelectedCameraShutters(bool open);
     bool selectedCamerasReachedBlackReferenceTarget() const;

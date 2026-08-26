@@ -54,7 +54,7 @@ source ./venv/bin/activate
 
 ## HyperFusion config
 
-In `app/hyperfusion.cfg` → `[segmentation]`:
+In `app/preset/hyperfusion.cfg` → `[segmentation]`:
 
 ```ini
 wsl_distro = Ubuntu

@@ -1,0 +1,73 @@
+{
+  "name": "Unripe_T1 grape tray",
+  "version": 1,
+  "sample_count": 25,
+  "streams": {
+    "reflectance/fx10e": {
+      "prompt": "green marble",
+      "invert_rgb": false,
+      "box_threshold": 0.30,
+      "max_box_area_frac": 0.20,
+      "nms_iou": 0.40,
+      "two_stage": {
+        "enabled": true,
+        "stage1_prompt": "circle hole",
+        "stage2_prompt": "green marble",
+        "stage2_box_threshold": 0.20,
+        "crop_margin_px": 0,
+        "nms_iou": 0.40,
+        "max_dets": 50
+      }
+    },
+    "reflectance/swir3": {
+      "prompt": "green marble",
+      "invert_rgb": false,
+      "box_threshold": 0.08,
+      "max_box_area_frac": 0.20,
+      "nms_iou": 0.40,
+      "two_stage": {
+        "enabled": true,
+        "stage1_prompt": "circle hole",
+        "stage2_prompt": "green marble",
+        "stage2_box_threshold": 0.15,
+        "crop_margin_px": 0,
+        "nms_iou": 0.40,
+        "max_dets": 50
+      }
+    },
+    "transmittance/fx10e": {
+      "prompt": "white ball",
+      "invert_rgb": false,
+      "box_threshold": 0.08,
+      "max_box_area_frac": 0.20,
+      "nms_iou": 0.40,
+      "reuse_reflectance_masks": false,
+      "two_stage": {
+        "enabled": true,
+        "stage1_prompt": "circle hole",
+        "stage2_prompt": "white ball",
+        "stage2_box_threshold": 0.15,
+        "crop_margin_px": 0,
+        "nms_iou": 0.40,
+        "max_dets": 50
+      }
+    },
+    "transmittance/swir3": {
+      "prompt": "pink ball",
+      "invert_rgb": true,
+      "box_threshold": 0.08,
+      "max_box_area_frac": 0.20,
+      "nms_iou": 0.40,
+      "reuse_reflectance_masks": false,
+      "two_stage": {
+        "enabled": true,
+        "stage1_prompt": "circle hole",
+        "stage2_prompt": "pink ball",
+        "stage2_box_threshold": 0.15,
+        "crop_margin_px": 0,
+        "nms_iou": 0.40,
+        "max_dets": 50
+      }
+    }
+  }
+}

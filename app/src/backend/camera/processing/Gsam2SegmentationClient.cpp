@@ -209,6 +209,8 @@ Gsam2SegmentationResponse requestGsam2Segmentation(const Gsam2SegmentationReques
     body.insert(QStringLiteral("prompt"), request.prompt);
     body.insert(QStringLiteral("max_dets"), request.maxDetections);
     body.insert(QStringLiteral("box_threshold"), request.boxThreshold);
+    if (request.maxBoxAreaFrac > 0.0)
+        body.insert(QStringLiteral("max_box_area_frac"), request.maxBoxAreaFrac);
 
     QString localError;
     const QJsonObject response =

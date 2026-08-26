@@ -72,7 +72,7 @@ Fusion currently requires the same number of segmented objects in FX10e and SWIR
 
 ## Calibration Used
 
-Spatial calibration comes from `app/hyperfusion.cfg`.
+Spatial calibration comes from `app/preset/hyperfusion.cfg`.
 
 Current values:
 

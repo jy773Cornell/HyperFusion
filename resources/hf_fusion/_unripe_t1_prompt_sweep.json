@@ -1,0 +1,102 @@
+{
+  "reflectance/fx10e": {
+    "prompt": "green berry",
+    "quality": -3.6995679999999997,
+    "report": {
+      "mean_bg": 0.39,
+      "bad_count": 16,
+      "bad_rois": [
+        1,
+        2,
+        3,
+        4,
+        6,
+        7,
+        8,
+        9,
+        11,
+        13,
+        17,
+        18,
+        19,
+        21,
+        22,
+        25
+      ],
+      "tiny": 0
+    },
+    "kept_baseline": false
+  },
+  "reflectance/swir3": {
+    "prompt": "green ball",
+    "quality": -3.2127999999999997,
+    "report": {
+      "mean_bg": 0.378,
+      "bad_count": 13,
+      "bad_rois": [
+        1,
+        2,
+        3,
+        7,
+        9,
+        11,
+        13,
+        15,
+        16,
+        17,
+        20,
+        21,
+        24
+      ]
+    },
+    "kept_baseline": true
+  },
+  "transmittance/fx10e": {
+    "prompt": "white balloon",
+    "quality": -3.3974400000000005,
+    "report": {
+      "mean_bg": 0.318,
+      "bad_count": 11,
+      "bad_rois": [
+        1,
+        2,
+        3,
+        4,
+        6,
+        7,
+        9,
+        11,
+        13,
+        15,
+        22
+      ]
+    },
+    "kept_baseline": true
+  },
+  "transmittance/swir3": {
+    "prompt": "white ball",
+    "quality": -3.3298240000000003,
+    "report": {
+      "mean_bg": 0.368,
+      "bad_count": 14,
+      "bad_rois": [
+        2,
+        3,
+        4,
+        5,
+        8,
+        10,
+        11,
+        13,
+        15,
+        17,
+        18,
+        19,
+        21,
+        22
+      ],
+      "tiny": 0
+    },
+    "kept_baseline": false
+  }
+}

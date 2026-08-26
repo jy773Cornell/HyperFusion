@@ -11,6 +11,7 @@
 #include "frontend/widgets/MainWindowTabHelpers.hpp"
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDir>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
@@ -26,6 +27,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QSizePolicy>
 #include <QSpinBox>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -339,6 +341,22 @@ QWidget *MainWindow::createCaptureSettingsTab()
     gsamLayout->addWidget(captureGsamServerStatusLabel_);
 
     preprocessingLayout->addWidget(gsamRow);
+
+    auto *gsamPlanRow = new QWidget(preprocessingBox);
+    auto *gsamPlanLayout = new QHBoxLayout(gsamPlanRow);
+    gsamPlanLayout->setContentsMargins(0, 0, 0, 0);
+    gsamPlanLayout->setSpacing(6);
+    auto *gsamPlanLabel = new QLabel(QStringLiteral("GSAM plan"), gsamPlanRow);
+    captureGsamPlanCombo_ = new QComboBox(gsamPlanRow);
+    captureGsamPlanCombo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    captureGsamPlanCombo_->setToolTip(
+        tr("Per-stream GSAM plan from gsam_plans beside the app. Two-stage plans find well "
+           "boxes then segment the object inside each crop. Transmittance can set "
+           "reuse_reflectance_masks to copy reflectance masks. (Manual) uses the prompt and ROI "
+           "fields above."));
+    gsamPlanLayout->addWidget(gsamPlanLabel);
+    gsamPlanLayout->addWidget(captureGsamPlanCombo_, 1);
+    preprocessingLayout->addWidget(gsamPlanRow);
 
     captureRunHfFusionCheck_ =
         new QCheckBox(QStringLiteral("Run spectral fusion (FX10e + SWIR3)"), preprocessingBox);

@@ -1,0 +1,105 @@
+{
+  "best": "unripe grape",
+  "results": {
+    "green ball": {
+      "q": -1.6816,
+      "med": 949.0,
+      "berry_med": 908.0,
+      "over": 1,
+      "under": 0,
+      "min": 838,
+      "max": 1734,
+      "mean": 983.36
+    },
+    "green grape": {
+      "q": -4.78456,
+      "med": 980.0,
+      "berry_med": 914.0,
+      "over": 3,
+      "under": 0,
+      "min": 837,
+      "max": 1734,
+      "mean": 1040.2
+    },
+    "dark ball": {
+      "q": -1.3888800000000001,
+      "med": 1656.0,
+      "berry_med": 1644.0,
+      "over": 0,
+      "under": 0,
+      "min": 1384,
+      "max": 1733,
+      "mean": 1644.44
+    },
+    "black ball": {
+      "q": -1.38792,
+      "med": 1656.0,
+      "berry_med": 1639.0,
+      "over": 0,
+      "under": 0,
+      "min": 1378,
+      "max": 1732,
+      "mean": 1643.96
+    },
+    "berry": {
+      "q": -1.4004,
+      "med": 1655.0,
+      "berry_med": 1641.0,
+      "over": 0,
+      "under": 0,
+      "min": 1541,
+      "max": 1734,
+      "mean": 1650.2
+    },
+    "green fruit": {
+      "q": -6.3388,
+      "med": 977.0,
+      "berry_med": 915.0,
+      "over": 4,
+      "under": 0,
+      "min": 838,
+      "max": 1734,
+      "mean": 1067.56
+    },
+    "olive": {
+      "q": -1.38736,
+      "med": 1656.0,
+      "berry_med": 1630.0,
+      "over": 0,
+      "under": 0,
+      "min": 1372,
+      "max": 1734,
+      "mean": 1643.68
+    },
+    "sphere": {
+      "q": -24.97368,
+      "med": 1646.0,
+      "berry_med": 1019.0,
+      "over": 16,
+      "under": 0,
+      "min": 855,
+      "max": 1734,
+      "mean": 1417.32
+    },
+    "fruit": {
+      "q": -18.74312,
+      "med": 1149.0,
+      "berry_med": 1001.0,
+      "over": 12,
+      "under": 0,
+      "min": 852,
+      "max": 1735,
+      "mean": 1294.6
+    },
+    "unripe grape": {
+      "q": -1.0459200000000002,
+      "med": 1583.0,
+      "berry_med": 1546.0,
+      "over": 0,
+      "under": 0,
+      "min": 859,
+      "max": 1734,
+      "mean": 1454.24
+    }
+  }
+}

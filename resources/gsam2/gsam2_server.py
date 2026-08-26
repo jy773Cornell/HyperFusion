@@ -169,13 +169,16 @@ def run_segment(body: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any
     prompt = str(body.get("prompt", "sample."))
     max_dets = int(body.get("max_dets", args.max_dets_default))
     box_threshold = float(body.get("box_threshold", args.box_threshold))
+    max_box_area_frac = float(body.get("max_box_area_frac", 0.0) or 0.0)
     image_name = str(body.get("image_name", input_rgb.name))
 
     out_dir.mkdir(parents=True, exist_ok=True)
     rgb = load_rgb(input_rgb)
 
     segmenter = get_segmenter(args)
-    det = segmenter._gdino_detect_hf(rgb, prompt, box_threshold, max_dets)
+    det = segmenter._gdino_detect_hf(
+        rgb, prompt, box_threshold, max_dets, max_box_area_frac=max_box_area_frac
+    )
     boxes, scores, phrases = reorder_detections(
         det["boxes_xyxy"], det["scores"], det["phrases"]
     )
@@ -216,8 +219,8 @@ def run_segment(body: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any
     segmented_rgb_dir.mkdir(parents=True, exist_ok=True)
 
     detections: List[Dict[str, Any]] = []
-    for idx, (mask, mask_u8, phrase, score) in enumerate(
-        zip(masks, mask_images, phrases, scores),
+    for idx, (mask, mask_u8, phrase, score, box) in enumerate(
+        zip(masks, mask_images, phrases, scores, boxes),
         start=1,
     ):
         stem = f"mask_{idx:03d}"
@@ -228,6 +231,7 @@ def run_segment(body: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any
 
         segmented_rgb_path = segmented_rgb_dir / f"roi_{idx:03d}.png"
         patch_bounds = write_segmented_rgb_patch(rgb, mask, segmented_rgb_path)
+        x1, y1, x2, y2 = [float(v) for v in box]
 
         detections.append(
             {
@@ -235,6 +239,7 @@ def run_segment(body: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any
                 "label": phrase,
                 "score": float(score),
                 "pixel_count": int(mask.sum()),
+                "box_xyxy": [x1, y1, x2, y2],
                 "mask_png": str(mask_png),
                 "mask_npy": str(mask_npy),
                 "segmented_rgb_png": str(segmented_rgb_path),

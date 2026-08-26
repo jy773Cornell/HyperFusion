@@ -4,6 +4,7 @@
 #include "backend/HyperFusionConfig.hpp"
 #include "adapters/zaber/ZaberStageProfile.hpp"
 #include "frontend/controllers/CameraPanelController.hpp"
+#include "frontend/controllers/CapturePanelController.hpp"
 #include "frontend/controllers/LightPanelController.hpp"
 #include "frontend/settings/AppSettingsStore.hpp"
 #include "frontend/controllers/StagePanelController.hpp"
@@ -114,6 +115,8 @@ void UiSettingsController::loadPersistedUiSettings()
         host_->captureGsamPromptEdit_->setText(capturePosition.gsamPrompt);
     if (host_->captureGsamSampleCountSpin_ != nullptr)
         host_->captureGsamSampleCountSpin_->setValue(std::max(1, capturePosition.gsamSampleCount));
+    if (host_->capturePanel() != nullptr)
+        host_->capturePanel()->refreshGsamPlanCombo(capturePosition.gsamPlanId);
     if (host_->captureDualCameraAutoCheck_ != nullptr)
         host_->captureDualCameraAutoCheck_->setChecked(capturePosition.dualCameraAutoSync);
     if (host_->captureSaveFolderEdit_ != nullptr && !capturePosition.saveFolder.isEmpty())
@@ -148,6 +151,12 @@ void UiSettingsController::savePersistedUiSettings()
         capturePosition.gsamPrompt = host_->captureGsamPromptEdit_->text().trimmed();
     if (host_->captureGsamSampleCountSpin_ != nullptr)
         capturePosition.gsamSampleCount = host_->captureGsamSampleCountSpin_->value();
+    if (host_->captureGsamPlanCombo_ != nullptr)
+    {
+        const QString planPath = host_->captureGsamPlanCombo_->currentData().toString();
+        capturePosition.gsamPlanId =
+            planPath.isEmpty() ? QString() : QFileInfo(planPath).completeBaseName();
+    }
     if (host_->captureDualCameraAutoCheck_ != nullptr)
         capturePosition.dualCameraAutoSync = host_->captureDualCameraAutoCheck_->isChecked();
     if (host_->captureSaveFolderEdit_ != nullptr)
@@ -348,6 +357,13 @@ void UiSettingsController::connectAutosave()
         connect(host_->captureGsamPromptEdit_, &QLineEdit::textChanged, this, schedule);
     if (host_->captureGsamSampleCountSpin_ != nullptr)
         connect(host_->captureGsamSampleCountSpin_, qOverload<int>(&QSpinBox::valueChanged), this, schedule);
+    if (host_->captureGsamPlanCombo_ != nullptr)
+    {
+        connect(host_->captureGsamPlanCombo_, qOverload<int>(&QComboBox::currentIndexChanged), this,
+                schedule);
+        connect(host_->captureGsamPlanCombo_, qOverload<int>(&QComboBox::currentIndexChanged), this,
+                [this]() { host_->capturePanel()->updateRecorderControls(); });
+    }
     if (host_->stagePortCombo_ != nullptr)
         connect(host_->stagePortCombo_, &QComboBox::currentIndexChanged, this, schedule);
     if (host_->stageBaudCombo_ != nullptr)

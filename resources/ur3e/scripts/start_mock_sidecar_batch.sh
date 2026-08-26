@@ -6,7 +6,7 @@ export PYTHONUNBUFFERED=1
 export ROS_LOCALHOST_ONLY=1
 # shellcheck disable=SC1091
 source /opt/ros/jazzy/setup.bash
-LOG="${1:-/mnt/d/Pototypy/HyperFusion/app/build/Release/ur3e_semi_scan_routes/_mock_sidecar.log}"
+LOG="${1:-/mnt/d/Pototypy/HyperFusion/app/preset/ur3e_semi_scan_plans/_mock_sidecar.log}"
 mkdir -p "$(dirname "$LOG")"
 exec ./venv/bin/ur3e_server \
   --host 0.0.0.0 --port 8766 \

@@ -74,6 +74,14 @@ struct HardwareConfig
         double swir3ColumnProfileMinBandDn = 64.0;
         int swir3ColumnProfileMinHits = 1;
         double swir3ColumnProfileMinValleyDn = 0.0;
+        /// SWIR3 post-process: residual comb columns from white/dark refs, then FFC.
+        bool swir3RefBprCorrect = true;
+        int swir3RefBprBaselineRadius = 2;
+        double swir3RefBprWhiteRatioMin = 0.88;
+        double swir3RefBprWhiteRatioMax = 1.12;
+        double swir3RefBprDarkAbsMinDn = 40.0;
+        double swir3RefBprDarkAbsScale = 4.0;
+        double swir3RefBprColumnPromoteFrac = 0.25;
     };
 
     PreprocessingConfig preprocessing;

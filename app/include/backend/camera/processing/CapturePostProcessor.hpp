@@ -21,6 +21,8 @@ struct CapturePostProcessOptions
     QString gsamPrompt;
     int gsamSampleCount = 5;
     QString gsamServerUrl = QStringLiteral("http://127.0.0.1:8765");
+    /// Empty = manual prompt/ROI from UI. Non-empty = JSON plan beside app (gsam_plans/).
+    QString gsamPlanPath;
     bool runHfFusion = false;
     QString hfFusionMode = QStringLiteral("reflectance");
 };

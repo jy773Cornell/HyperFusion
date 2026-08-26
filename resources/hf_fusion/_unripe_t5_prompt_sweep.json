@@ -1,0 +1,22 @@
+{
+  "fx": "green marble",
+  "swir": "green marble",
+  "fx_detail": [
+    -2.36442,
+    "green marble",
+    1,
+    0,
+    4862,
+    7127,
+    5948
+  ],
+  "swir_detail": [
+    -0.21496,
+    "green marble",
+    0,
+    0,
+    838,
+    1278,
+    1020
+  ]
+}

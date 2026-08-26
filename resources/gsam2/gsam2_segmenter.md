@@ -94,7 +94,7 @@ Outputs:
 <dataset>_ffc.raw
 ```
 
-Default clamp and epsilon values come from `app/hyperfusion.cfg`:
+Default clamp and epsilon values come from `app/preset/hyperfusion.cfg`:
 
 ```ini
 ffc_epsilon = 1e-6
@@ -425,7 +425,7 @@ GSAM prompt and Max samples remain editable even when other preprocessing contro
 
 ## Configuration
 
-From `app/hyperfusion.cfg`:
+From `app/preset/hyperfusion.cfg`:
 
 ```ini
 [segmentation]

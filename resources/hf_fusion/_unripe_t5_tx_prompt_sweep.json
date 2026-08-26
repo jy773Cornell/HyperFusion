@@ -1,0 +1,22 @@
+{
+  "fx": "dark ball",
+  "swir": "pink ball",
+  "fx_detail": [
+    -6.42926,
+    "dark ball",
+    1,
+    4,
+    2649,
+    8826,
+    5290
+  ],
+  "swir_detail": [
+    -0.21264,
+    "pink ball",
+    0,
+    0,
+    849,
+    1256,
+    1040
+  ]
+}

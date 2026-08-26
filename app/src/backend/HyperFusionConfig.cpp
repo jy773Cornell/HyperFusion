@@ -415,6 +415,76 @@ bool parseSwir3PreprocessingKey(const QString &key,
         return true;
     }
 
+    const auto parseBoolFlag = [&](bool &target, const QString &label) {
+        if (value == QStringLiteral("true") || value == QStringLiteral("1")
+            || value == QStringLiteral("yes") || value == QStringLiteral("on"))
+            target = true;
+        else if (value == QStringLiteral("false") || value == QStringLiteral("0")
+                 || value == QStringLiteral("no") || value == QStringLiteral("off"))
+            target = false;
+        else
+            warnings.push_back(QStringLiteral("Invalid %1 (use true/false): %2").arg(label, value));
+        return true;
+    };
+
+    if (key == QStringLiteral("swir3_ref_bpr"))
+        return parseBoolFlag(preprocess.swir3RefBprCorrect, QStringLiteral("swir3_ref_bpr"));
+
+    if (key == QStringLiteral("swir3_ref_bpr_baseline_radius"))
+    {
+        if (!hasNumber)
+            warnings.push_back(QStringLiteral("Invalid swir3_ref_bpr_baseline_radius: %1").arg(value));
+        else
+            preprocess.swir3RefBprBaselineRadius = static_cast<int>(numericValue);
+        return true;
+    }
+
+    if (key == QStringLiteral("swir3_ref_bpr_white_ratio_min"))
+    {
+        if (!hasNumber)
+            warnings.push_back(QStringLiteral("Invalid swir3_ref_bpr_white_ratio_min: %1").arg(value));
+        else
+            preprocess.swir3RefBprWhiteRatioMin = numericValue;
+        return true;
+    }
+
+    if (key == QStringLiteral("swir3_ref_bpr_white_ratio_max"))
+    {
+        if (!hasNumber)
+            warnings.push_back(QStringLiteral("Invalid swir3_ref_bpr_white_ratio_max: %1").arg(value));
+        else
+            preprocess.swir3RefBprWhiteRatioMax = numericValue;
+        return true;
+    }
+
+    if (key == QStringLiteral("swir3_ref_bpr_dark_abs_min_dn"))
+    {
+        if (!hasNumber)
+            warnings.push_back(QStringLiteral("Invalid swir3_ref_bpr_dark_abs_min_dn: %1").arg(value));
+        else
+            preprocess.swir3RefBprDarkAbsMinDn = numericValue;
+        return true;
+    }
+
+    if (key == QStringLiteral("swir3_ref_bpr_dark_abs_scale"))
+    {
+        if (!hasNumber)
+            warnings.push_back(QStringLiteral("Invalid swir3_ref_bpr_dark_abs_scale: %1").arg(value));
+        else
+            preprocess.swir3RefBprDarkAbsScale = numericValue;
+        return true;
+    }
+
+    if (key == QStringLiteral("swir3_ref_bpr_column_promote_frac"))
+    {
+        if (!hasNumber)
+            warnings.push_back(
+                QStringLiteral("Invalid swir3_ref_bpr_column_promote_frac: %1").arg(value));
+        else
+            preprocess.swir3RefBprColumnPromoteFrac = numericValue;
+        return true;
+    }
+
     return false;
 }
 
@@ -1364,6 +1434,7 @@ QStringList hyperFusionConfigSearchPaths()
         paths << QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("hyperfusion.cfg"));
 
 #ifdef HF_APP_SOURCE_DIR
+    paths << QDir(QString::fromUtf8(HF_APP_SOURCE_DIR)).filePath(QStringLiteral("preset/hyperfusion.cfg"));
     paths << QDir(QString::fromUtf8(HF_APP_SOURCE_DIR)).filePath(QStringLiteral("hyperfusion.cfg"));
 #endif
 
@@ -1442,6 +1513,14 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "ffc_clamp_min = 0.0\n"
         << "ffc_clamp_max = 1.0\n"
         << "truncate_nm = 780.0\n"
+        << "# SWIR3 post-process: residual comb columns from white/dark refs (not sample profile).\n"
+        << "swir3_ref_bpr = true\n"
+        << "swir3_ref_bpr_baseline_radius = 2\n"
+        << "swir3_ref_bpr_white_ratio_min = 0.88\n"
+        << "swir3_ref_bpr_white_ratio_max = 1.12\n"
+        << "swir3_ref_bpr_dark_abs_min_dn = 40\n"
+        << "swir3_ref_bpr_dark_abs_scale = 4\n"
+        << "swir3_ref_bpr_column_promote_frac = 0.25\n"
         << "# SWIR false-color PNG (post-capture): mean reflectance per channel inside each nm range.\n"
         << "swir_false_color_red_nm_min = 1550\n"
         << "swir_false_color_red_nm_max = 1700\n"

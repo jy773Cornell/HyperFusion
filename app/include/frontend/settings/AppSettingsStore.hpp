@@ -17,6 +17,8 @@ struct PersistedCapturePosition
     bool runHfFusion = false;
     QString gsamPrompt = QStringLiteral("sample.");
     int gsamSampleCount = 5;
+    /// Empty = Manual. Otherwise plan JSON basename without extension (e.g. unripe_t1_grape_tray).
+    QString gsamPlanId;
     bool dualCameraAutoSync = true;
     QString saveFolder;
 };
@@ -75,7 +77,7 @@ struct PersistedUr3eHemisphereScanSettings
     PersistedUr3eScanModePanelSettings semiPanel{};
     /// Last selected Auto named-route JSON path (combo selection).
     QString lastAutoRoutePath;
-    /// Last selected Semi plan JSON path (ur3e_semi_scan_routes).
+    /// Last selected Semi plan JSON path (ur3e_semi_scan_plans).
     QString lastSemiFixedPlanPath;
     /// Last loaded/saved Semi-fixed route JSON path (legacy rings list).
     QString lastSemiFixedRoutePath;

@@ -293,7 +293,7 @@ C++ app integration (`Ur3eServerManager`, UR3e tab wiring) is added incrementall
 
 ## 7. Configuration — `hyperfusion.cfg`
 
-Copied next to `app.exe` on build. **Reloaded on every app start.** Edit for each bench:
+Copied next to `app.exe` on build from `app/preset/`. **Reloaded on every app start.** Edit the copy in `app/preset/` (not the output folder) for each bench:
 
 
 | Section                   | Purpose                                                                                                             |
@@ -302,7 +302,7 @@ Copied next to `app.exe` on build. **Reloaded on every app start.** Edit for eac
 | `[sample_stage_position]` | White/bright/sample scan positions (mm), dual-camera offset                                                         |
 | `[scanning_settings]`     | Scan speed, acceleration, ref frame counts, `fx10e_transmittance_exp`, `swir_transmittance_exp` (dual-mode capture) |
 | `[lighthouse]`            | Idle / reflectance / transmittance intensity (%)                                                                    |
-| `[preprocessing]`         | FFC and SWIR false-color export settings                                                                            |
+| `[preprocessing]`         | FFC, SWIR ref BPR (`swir3_ref_bpr`), and SWIR false-color export settings                                           |
 | `[segmentation]`          | GSAM2 sidecar (optional)                                                                                            |
 | `[fusion]`                | Dual-camera fusion Python paths, margin, timeout                                                                    |
 | `[ur3e]`                  | UR3e WSL sidecar (optional)                                                                                         |
@@ -330,7 +330,7 @@ Common variants:
 .\build_app.ps1 -NoClean                  # reuse existing build directory
 ```
 
-The script configures CMake, builds **Release**, runs `windeployqt`, and copies Lumo / MCC / Zaber runtime DLLs, `hyperfusion.cfg`, and calibration packs next to the executable. Fusion uses `resources/hf_fusion/` in the repo (not copied beside `app.exe`).
+The script configures CMake, builds **Release**, runs `windeployqt`, and copies Lumo / MCC / Zaber runtime DLLs, `app/preset/` (including `hyperfusion.cfg`, GSAM plans, and UR3e semi scan plans), and calibration packs next to the executable. Fusion uses `resources/hf_fusion/` in the repo (not copied beside `app.exe`).
 
 **Output folder:** `build\Release\` (under `app\`)
 

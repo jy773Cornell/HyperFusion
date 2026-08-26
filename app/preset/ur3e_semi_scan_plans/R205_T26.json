@@ -1,0 +1,150 @@
+{
+  "schema": 4,
+  "name": "R205_T26",
+  "fingerprint": "{\"kind\":\"ur3e_semi_one_ring\",\"sphere_radius_m\":0.205,\"theta_deg\":26.0,\"horizontal_points\":360,\"vertical_points\":2,\"always_apex_pin\":true,\"apex_radius_m\":0.2}",
+  "robot_cfg_fingerprint": "{\"schema\":4,\"ur_type\":\"ur3e\",\"tool_tcp_x_mm\":0.715,\"tool_tcp_y_mm\":-54.197,\"tool_tcp_z_mm\":73.755,\"tool_tcp_roll_deg\":-1.9138,\"tool_tcp_pitch_deg\":0.745,\"tool_tcp_yaw_deg\":0.2868,\"tool_payload_shape\":\"mesh\",\"tool_payload_mesh\":\"ur_tool_payload.stl\",\"tool_payload_radius_mm\":80.0,\"ceiling_mount_height_mm\":629.0,\"workspace_boundary_enabled\":true,\"workspace_length_mm\":900.0,\"workspace_width_mm\":600.0,\"workspace_height_mm\":529.0,\"workspace_ceiling_clearance_mm\":40.0,\"mount_roll_deg\":180.0,\"mount_pitch_deg\":0.0,\"mount_yaw_deg\":0.0,\"mount_offset_x_mm\":0.0,\"mount_offset_y_mm\":0.0,\"scan_center_from_home_tcp\":false,\"scan_center_base_xy\":true,\"apex_over_home_tcp_xy\":true,\"home_joints_deg\":[90.0,-180.0,145.0,-55.0,90.0,-90.0],\"scan_camera_up_world_z\":true,\"pin_pose_tolerance_deg\":0.0,\"pin_pose_tolerance_vertical_only\":true,\"pin_tcp_tilt_deg\":0.0,\"semi_ring_search_candidates\":360}",
+  "scan_params": {
+    "sphere_radius_m": 0.205,
+    "horizontal_points": 360,
+    "vertical_points": 2,
+    "theta_min_deg": 0.0,
+    "theta_max_deg": 26.0,
+    "apex_radius_m": 0.2
+  },
+  "points": [
+    {
+      "grid": {
+        "phi_deg": 0.0,
+        "theta_deg": 0.0,
+        "x_m": -0.07685300004144663,
+        "y_m": -0.017158063379733617,
+        "z_m": 0.2
+      },
+      "tcp": {
+        "x_m": -0.07685300004144663,
+        "y_m": -0.017158063379733617,
+        "z_m": 0.2,
+        "rx": 2.1924601762011533,
+        "ry": -2.2039409114566326,
+        "rz": -0.02255225868495887,
+        "tool_z_x": 0.0,
+        "tool_z_y": 0.0,
+        "tool_z_z": -1.0
+      },
+      "reachable": true,
+      "home_path_ok": true,
+      "base_sweep_ok": false,
+      "planning_error": "",
+      "joints_rad": [
+        1.3209567039546806,
+        -3.3608942466238534,
+        2.481234899271657,
+        -0.6911376092340237,
+        1.5707963267948966,
+        -1.3209567045222623
+      ]
+    },
+    {
+      "grid": {
+        "phi_deg": 21.0,
+        "theta_deg": 26.0,
+        "x_m": 0.08389721804759993,
+        "y_m": 0.03220512464799782,
+        "z_m": 0.18425277949132923
+      },
+      "tcp": {
+        "x_m": 0.08389721804759993,
+        "y_m": 0.03220512464799782,
+        "z_m": 0.18425277949132923,
+        "rx": -1.605879958814789,
+        "ry": -2.3365698390396528,
+        "rz": 0.5394396521776331,
+        "tool_z_x": -0.40925472218341435,
+        "tool_z_y": -0.1570981690146235,
+        "tool_z_z": -0.898794046299167
+      },
+      "reachable": true,
+      "home_path_ok": true,
+      "base_sweep_ok": true,
+      "planning_error": "",
+      "joints_rad": [
+        -1.0284932541426723,
+        -2.013860630800483,
+        2.4077661680320563,
+        -2.3682032102618864,
+        1.8519614689628021,
+        -2.5457290040043175
+      ]
+    },
+    {
+      "grid": {
+        "phi_deg": 29.0,
+        "theta_deg": 26.0,
+        "x_m": 0.0785986490247199,
+        "y_m": 0.0435679425863616,
+        "z_m": 0.18425277949132923
+      },
+      "tcp": {
+        "x_m": 0.0785986490247199,
+        "y_m": 0.0435679425863616,
+        "z_m": 0.18425277949132923,
+        "rx": -1.449924269454555,
+        "ry": -2.4614829580688213,
+        "rz": 0.5682781180157496,
+        "tool_z_x": -0.3834080440230239,
+        "tool_z_y": -0.2125265492017639,
+        "tool_z_z": -0.898794046299167
+      },
+      "reachable": true,
+      "home_path_ok": true,
+      "base_sweep_ok": true,
+      "planning_error": "",
+      "joints_rad": [
+        -1.168119707550255,
+        -2.013860630800483,
+        2.4077661680320563,
+        -2.3682032102618864,
+        1.8519614689628021,
+        -2.5457290040043175
+      ]
+    },
+    {
+      "grid": {
+        "phi_deg": 30.0,
+        "theta_deg": 26.0,
+        "x_m": 0.07782631262811893,
+        "y_m": 0.044933042545880424,
+        "z_m": 0.18425277949132923
+      },
+      "tcp": {
+        "x_m": 0.07782631262811893,
+        "y_m": 0.044933042545880424,
+        "z_m": 0.18425277949132923,
+        "rx": -1.4297844388942043,
+        "ry": -2.4764592920361226,
+        "rz": 0.5717356771484722,
+        "tool_z_x": -0.3796405494054582,
+        "tool_z_y": -0.21918557339453867,
+        "tool_z_z": -0.898794046299167
+      },
+      "reachable": true,
+      "home_path_ok": true,
+      "base_sweep_ok": true,
+      "planning_error": "",
+      "joints_rad": [
+        -1.185577510452109,
+        -2.013860179268593,
+        2.407770332078229,
+        -2.3682071989780065,
+        1.8519634080255436,
+        -2.545724779632458
+      ]
+    }
+  ],
+  "reachable_count": 4,
+  "unreachable_count": 0,
+  "home_path_ok_count": 4,
+  "chain_only_count": 0,
+  "moveit_used": true,
+  "error_message": ""
+}

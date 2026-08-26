@@ -275,6 +275,7 @@ void MainWindow::onSettingsTabChanged(const int index)
     else if (index == captureSettingsTabIndex_)
     {
         capturePanel_->updateCamerasList();
+        capturePanel_->refreshGsamPlanCombo();
         if (stagePanel_->worker() != nullptr)
             capturePanel_->updatePositionControls(stagePanel_->worker()->currentState());
     }

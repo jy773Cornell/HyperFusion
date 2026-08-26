@@ -71,7 +71,7 @@ The system must:
 | Directory | Contents |
 | --------- | -------- |
 | `ur3e_scan_routes/` | Auto Plan JSON |
-| `ur3e_semi_scan_routes/` | Semi Plan JSON (re-Plan after planner changes) |
+| `ur3e_semi_scan_plans/` | Semi Plan JSON (re-Plan after planner changes) |
 | `ur3e_last_scan_plan.json` | Last Auto plan cache (`remember_last_scan_plan`) |
 
 ---
@@ -321,7 +321,7 @@ Path check tries RRTConnect, then Pilz (~5 s).
   - Includes `workspace` (`length_m`, `width_m`, `height_m`, `mount_height_m`) and `home_joints_deg`
   - Semi sets `semi_ring_sweep: true` (and max sweep-OK pins per ring)
 5. Requires robot **connected** (`initial_seed` = current joints — used as the first pin’s “current pin” seed until a reachable pin is found)
-6. Semi: build route via `semiFixedRouteFromHemispherePlan` → save under `ur3e_semi_scan_routes/`
+6. Semi: build route via `semiFixedRouteFromHemispherePlan` → save under `ur3e_semi_scan_plans/`
 
 
 
@@ -674,7 +674,7 @@ The **Move** button calls `/execute_scan_waypoint` with **`direct_only: true`**:
 - Mode: **Auto** vs **Semi**
 - Sphere radius, grid (H × V), θ range; Semi: pan interval / direction
 - Wrist sweep controls; live pose-count estimate
-- **Plan** / **Execute**; saved route list (`ur3e_scan_routes` / `ur3e_semi_scan_routes`)
+- **Plan** / **Execute**; saved route list (`ur3e_scan_routes` / `ur3e_semi_scan_plans`)
 
 
 
@@ -809,7 +809,7 @@ If the pendant shows **External Control speed limit** on **joint 5** (wrist_3) o
 3. Set `home_joints_deg` to match robot (6 values; must be collision-free and pinch-safe in workspace)
 4. **Connect** — confirm homing succeeds (or fix pose via dialog)
 5. Choose **Auto** or **Semi** — **Plan** — review green / orange / blue
-6. **Semi:** save/select route under `ur3e_semi_scan_routes`; after planner changes, **re-Plan** (do not rely on old JSON)
+6. **Semi:** save/select route under `ur3e_semi_scan_plans`; after planner changes, **re-Plan** (do not rely on old JSON)
 7. **Execute** — home → pins/rings → home
 8. After **Python** changes → restart sidecar
 9. After **C++** changes → rebuild app
@@ -858,7 +858,7 @@ If the pendant shows **External Control speed limit** on **joint 5** (wrist_3) o
 
 | Layer          | Main files                                                                          |
 | -------------- | ----------------------------------------------------------------------------------- |
-| Config         | `app/hyperfusion.cfg` `[multiview]`, `HyperFusionConfig.cpp`                      |
+| Config         | `app/preset/hyperfusion.cfg` `[multiview]`, `HyperFusionConfig.cpp`                      |
 | Grid / TCP     | `Ur3eHemisphereScan.cpp`, `Ur3eHemisphereScanReachability.cpp`                      |
 | Semi route     | `Ur3eSemiFixedScan.cpp`, `Ur3eSemiFixedScan.hpp`                                    |
 | Semi execute   | `Ur3eSemiFixedScanExecute.cpp`                                                      |

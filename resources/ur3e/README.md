@@ -169,7 +169,7 @@ Before connecting to hardware (`use_mock_hardware = false`):
 
 ## HyperFusion config
 
-In `app/hyperfusion.cfg` → `[multiview]` (aliases `[3d scanning]` and `[ur3e]` still accepted):
+In `app/preset/hyperfusion.cfg` → `[multiview]` (aliases `[3d scanning]` and `[ur3e]` still accepted):
 
 ```ini
 use_multiview = true

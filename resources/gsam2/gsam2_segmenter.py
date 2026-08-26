@@ -160,7 +160,7 @@ class GSAM2_Segmenter:
         mmask = self.default_multimask if multimask_output is None else bool(multimask_output)
 
         # ---- Detection (GroundingDINO) ----
-        det = self._gdino_detect_hf(rgb, text_prompt, box_thr, max_det)
+        det = self._gdino_detect_hf(rgb, text_prompt, box_thr, max_det, max_box_area_frac=0.0)
         boxes, scores, phrases = det["boxes_xyxy"], det["scores"], det["phrases"]
 
         # ---- Segmentation (SAM2) ----
@@ -229,6 +229,7 @@ class GSAM2_Segmenter:
         text_prompt: str,
         box_threshold: float,
         max_dets: int,
+        max_box_area_frac: float = 0.0,
     ) -> Dict[str, Any]:
         """
         GroundingDINO (HF) forward + postprocess + manual threshold/top-k.
@@ -271,7 +272,10 @@ class GSAM2_Segmenter:
         # Convert to pixel boxes (target size expects (H, W))
         target_sizes = [rgb.shape[:2]]
         results = self._hf_processor.post_process_grounded_object_detection(
-            outputs, inputs["input_ids"], target_sizes=target_sizes
+            outputs,
+            inputs["input_ids"],
+            threshold=float(box_threshold),
+            target_sizes=target_sizes,
         )
         det = results[0]
         boxes = det["boxes"]   # tensor (N,4) xyxy
@@ -285,11 +289,24 @@ class GSAM2_Segmenter:
                 "phrases": [],
             }
 
-        # Score threshold
+        # Score threshold (also applied in HF post_process; keep for safety)
         keep = scores > float(box_threshold)
         boxes = boxes[keep]
         scores = scores[keep]
         labels = [labels[i] for i, k in enumerate(keep.tolist()) if k]
+
+        # Optional tray / giant-box filter (area >= frac * image)
+        try:
+            area_frac = float(max_box_area_frac)
+        except (TypeError, ValueError):
+            area_frac = 0.0
+        if area_frac > 0.0 and boxes.shape[0] > 0:
+            H, W = rgb.shape[:2]
+            areas = (boxes[:, 2] - boxes[:, 0]) * (boxes[:, 3] - boxes[:, 1])
+            area_keep = areas < (area_frac * float(H) * float(W))
+            boxes = boxes[area_keep]
+            scores = scores[area_keep]
+            labels = [labels[i] for i, k in enumerate(area_keep.tolist()) if k]
 
         # Top-K by score
         if boxes.shape[0] > max_dets:

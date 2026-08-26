@@ -6,17 +6,21 @@
 #include "backend/camera/processing/FlatFieldCorrector.hpp"
 #include "backend/camera/processing/Gsam2RoiAnalysis.hpp"
 #include "backend/camera/processing/Gsam2SegmentationClient.hpp"
+#include "backend/camera/processing/GsamPlan.hpp"
+#include "backend/camera/processing/GsamPlanSegmentRunner.hpp"
 #include "backend/camera/processing/HfFusionRunner.hpp"
 #include "backend/camera/processing/HsiToColor.hpp"
 #include "backend/camera/processing/IlluminantTables.hpp"
 #include "backend/camera/processing/ReferenceBuilder.hpp"
 #include "backend/camera/processing/ReferenceSpectrumPlot.hpp"
 #include "backend/camera/processing/ReferenceSpectrumStats.hpp"
+#include "backend/camera/processing/SwirRefBprCorrector.hpp"
 
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -25,6 +29,7 @@
 #include <QXmlStreamWriter>
 
 #include <algorithm>
+#include <cstdint>
 
 namespace hf::processing
 {
@@ -47,6 +52,13 @@ struct StreamProcessReport
     QString segmentationCsvPath;
     QString segmentationPlotPath;
     QString rgbExportMode;
+    QString gsamPromptApplied;
+    bool rgbInverted = false;
+    bool swirRefBprApplied = false;
+    int swirRefBprBadColumns = 0;
+    int swirRefBprBadPixels = 0;
+    double gsamBoxThreshold = 0.0;
+    double gsamMaxBoxAreaFrac = 0.0;
     QString errorMessage;
 };
 
@@ -164,6 +176,19 @@ FlatFieldParams flatFieldParamsFromConfig()
     return params;
 }
 
+SwirRefBprSettings swirRefBprSettingsFromConfig()
+{
+    const hf::HardwareConfig::PreprocessingConfig &cfg = hf::hardwareConfig().preprocessing;
+    SwirRefBprSettings settings;
+    settings.baselineRadius = cfg.swir3RefBprBaselineRadius;
+    settings.whiteRatioMin = cfg.swir3RefBprWhiteRatioMin;
+    settings.whiteRatioMax = cfg.swir3RefBprWhiteRatioMax;
+    settings.darkAbsMinDn = cfg.swir3RefBprDarkAbsMinDn;
+    settings.darkAbsScale = cfg.swir3RefBprDarkAbsScale;
+    settings.columnPromoteFrac = cfg.swir3RefBprColumnPromoteFrac;
+    return settings;
+}
+
 QString manifestRelativePath(const QString &sessionDirectory, const QString &absolutePath)
 {
     QString relative = QDir(sessionDirectory).relativeFilePath(absolutePath);
@@ -241,6 +266,14 @@ void writePreprocessedMetadataXml(const QString &metadataXmlPath,
         writeKey(QStringLiteral("gsam sample count"), QString::number(options.gsamSampleCount));
     if (!report.rgbExportMode.isEmpty())
         writeKey(QStringLiteral("rgb export mode"), report.rgbExportMode);
+    if (report.swirRefBprApplied)
+    {
+        writeKey(QStringLiteral("swir ref bpr"), QStringLiteral("yes"));
+        writeKey(QStringLiteral("swir ref bpr bad columns"),
+                 QString::number(report.swirRefBprBadColumns));
+        writeKey(QStringLiteral("swir ref bpr bad pixels"),
+                 QString::number(report.swirRefBprBadPixels));
+    }
 
     const auto writeArtifact = [&writeKey](const QString &label, const bool ok, const QString &path) {
         writeKey(label + QStringLiteral(" status"), ok ? QStringLiteral("ok") : QStringLiteral("missing"));
@@ -425,6 +458,11 @@ bool writeProcessingManifestJson(const QString &preprocessedDir,
     root.insert(QStringLiteral("hfFusionMode"), options.hfFusionMode);
     root.insert(QStringLiteral("gsamPrompt"), options.gsamPrompt);
     root.insert(QStringLiteral("gsamSampleCount"), options.gsamSampleCount);
+    if (!options.gsamPlanPath.isEmpty())
+    {
+        root.insert(QStringLiteral("gsamPlanPath"), options.gsamPlanPath);
+        root.insert(QStringLiteral("gsamPlanId"), QFileInfo(options.gsamPlanPath).completeBaseName());
+    }
 
     const hf::HardwareConfig::PreprocessingConfig &cfg = hf::hardwareConfig().preprocessing;
     QJsonObject configObject;
@@ -440,6 +478,13 @@ bool writeProcessingManifestJson(const QString &preprocessedDir,
     configObject.insert(QStringLiteral("swirFalseColorGreenNmMax"), cfg.swirFalseColorGreen.maxNm);
     configObject.insert(QStringLiteral("swirFalseColorBlueNmMin"), cfg.swirFalseColorBlue.minNm);
     configObject.insert(QStringLiteral("swirFalseColorBlueNmMax"), cfg.swirFalseColorBlue.maxNm);
+    configObject.insert(QStringLiteral("swir3RefBpr"), cfg.swir3RefBprCorrect);
+    configObject.insert(QStringLiteral("swir3RefBprBaselineRadius"), cfg.swir3RefBprBaselineRadius);
+    configObject.insert(QStringLiteral("swir3RefBprWhiteRatioMin"), cfg.swir3RefBprWhiteRatioMin);
+    configObject.insert(QStringLiteral("swir3RefBprWhiteRatioMax"), cfg.swir3RefBprWhiteRatioMax);
+    configObject.insert(QStringLiteral("swir3RefBprDarkAbsMinDn"), cfg.swir3RefBprDarkAbsMinDn);
+    configObject.insert(QStringLiteral("swir3RefBprDarkAbsScale"), cfg.swir3RefBprDarkAbsScale);
+    configObject.insert(QStringLiteral("swir3RefBprColumnPromoteFrac"), cfg.swir3RefBprColumnPromoteFrac);
     root.insert(QStringLiteral("config"), configObject);
 
     QJsonArray streamsArray;
@@ -457,8 +502,22 @@ bool writeProcessingManifestJson(const QString &preprocessedDir,
         streamObject.insert(QStringLiteral("ffcHdrPath"), report.ffcHdrPath);
         streamObject.insert(QStringLiteral("ffcRawPath"), report.ffcRawPath);
         streamObject.insert(QStringLiteral("rgbPath"), report.rgbPath);
+        if (report.swirRefBprApplied)
+        {
+            streamObject.insert(QStringLiteral("swirRefBprApplied"), true);
+            streamObject.insert(QStringLiteral("swirRefBprBadColumns"), report.swirRefBprBadColumns);
+            streamObject.insert(QStringLiteral("swirRefBprBadPixels"), report.swirRefBprBadPixels);
+        }
         if (!report.rgbExportMode.isEmpty())
             streamObject.insert(QStringLiteral("rgbExportMode"), report.rgbExportMode);
+        if (!report.gsamPromptApplied.isEmpty())
+            streamObject.insert(QStringLiteral("gsamPrompt"), report.gsamPromptApplied);
+        if (report.rgbInverted)
+            streamObject.insert(QStringLiteral("rgbInverted"), true);
+        if (report.gsamBoxThreshold > 0.0)
+            streamObject.insert(QStringLiteral("gsamBoxThreshold"), report.gsamBoxThreshold);
+        if (report.gsamMaxBoxAreaFrac > 0.0)
+            streamObject.insert(QStringLiteral("gsamMaxBoxAreaFrac"), report.gsamMaxBoxAreaFrac);
         streamObject.insert(QStringLiteral("segmentationDir"), report.segmentationDir);
         streamObject.insert(QStringLiteral("segmentationCsvPath"), report.segmentationCsvPath);
         streamObject.insert(QStringLiteral("segmentationPlotPath"), report.segmentationPlotPath);
@@ -621,9 +680,42 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
 
     const QString sensorLabel = stream.baseName;
     const FlatFieldParams ffcParams = flatFieldParamsFromConfig();
+    SampleLineMutator sampleLineMutator;
+    SwirRefBprCorrector swirRefBpr;
+
+    if (streamTraits.isSwir3 && cfg.swir3RefBprCorrect)
+    {
+        swirRefBpr.setSettings(swirRefBprSettingsFromConfig());
+        QString bprError;
+        if (!swirRefBpr.buildFromReferences(whiteRow, darkRow, whiteMeta.samples, whiteMeta.bands,
+                                            &bprError))
+        {
+            logLines.push_back(
+                QStringLiteral("Capture post-process (%1): SWIR ref BPR skipped \u2014 %2")
+                    .arg(streamLabel, bprError));
+        }
+        else
+        {
+            swirRefBpr.applyToFloatRow(whiteRow);
+            swirRefBpr.applyToFloatRow(darkRow);
+            sampleLineMutator = [&swirRefBpr](std::uint16_t *linePixels) {
+                swirRefBpr.applyToUint16Line(linePixels);
+            };
+            report.swirRefBprApplied = true;
+            report.swirRefBprBadColumns = static_cast<int>(swirRefBpr.badColumnCount());
+            report.swirRefBprBadPixels = static_cast<int>(swirRefBpr.badPixelCount());
+            logLines.push_back(
+                QStringLiteral("Capture post-process (%1): SWIR ref BPR interpolated %2 columns (%3 pixels)")
+                    .arg(streamLabel)
+                    .arg(report.swirRefBprBadColumns)
+                    .arg(report.swirRefBprBadPixels));
+        }
+    }
 
     QString ffcHdrForRgb = report.ffcHdrPath;
-    const bool writeFfcToSession = options.saveFfcImage || options.runHfFusion;
+    // Plan-driven GSAM (Python CLI) reads `{stem}_ffc.hdr` from preprocessed/. Keep the cube.
+    const bool writeFfcToSession =
+        options.saveFfcImage || options.runHfFusion || options.runGsamSegmentation;
     const bool keepFfcForSegmentation = options.runGsamSegmentation && !writeFfcToSession;
     if (!writeFfcToSession)
     {
@@ -644,7 +736,8 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
                                    sensorLabel,
                                    preprocessedEnviDescriptionForStream(streamTraits),
                                    ffcParams,
-                                   &error))
+                                   &error,
+                                   sampleLineMutator))
     {
         report.errorMessage = QStringLiteral("FFC failed: %1").arg(error);
         logLines.push_back(QStringLiteral("Capture post-process (%1): %2").arg(streamLabel, report.errorMessage));
@@ -713,6 +806,44 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
                                .arg(streamLabel, QFileInfo(report.rgbPath).fileName()));
     }
 
+    GsamPlanStreamSettings planStream;
+    bool usePlan = false;
+    GsamPlan loadedPlan;
+    if (!options.gsamPlanPath.isEmpty())
+    {
+        QString planError;
+        if (!loadGsamPlan(options.gsamPlanPath, &loadedPlan, &planError))
+        {
+            report.errorMessage = planError;
+            logLines.push_back(QStringLiteral("Capture post-process (%1): %2").arg(streamLabel, planError));
+            return report;
+        }
+        planStream = resolveGsamPlanStream(loadedPlan, stream.relativeRoot, streamTraits.isTransmittance,
+                                           streamTraits.isSwir3);
+        usePlan = true;
+    }
+
+    if (usePlan && planStream.hasInvertRgb && planStream.invertRgb)
+    {
+        QImage rgbImage(report.rgbPath);
+        if (rgbImage.isNull())
+        {
+            report.errorMessage = QStringLiteral("Could not reload RGB for invert: %1").arg(report.rgbPath);
+            logLines.push_back(QStringLiteral("Capture post-process (%1): %2").arg(streamLabel, report.errorMessage));
+            return report;
+        }
+        rgbImage.invertPixels(QImage::InvertRgb);
+        if (!rgbImage.save(report.rgbPath))
+        {
+            report.errorMessage = QStringLiteral("Could not save inverted RGB: %1").arg(report.rgbPath);
+            logLines.push_back(QStringLiteral("Capture post-process (%1): %2").arg(streamLabel, report.errorMessage));
+            return report;
+        }
+        report.rgbInverted = true;
+        logLines.push_back(QStringLiteral("Capture post-process (%1): inverted RGB for GSAM plan")
+                               .arg(streamLabel));
+    }
+
     if (options.runGsamSegmentation)
     {
         const QString segDir = QDir(preprocessedDir).filePath(QStringLiteral("segmentation"));
@@ -729,30 +860,116 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
         segRequest.inputRgbPath = report.rgbPath;
         segRequest.outputDirectory = segDir;
         segRequest.imageName = QFileInfo(report.rgbPath).fileName();
-        segRequest.prompt = options.gsamPrompt.trimmed().isEmpty() ? QStringLiteral("sample.")
-                                                                    : options.gsamPrompt.trimmed();
-        segRequest.maxDetections = std::max(1, options.gsamSampleCount);
-        segRequest.boxThreshold = segCfg.boxThreshold;
         segRequest.serverUrl = options.gsamServerUrl;
 
-        QString segError;
-        const Gsam2SegmentationResponse segResponse = requestGsam2Segmentation(segRequest, &segError);
-        if (!segResponse.ok)
+        if (usePlan)
         {
-            report.errorMessage =
-                segError.isEmpty() ? QStringLiteral("GSAM2 segmentation failed.") : segError;
-            logLines.push_back(QStringLiteral("Capture post-process (%1): %2").arg(streamLabel, report.errorMessage));
-            if (!writeFfcToSession && keepFfcForSegmentation)
+            if (planStream.hasPrompt && !planStream.prompt.isEmpty())
+                segRequest.prompt = planStream.prompt;
+            else
+                segRequest.prompt = options.gsamPrompt.trimmed().isEmpty() ? QStringLiteral("sample.")
+                                                                            : options.gsamPrompt.trimmed();
+            segRequest.maxDetections =
+                loadedPlan.hasSampleCount ? std::max(1, loadedPlan.sampleCount)
+                                          : std::max(1, options.gsamSampleCount);
+            segRequest.boxThreshold =
+                planStream.hasBoxThreshold ? planStream.boxThreshold : segCfg.boxThreshold;
+            if (planStream.hasMaxBoxAreaFrac && planStream.maxBoxAreaFrac > 0.0)
+                segRequest.maxBoxAreaFrac = planStream.maxBoxAreaFrac;
+        }
+        else
+        {
+            segRequest.prompt = options.gsamPrompt.trimmed().isEmpty() ? QStringLiteral("sample.")
+                                                                        : options.gsamPrompt.trimmed();
+            segRequest.maxDetections = std::max(1, options.gsamSampleCount);
+            segRequest.boxThreshold = segCfg.boxThreshold;
+        }
+
+        report.gsamPromptApplied = segRequest.prompt;
+        report.gsamBoxThreshold = segRequest.boxThreshold;
+        report.gsamMaxBoxAreaFrac = segRequest.maxBoxAreaFrac;
+
+        QString segError;
+        int detectionCount = 0;
+        QString manifestJsonPath;
+        if (usePlan)
+        {
+            if (planStream.hasReuseMasksFrom && !planStream.reuseMasksFrom.isEmpty())
             {
-                QFile::remove(ffcHdrForRgb);
-                QFile::remove(QDir(preprocessedDir).filePath(ffcBaseName + QStringLiteral("_tmp.raw")));
+                report.gsamPromptApplied =
+                    QStringLiteral("reused from %1").arg(planStream.reuseMasksFrom);
             }
-            return report;
+            else if (planStream.twoStage.enabled)
+            {
+                const QString stage2Prompt = planStream.twoStage.stage2Prompt.isEmpty()
+                                                 ? segRequest.prompt
+                                                 : planStream.twoStage.stage2Prompt;
+                report.gsamPromptApplied =
+                    QStringLiteral("%1 box -> %2").arg(planStream.twoStage.stage1Prompt, stage2Prompt);
+            }
+
+            GsamPlanSegmentRunRequest planSegRequest;
+            planSegRequest.sessionDirectory = summary.sessionDirectory;
+            planSegRequest.planPath = options.gsamPlanPath;
+            planSegRequest.stream = stream.relativeRoot.trimmed().toLower();
+            if (planSegRequest.stream.isEmpty())
+            {
+                planSegRequest.stream =
+                    gsamPlanStreamKey(streamTraits.isTransmittance, streamTraits.isSwir3);
+            }
+            planSegRequest.stem = datasetStem;
+            planSegRequest.gsamServerUrl = options.gsamServerUrl;
+
+            logLines.push_back(
+                QStringLiteral("Capture post-process (%1): GSAM from plan (%2)")
+                    .arg(streamLabel, report.gsamPromptApplied));
+
+            const GsamPlanSegmentRunResult planSegResult = runGsamPlanSegment(planSegRequest);
+            for (const QString &line : planSegResult.logLines)
+                logLines.push_back(line);
+            if (!planSegResult.success)
+            {
+                report.errorMessage = planSegResult.errorMessage.isEmpty()
+                                          ? QStringLiteral("GSAM plan segmentation failed.")
+                                          : planSegResult.errorMessage;
+                logLines.push_back(
+                    QStringLiteral("Capture post-process (%1): %2").arg(streamLabel, report.errorMessage));
+                if (!writeFfcToSession && keepFfcForSegmentation)
+                {
+                    QFile::remove(ffcHdrForRgb);
+                    QFile::remove(QDir(preprocessedDir).filePath(ffcBaseName + QStringLiteral("_tmp.raw")));
+                }
+                return report;
+            }
+
+            detectionCount = planSegResult.detectionCount;
+            manifestJsonPath = QDir(segDir).filePath(QStringLiteral("segmentation_results.json"));
+            if (!planSegResult.prompt.isEmpty())
+                report.gsamPromptApplied = planSegResult.prompt;
+        }
+        else
+        {
+            const Gsam2SegmentationResponse segResponse = requestGsam2Segmentation(segRequest, &segError);
+            if (!segResponse.ok)
+            {
+                report.errorMessage =
+                    segError.isEmpty() ? QStringLiteral("GSAM2 segmentation failed.") : segError;
+                logLines.push_back(
+                    QStringLiteral("Capture post-process (%1): %2").arg(streamLabel, report.errorMessage));
+                if (!writeFfcToSession && keepFfcForSegmentation)
+                {
+                    QFile::remove(ffcHdrForRgb);
+                    QFile::remove(QDir(preprocessedDir).filePath(ffcBaseName + QStringLiteral("_tmp.raw")));
+                }
+                return report;
+            }
+            detectionCount = segResponse.detectionCount;
+            manifestJsonPath = segResponse.manifestJsonPath;
         }
 
         logLines.push_back(QStringLiteral("Capture post-process (%1): GSAM2 found %2 ROI(s)")
                                .arg(streamLabel)
-                               .arg(segResponse.detectionCount));
+                               .arg(detectionCount));
         logLines.push_back(QStringLiteral("Capture post-process (%1): per-ROI segmented RGB in preprocessed/segmentation/segmented_rgb/")
                                .arg(streamLabel));
 
@@ -760,7 +977,7 @@ StreamProcessReport processStream(const CaptureWriterSessionSummary &summary,
             ffcHdrForRgb,
             segDir,
             QFileInfo(report.rgbPath).fileName(),
-            segResponse.manifestJsonPath,
+            manifestJsonPath,
             spectrumYAxisLabelForStream(streamTraits),
             &segError);
         if (!roiResult.success)
@@ -1076,6 +1293,18 @@ CapturePostProcessResult processCaptureSession(const CaptureWriterSessionSummary
             updateDatasetManifestForPreprocessing(summary.sessionDirectory, datasetName, reports,
                                                   options);
     }
+
+    bool wroteSegmentation = false;
+    for (const StreamProcessReport &report : reports)
+    {
+        if (report.segmentationOk)
+        {
+            wroteSegmentation = true;
+            break;
+        }
+    }
+    if (wroteSegmentation)
+        writeSessionMaskOverlapsSheet(summary.sessionDirectory, &result.logLines);
 
     if (options.runHfFusion)
     {

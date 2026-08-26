@@ -1,4 +1,4 @@
-# Fused ROI mean spectrum CSV + mean±std spectrum plots (backend/offline).
+# ROI mean spectrum CSV + mean±std plots for GSAM segmentation and fusion (backend/offline).
 from __future__ import annotations
 
 import csv
@@ -291,3 +291,70 @@ def write_combined_roi_spectra_artifacts(
         y_axis_label=spectrum_y_axis_label(mode),
     )
     return csv_path, plot_path
+
+
+def _load_mask_for_cube(mask_path: Path, cube_hw: tuple[int, int]) -> np.ndarray:
+    from PIL import Image
+
+    mask = np.load(mask_path)
+    if mask.ndim == 3:
+        mask = mask[..., 0] if mask.shape[-1] in (1, 3, 4) else mask[0]
+    if mask.shape != cube_hw:
+        mask = np.array(
+            Image.fromarray((mask > 0).astype(np.uint8) * 255, mode="L").resize(
+                (cube_hw[1], cube_hw[0]), Image.NEAREST
+            )
+        )
+    return mask > 0
+
+
+def write_segmentation_roi_spectra(
+    seg_dir: Path,
+    *,
+    image_name: str,
+    cube: np.ndarray,
+    wavelengths: np.ndarray | list[float],
+    detections: list,
+    y_axis_label: str = "Reflectance",
+    copy_csv_to_preprocessed: bool = True,
+) -> Path:
+    """Write segmentation/roi_spectra.csv and roi_spectra_plot.png (mean ± 1σ)."""
+    wl = [float(value) for value in wavelengths]
+    rows: list[RoiSpectraRow] = []
+    for det in detections:
+        roi = int(det["roi"])
+        mask = _load_mask_for_cube(seg_dir / "masks" / f"mask_{roi:03d}.npy", cube.shape[:2])
+        pixel_count = int(mask.sum())
+        if pixel_count == 0:
+            mean = np.zeros(cube.shape[2], dtype=np.float64)
+            std = np.zeros(cube.shape[2], dtype=np.float64)
+        else:
+            values = cube[mask].astype(np.float64, copy=False)
+            mean = values.mean(axis=0)
+            std = values.std(axis=0, ddof=0)
+        rows.append(
+            RoiSpectraRow(
+                image=image_name,
+                label=str(det.get("label", "")),
+                roi=roi,
+                pixel_num=pixel_count,
+                wavelengths_nm=wl,
+                mean=mean,
+                std=std,
+            )
+        )
+
+    csv_path = seg_dir / roi_spectra_csv_name()
+    plot_path = seg_dir / roi_spectra_plot_name()
+    write_roi_spectra_csv(csv_path, rows)
+    if copy_csv_to_preprocessed:
+        (seg_dir.parent / roi_spectra_csv_name()).write_text(
+            csv_path.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+    save_all_roi_spectra_plot_png(
+        plot_path,
+        rows,
+        title=f"ROI {y_axis_label.lower()} spectra",
+        y_axis_label=y_axis_label,
+    )
+    return plot_path

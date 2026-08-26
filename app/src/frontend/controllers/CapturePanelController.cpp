@@ -15,6 +15,7 @@
 #include "backend/camera/processing/CapturePostProcessor.hpp"
 #include "backend/camera/processing/CapturePostProcessorWorker.hpp"
 #include "backend/camera/processing/Gsam2ServerManager.hpp"
+#include "backend/camera/processing/GsamPlan.hpp"
 #include "backend/camera/processing/HfFusionWorker.hpp"
 #include "frontend/controllers/BfsPanelController.hpp"
 #include "frontend/controllers/CameraPanelController.hpp"
@@ -30,8 +31,10 @@
 #include "frontend/widgets/WaterfallDisplayWidget.hpp"
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDir>
 #include <QDoubleSpinBox>
+#include <QFileDialog>
 #include <QFileInfo>
 #include <QGridLayout>
 #include <QGroupBox>
@@ -1000,36 +1003,20 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
     host_->capturePositionContent_->setEnabled(positionBoxEnabled);
 
   const bool useStageRecording = isStageRecordingEnabledInUi();
-  const bool preprocessingHardwareReady = captureHardwareReady;
-  const bool preprocessingBoxEnabled =
-      preprocessingHardwareReady && useStageRecording && !scanActive;
-  const bool preprocessingEnabled = preprocessingBoxEnabled;
+  const bool afterScanPreprocessReady =
+      captureHardwareReady && useStageRecording && !scanActive;
+  const bool idleOfflinePreprocess = !scanActive && !backgroundJobActive;
+  const bool preprocessingEnabled = afterScanPreprocessReady;
   if (host_->capturePreprocessingBox_ != nullptr) {
-    if (!preprocessingBoxEnabled && !scanActive) {
-      if (!preprocessingHardwareReady) {
-        if (!stageConnected && !anyCameraConnected) {
-          host_->capturePreprocessingBox_->setToolTip(tr(
-              "Connect a camera and the stage to use preprocessing options."));
-        } else if (!stageConnected) {
-          host_->capturePreprocessingBox_->setToolTip(
-              tr("Connect the stage on the Stage tab to use preprocessing "
-                 "options."));
-        } else {
-          host_->capturePreprocessingBox_->setToolTip(
-              tr("Connect at least one camera on the Camera tab to use "
-                 "preprocessing options."));
-        }
-      } else {
-        host_->capturePreprocessingBox_->setToolTip(
-            tr("Post-processing requires a stage scan with dark and white "
-               "references. "
-               "Enable \"Use HyperFusion Stage for recording\" to use these "
-               "options."));
-      }
+    if (!afterScanPreprocessReady && !scanActive) {
+      host_->capturePreprocessingBox_->setToolTip(
+          tr("After-scan preprocessing needs a connected camera and stage. "
+             "GSAM plan selection still works for offline scripts and after-scan runs "
+             "(two-stage when the plan JSON enables it)."));
     } else {
       host_->capturePreprocessingBox_->setToolTip(
-          tr("Post-processing runs after a stage scan completes (FFC, optional "
-             "GSAM segmentation, optional spectral fusion per illumination mode)."));
+          tr("Post-processing runs after a stage scan completes (FFC, GSAM plan "
+             "including two-stage, optional spectral fusion)."));
     }
   }
 
@@ -1037,21 +1024,26 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
     host_->capturePreprocessAfterScanCheck_->setEnabled(preprocessingEnabled);
 
   if (host_->captureSaveFfcImageCheck_ != nullptr)
-    host_->captureSaveFfcImageCheck_->setEnabled(
-        preprocessingEnabled &&
-        host_->capturePreprocessAfterScanCheck_ != nullptr &&
-        host_->capturePreprocessAfterScanCheck_->isChecked());
+    host_->captureSaveFfcImageCheck_->setEnabled(idleOfflinePreprocess);
 
-  const bool gsamChildEnabled =
-      preprocessingEnabled &&
-      host_->capturePreprocessAfterScanCheck_ != nullptr &&
-      host_->capturePreprocessAfterScanCheck_->isChecked();
+  const bool gsamChildEnabled = idleOfflinePreprocess;
   const bool gsamServerConnected = gsam2ServerManager_ != nullptr &&
                                    gsam2ServerManager_->isServerConnected();
   const bool gsamSegmentationEnabled = gsamChildEnabled && gsamServerConnected;
+  const bool gsamPlanSelected =
+      host_->captureGsamPlanCombo_ != nullptr &&
+      !host_->captureGsamPlanCombo_->currentData().toString().isEmpty();
   if (host_->captureRunGsamCheck_ != nullptr) {
-    host_->captureRunGsamCheck_->setEnabled(gsamSegmentationEnabled);
-    if (!gsamServerConnected) {
+    if (gsamPlanSelected && !host_->captureRunGsamCheck_->isChecked()) {
+      const QSignalBlocker blocker(host_->captureRunGsamCheck_);
+      host_->captureRunGsamCheck_->setChecked(true);
+    }
+    // Plan locks GSAM on; Manual leaves the checkbox user-controlled when enabled.
+    host_->captureRunGsamCheck_->setEnabled(gsamSegmentationEnabled && !gsamPlanSelected);
+    if (gsamPlanSelected) {
+      host_->captureRunGsamCheck_->setToolTip(
+          tr("GSAM is required while a GSAM plan is selected. Choose (Manual) to turn it off."));
+    } else if (!gsamServerConnected) {
       host_->captureRunGsamCheck_->setToolTip(
           tr("Requires a connected GSAM2 server. The app tries to start the "
              "server automatically "
@@ -1072,22 +1064,18 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
       host_->captureCamera2Check_ != nullptr &&
       host_->captureCamera1Check_->isChecked() &&
       host_->captureCamera2Check_->isChecked();
-  const bool fusionChildEnabled =
-      preprocessingEnabled && host_->capturePreprocessAfterScanCheck_ != nullptr &&
-      host_->capturePreprocessAfterScanCheck_->isChecked();
-  const bool fusionEnabled = fusionChildEnabled && dualCameraReflectanceSelected &&
-                             gsamSegmentationEnabled && gsamChecked;
+  const bool fusionEnabled = gsamChecked && idleOfflinePreprocess;
   if (host_->captureRunHfFusionCheck_ != nullptr) {
     if (!fusionEnabled) {
       const QSignalBlocker blocker(host_->captureRunHfFusionCheck_);
       host_->captureRunHfFusionCheck_->setChecked(false);
     }
     host_->captureRunHfFusionCheck_->setEnabled(fusionEnabled);
-    if (!gsamChecked || !gsamSegmentationEnabled) {
+    if (!gsamChecked) {
       host_->captureRunHfFusionCheck_->setToolTip(
           tr("Enable GSAM segmentation first. Fusion needs chip ROIs from GSAM "
              "on both FX10e and SWIR3."));
-    } else if (!dualCameraReflectanceSelected) {
+    } else if (afterScanPreprocessReady && !dualCameraReflectanceSelected) {
       host_->captureRunHfFusionCheck_->setToolTip(
           tr("Requires FX10e and SWIR3 connected and both selected for capture."));
     } else {
@@ -1099,9 +1087,13 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
     }
   }
   if (host_->captureGsamPromptEdit_ != nullptr)
-    host_->captureGsamPromptEdit_->setEnabled(gsamSegmentationEnabled);
+    host_->captureGsamPromptEdit_->setEnabled(gsamSegmentationEnabled &&
+                                              !gsamPlanSelected);
   if (host_->captureGsamSampleCountSpin_ != nullptr)
-    host_->captureGsamSampleCountSpin_->setEnabled(gsamSegmentationEnabled);
+    host_->captureGsamSampleCountSpin_->setEnabled(gsamSegmentationEnabled &&
+                                                   !gsamPlanSelected);
+  if (host_->captureGsamPlanCombo_ != nullptr)
+    host_->captureGsamPlanCombo_->setEnabled(!scanActive);
 
   updateGsamServerUi();
 
@@ -1228,6 +1220,46 @@ void hf::capture::CapturePanelController::updateGsamServerUi() {
   host_->captureGsamServerStatusLabel_->setStyleSheet(
       QStringLiteral("color: %1; background: transparent; font-size: 14px;")
           .arg(color));
+}
+
+void hf::capture::CapturePanelController::refreshGsamPlanCombo(
+    const QString &preferredPlanId) {
+  if (host_->captureGsamPlanCombo_ == nullptr)
+    return;
+
+  const QString previousPath = host_->captureGsamPlanCombo_->currentData().toString();
+  const QString preferId = preferredPlanId.trimmed();
+  const QSignalBlocker blocker(host_->captureGsamPlanCombo_);
+  host_->captureGsamPlanCombo_->clear();
+  host_->captureGsamPlanCombo_->addItem(QStringLiteral("(Manual)"), QString());
+
+  const QString plansDir = hf::processing::defaultGsamPlansDirectory();
+  const QStringList files = hf::processing::listGsamPlanJsonFiles(plansDir);
+  int selectIndex = 0;
+  for (const QString &fileName : files) {
+    const QString path = QDir(plansDir).filePath(fileName);
+    const QString planId = QFileInfo(fileName).completeBaseName();
+    QString display = planId;
+    hf::processing::GsamPlan plan;
+    if (hf::processing::loadGsamPlan(path, &plan, nullptr) && !plan.name.isEmpty())
+      display = hf::processing::gsamPlanComboLabel(plan, planId);
+    else
+      display = planId;
+    host_->captureGsamPlanCombo_->addItem(display, path);
+    const int index = host_->captureGsamPlanCombo_->count() - 1;
+    const QString tip = hf::processing::gsamPlanTooltip(plan);
+    if (!tip.isEmpty())
+      host_->captureGsamPlanCombo_->setItemData(index, tip, Qt::ToolTipRole);
+    if (!preferId.isEmpty() && planId.compare(preferId, Qt::CaseInsensitive) == 0)
+      selectIndex = index;
+    else if (preferId.isEmpty() && !previousPath.isEmpty() &&
+             QFileInfo(previousPath).fileName().compare(fileName, Qt::CaseInsensitive) == 0)
+      selectIndex = index;
+  }
+
+  if (selectIndex >= 0 && selectIndex < host_->captureGsamPlanCombo_->count())
+    host_->captureGsamPlanCombo_->setCurrentIndex(selectIndex);
+  updateRecorderControls();
 }
 
 void hf::capture::CapturePanelController::updateSessionUiLock() {
@@ -3166,6 +3198,31 @@ void hf::capture::CapturePanelController::finishCaptureSequenceAfterOptionalMult
   }
 }
 
+hf::processing::CapturePostProcessOptions
+hf::capture::CapturePanelController::capturePostProcessOptionsFromUi() const
+{
+  hf::processing::CapturePostProcessOptions options;
+  options.saveFfcImage = host_->captureSaveFfcImageCheck_ != nullptr &&
+                         host_->captureSaveFfcImageCheck_->isChecked();
+  options.runGsamSegmentation = host_->captureRunGsamCheck_ != nullptr &&
+                                host_->captureRunGsamCheck_->isChecked();
+  options.runHfFusion = host_->captureRunHfFusionCheck_ != nullptr &&
+                        host_->captureRunHfFusionCheck_->isChecked();
+  if (host_->captureGsamPromptEdit_ != nullptr)
+    options.gsamPrompt = host_->captureGsamPromptEdit_->text().trimmed();
+  if (host_->captureGsamSampleCountSpin_ != nullptr)
+    options.gsamSampleCount = host_->captureGsamSampleCountSpin_->value();
+  if (host_->captureGsamPlanCombo_ != nullptr)
+    options.gsamPlanPath = host_->captureGsamPlanCombo_->currentData().toString();
+  if (gsam2ServerManager_ != nullptr)
+    options.gsamServerUrl = gsam2ServerManager_->serverUrl();
+  if (!options.gsamPlanPath.isEmpty())
+    options.runGsamSegmentation = true;
+  if (options.runGsamSegmentation)
+    options.saveFfcImage = true;
+  return options;
+}
+
 void hf::capture::CapturePanelController::runCapturePostProcessingIfEnabled() {
   if (capturePostProcessStartedForSession_)
     return;
@@ -3183,19 +3240,18 @@ void hf::capture::CapturePanelController::runCapturePostProcessingIfEnabled() {
   if (capturePostProcessorWorker_ == nullptr)
     return;
 
-  hf::processing::CapturePostProcessOptions options;
-  options.saveFfcImage = host_->captureSaveFfcImageCheck_ != nullptr &&
-                         host_->captureSaveFfcImageCheck_->isChecked();
-  options.runGsamSegmentation = host_->captureRunGsamCheck_ != nullptr &&
-                                host_->captureRunGsamCheck_->isChecked();
-  options.runHfFusion = host_->captureRunHfFusionCheck_ != nullptr &&
-                        host_->captureRunHfFusionCheck_->isChecked();
-  if (host_->captureGsamPromptEdit_ != nullptr)
-    options.gsamPrompt = host_->captureGsamPromptEdit_->text().trimmed();
-  if (host_->captureGsamSampleCountSpin_ != nullptr)
-    options.gsamSampleCount = host_->captureGsamSampleCountSpin_->value();
-  if (gsam2ServerManager_ != nullptr)
-    options.gsamServerUrl = gsam2ServerManager_->serverUrl();
+  const hf::processing::CapturePostProcessOptions options = capturePostProcessOptionsFromUi();
+
+  QString planNote;
+  if (!options.gsamPlanPath.isEmpty())
+  {
+    hf::processing::GsamPlan plan;
+    if (hf::processing::loadGsamPlan(options.gsamPlanPath, &plan, nullptr))
+      planNote = hf::processing::gsamPlanComboLabel(
+          plan, QFileInfo(options.gsamPlanPath).completeBaseName());
+    else
+      planNote = QFileInfo(options.gsamPlanPath).completeBaseName();
+  }
 
   if (options.runGsamSegmentation && gsam2ServerManager_ != nullptr) {
     const auto state = gsam2ServerManager_->state();
@@ -3214,7 +3270,10 @@ void hf::capture::CapturePanelController::runCapturePostProcessingIfEnabled() {
   }
 
   host_->appendLog(
-      QStringLiteral("Capture post-process: started in background\u2026"));
+      planNote.isEmpty()
+          ? QStringLiteral("Capture post-process: started in background\u2026")
+          : QStringLiteral("Capture post-process: started in background (%1)\u2026")
+                .arg(planNote));
 
   capturePostProcessStartedForSession_ = true;
   capturePostProcessInFlight_ = true;

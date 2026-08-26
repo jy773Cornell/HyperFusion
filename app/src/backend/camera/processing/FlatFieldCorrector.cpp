@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
 namespace hf::processing
@@ -35,7 +36,8 @@ bool applyFlatFieldCorrection(const EnviBilMetadata &sampleMetadata,
                               const BilRowReference &whiteRow,
                               const FlatFieldParams &params,
                               const FlatFieldLineCallback &onCorrectedLine,
-                              QString *errorMessage)
+                              QString *errorMessage,
+                              const SampleLineMutator &preprocessSampleLine)
 {
     if (!validateRowReference(sampleMetadata, darkRow, errorMessage)
         || !validateRowReference(sampleMetadata, whiteRow, errorMessage))
@@ -43,18 +45,29 @@ bool applyFlatFieldCorrection(const EnviBilMetadata &sampleMetadata,
 
     const int samples = sampleMetadata.samples;
     const int bands = sampleMetadata.bands;
-    std::vector<float> corrected(static_cast<std::size_t>(samples * bands));
+    const std::size_t planeSize =
+        static_cast<std::size_t>(samples) * static_cast<std::size_t>(bands);
+    std::vector<float> corrected(planeSize);
+    std::vector<std::uint16_t> mutatedLine;
 
     int lineIndex = 0;
     const bool ok = readEnviBilLines(
         sampleMetadata,
         [&](const std::uint16_t *linePixels) {
+            const std::uint16_t *src = linePixels;
+            if (preprocessSampleLine)
+            {
+                mutatedLine.assign(linePixels, linePixels + planeSize);
+                preprocessSampleLine(mutatedLine.data());
+                src = mutatedLine.data();
+            }
+
             for (int sample = 0; sample < samples; ++sample)
             {
                 for (int band = 0; band < bands; ++band)
                 {
                     const std::size_t index = bilLinePixelIndex(sample, band, samples);
-                    const double raw = static_cast<double>(linePixels[index]);
+                    const double raw = static_cast<double>(src[index]);
                     const double dark = static_cast<double>(darkRow[index]);
                     const double white = static_cast<double>(whiteRow[index]);
                     double denom = white - dark;
@@ -83,7 +96,8 @@ bool writeFlatFieldCorrectedEnvi(const QString &sampleHdrPath,
                                  const QString &sensorTypeLabel,
                                  const QString &enviDescription,
                                  const FlatFieldParams &params,
-                                 QString *errorMessage)
+                                 QString *errorMessage,
+                                 const SampleLineMutator &preprocessSampleLine)
 {
     EnviBilMetadata sampleMetadata;
     if (!parseEnviHdr(sampleHdrPath, sampleMetadata, errorMessage))
@@ -106,7 +120,8 @@ bool writeFlatFieldCorrectedEnvi(const QString &sampleHdrPath,
         [&](const float *linePixels, int /*lineIndex*/) {
             return appendEnviFloatLine(writer, linePixels, errorMessage);
         },
-        errorMessage);
+        errorMessage,
+        preprocessSampleLine);
 
     if (!ok)
         return false;
