@@ -150,6 +150,26 @@ roi_spectra_plot.png
 
 This step is local C++ analysis. It does not call the Python server again.
 
+### Step 6: Session preview folder
+
+After per-stream preprocessing finishes, the app writes QA collages to `{session}/preview/`:
+
+```text
+preview/rgb_all.png
+preview/reference_intensity.png
+```
+
+If GSAM ran and overlays / ROI spectra plots exist, those collages are added as well:
+
+```text
+preview/mask_overlaps.png
+preview/roi_spectra_plots.png
+```
+
+Per-stream ROI spectra stay in `preprocessed/segmentation/` (`roi_spectra.csv`, `roi_spectra_plot.png`).
+
+FFC-only sessions get only the RGB and reference-intensity sheets.
+
 ## GSAM2 Model Stack
 
 GSAM2 in HyperFusion is a two-stage vision pipeline:

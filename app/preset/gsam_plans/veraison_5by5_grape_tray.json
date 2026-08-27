@@ -1,6 +1,6 @@
 {
-  "name": "Veraison_T1 grape tray",
-  "version": 1,
+  "name": "Veraison grape tray",
+  "version": 2,
   "sample_count": 25,
   "streams": {
     "reflectance/fx10e": {
@@ -20,7 +20,7 @@
       }
     },
     "reflectance/swir3": {
-      "prompt": "green ball",
+      "prompt": "green marble",
       "invert_rgb": false,
       "box_threshold": 0.08,
       "max_box_area_frac": 0.2,
@@ -28,7 +28,7 @@
       "two_stage": {
         "enabled": true,
         "stage1_prompt": "circle hole",
-        "stage2_prompt": "green ball",
+        "stage2_prompt": "green marble",
         "stage2_box_threshold": 0.15,
         "crop_margin_px": 0,
         "nms_iou": 0.4,
@@ -36,16 +36,16 @@
       }
     },
     "transmittance/fx10e": {
-      "prompt": "white balloon",
+      "prompt": "white marble",
       "invert_rgb": true,
       "box_threshold": 0.08,
       "max_box_area_frac": 0.2,
       "nms_iou": 0.4,
-      "reuse_reflectance_masks": true,
+      "reuse_reflectance_masks": false,
       "two_stage": {
         "enabled": true,
         "stage1_prompt": "circle hole",
-        "stage2_prompt": "white balloon",
+        "stage2_prompt": "white marble",
         "stage2_box_threshold": 0.15,
         "crop_margin_px": 0,
         "nms_iou": 0.4,
@@ -58,7 +58,7 @@
       "box_threshold": 0.08,
       "max_box_area_frac": 0.2,
       "nms_iou": 0.4,
-      "reuse_reflectance_masks": true,
+      "reuse_reflectance_masks": false,
       "two_stage": {
         "enabled": true,
         "stage1_prompt": "circle hole",

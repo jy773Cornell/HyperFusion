@@ -2663,5 +2663,523 @@
     "sweep_ok": 0,
     "apex_ok": true,
     "seconds": 933.12
+  },
+  "R275_T26": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 967.85
+  },
+  "R275_T27": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 854.16
+  },
+  "R275_T28": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 963.49
+  },
+  "R275_T29": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 864.52
+  },
+  "R275_T30": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 913.49
+  },
+  "R275_T31": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 601.49
+  },
+  "R275_T32": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 620.65
+  },
+  "R275_T33": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 626.18
+  },
+  "R275_T34": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 619.04
+  },
+  "R275_T35": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 626.7
+  },
+  "R280_T20": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 463.63
+  },
+  "R280_T21": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 464.05
+  },
+  "R280_T22": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 464.97
+  },
+  "R280_T23": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 464.92
+  },
+  "R280_T24": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 464.68
+  },
+  "R280_T25": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 464.79
+  },
+  "R280_T26": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 1057.95
+  },
+  "R280_T27": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 1044.11
+  },
+  "R280_T28": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 1046.31
+  },
+  "R280_T29": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 925.27
+  },
+  "R280_T30": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 905.86
+  },
+  "R280_T31": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 902.12
+  },
+  "R280_T32": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 853.52
+  },
+  "R280_T33": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 1022.27
+  },
+  "R280_T34": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 916.07
+  },
+  "R280_T35": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 633.6
+  },
+  "R285_T20": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 464.1
+  },
+  "R285_T21": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 463.97
+  },
+  "R285_T22": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 464.12
+  },
+  "R285_T23": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 463.92
+  },
+  "R285_T24": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 463.75
+  },
+  "R285_T25": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 463.8
+  },
+  "R285_T26": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 1019.42
+  },
+  "R285_T27": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 972.8
+  },
+  "R285_T28": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 1079.51
+  },
+  "R285_T29": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 812.52
+  },
+  "R285_T30": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 923.38
+  },
+  "R285_T31": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 943.94
+  },
+  "R285_T32": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 817.37
+  },
+  "R285_T33": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 899.35
+  },
+  "R285_T34": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 1007.73
+  },
+  "R285_T35": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 745.77
+  },
+  "R290_T20": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 463.78
+  },
+  "R290_T21": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 463.8
+  },
+  "R290_T22": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 463.75
+  },
+  "R290_T23": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 463.81
+  },
+  "R290_T24": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 463.74
+  },
+  "R290_T25": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 464.01
+  },
+  "R290_T26": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 463.79
+  },
+  "R290_T27": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 874.1
+  },
+  "R290_T28": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 934.58
+  },
+  "R290_T29": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 845.17
+  },
+  "R290_T30": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 853.35
+  },
+  "R290_T31": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 931.66
+  },
+  "R290_T32": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 951.34
+  },
+  "R290_T33": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 870.09
+  },
+  "R290_T34": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 980.17
+  },
+  "R290_T35": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 742.93
+  },
+  "R295_T20": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 463.83
+  },
+  "R295_T21": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 463.93
+  },
+  "R295_T22": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 463.9
+  },
+  "R295_T23": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 463.89
+  },
+  "R295_T24": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 464.13
+  },
+  "R295_T25": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 463.87
+  },
+  "R295_T26": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 464.03
+  },
+  "R295_T27": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 853.97
+  },
+  "R295_T28": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 868.59
+  },
+  "R295_T29": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 816.69
+  },
+  "R295_T30": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 854.74
+  },
+  "R295_T31": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 894.21
+  },
+  "R295_T32": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 877.54
+  },
+  "R295_T33": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 920.92
+  },
+  "R295_T34": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 791.13
+  },
+  "R295_T35": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 847.2
+  },
+  "R300_T20": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 463.76
+  },
+  "R300_T21": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 465.64
+  },
+  "R300_T22": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 466.58
+  },
+  "R300_T23": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 464.05
+  },
+  "R300_T24": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 463.9
+  },
+  "R300_T25": {
+    "ok": false,
+    "error": "Remote end closed connection without response"
+  },
+  "R300_T26": {
+    "ok": false,
+    "error": "<urlopen error [Errno 111] Connection refused>"
+  },
+  "R300_T27": {
+    "ok": false,
+    "error": "<urlopen error [Errno 111] Connection refused>"
+  },
+  "R300_T28": {
+    "ok": false,
+    "error": "<urlopen error [Errno 111] Connection refused>"
+  },
+  "R300_T29": {
+    "ok": false,
+    "error": "<urlopen error [Errno 111] Connection refused>"
+  },
+  "R300_T30": {
+    "ok": false,
+    "error": "<urlopen error [Errno 111] Connection refused>"
+  },
+  "R300_T31": {
+    "ok": false,
+    "error": "<urlopen error [Errno 111] Connection refused>"
+  },
+  "R300_T32": {
+    "ok": false,
+    "error": "<urlopen error [Errno 111] Connection refused>"
+  },
+  "R300_T33": {
+    "ok": false,
+    "error": "<urlopen error [Errno 111] Connection refused>"
+  },
+  "R300_T34": {
+    "ok": false,
+    "error": "<urlopen error [Errno 111] Connection refused>"
+  },
+  "R300_T35": {
+    "ok": false,
+    "error": "<urlopen error [Errno 111] Connection refused>"
   }
 }

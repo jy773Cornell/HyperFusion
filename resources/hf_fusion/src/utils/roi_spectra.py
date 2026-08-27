@@ -316,7 +316,7 @@ def write_segmentation_roi_spectra(
     wavelengths: np.ndarray | list[float],
     detections: list,
     y_axis_label: str = "Reflectance",
-    copy_csv_to_preprocessed: bool = True,
+    copy_csv_to_preprocessed: bool = False,
 ) -> Path:
     """Write segmentation/roi_spectra.csv and roi_spectra_plot.png (mean ± 1σ)."""
     wl = [float(value) for value in wavelengths]

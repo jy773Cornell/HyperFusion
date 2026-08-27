@@ -184,7 +184,7 @@ GsamPlanSegmentRunResult runGsamPlanSegment(const GsamPlanSegmentRunRequest &req
     return result;
 }
 
-QString writeSessionMaskOverlapsSheet(const QString &sessionDirectory, QStringList *logLines)
+QStringList writeSessionPreviewSheets(const QString &sessionDirectory, QStringList *logLines)
 {
     const auto appendLog = [logLines](const QString &line) {
         if (logLines != nullptr)
@@ -202,7 +202,7 @@ QString writeSessionMaskOverlapsSheet(const QString &sessionDirectory, QStringLi
     const QString pythonExecutable = resolveHfFusionPythonExecutable();
     if (cliScript.isEmpty() || !QFileInfo::exists(cliScript) || pythonExecutable.isEmpty())
     {
-        appendLog(QStringLiteral("GSAM QA sheets: hf_fusion Python CLI not found."));
+        appendLog(QStringLiteral("Session preview: hf_fusion Python CLI not found."));
         return {};
     }
 
@@ -217,7 +217,7 @@ QString writeSessionMaskOverlapsSheet(const QString &sessionDirectory, QStringLi
     {
         process.kill();
         process.waitForFinished(5000);
-        appendLog(QStringLiteral("GSAM QA sheets: subprocess failed to finish."));
+        appendLog(QStringLiteral("Session preview: subprocess failed to finish."));
         return {};
     }
 
@@ -225,10 +225,12 @@ QString writeSessionMaskOverlapsSheet(const QString &sessionDirectory, QStringLi
     if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
     {
         const QString err = QString::fromUtf8(process.readAllStandardError().trimmed());
-        appendLog(err.isEmpty() ? QStringLiteral("GSAM QA sheets: write failed.") : err);
+        appendLog(err.isEmpty() ? QStringLiteral("Session preview: write failed.") : err);
         return {};
     }
 
+    QString rgbPath;
+    QString refPath;
     QString maskSheetPath;
     QString spectraSheetPath;
     const QList<QByteArray> lines = stdoutPayload.split('\n');
@@ -244,19 +246,37 @@ QString writeSessionMaskOverlapsSheet(const QString &sessionDirectory, QStringLi
         const QJsonObject object = document.object();
         if (!object.value(QStringLiteral("ok")).toBool(false))
             continue;
+        rgbPath = object.value(QStringLiteral("rgb_all")).toString();
+        refPath = object.value(QStringLiteral("reference_intensity")).toString();
         maskSheetPath = object.value(QStringLiteral("mask_overlaps")).toString();
         spectraSheetPath = object.value(QStringLiteral("roi_spectra_plots")).toString();
         break;
     }
-    if (maskSheetPath.isEmpty())
-        maskSheetPath = QDir(session).filePath(QStringLiteral("mask_overlaps.png"));
-    if (spectraSheetPath.isEmpty())
-        spectraSheetPath = QDir(session).filePath(QStringLiteral("roi_spectra_plots.png"));
-    if (QFileInfo::exists(maskSheetPath))
-        appendLog(QStringLiteral("GSAM QA sheets: wrote %1").arg(QFileInfo(maskSheetPath).fileName()));
-    if (QFileInfo::exists(spectraSheetPath))
-        appendLog(QStringLiteral("GSAM QA sheets: wrote %1").arg(QFileInfo(spectraSheetPath).fileName()));
-    return QFileInfo::exists(maskSheetPath) ? maskSheetPath : QString();
+
+    const QString previewDir = QDir(session).filePath(QStringLiteral("preview"));
+    const auto fallbackIfMissing = [&previewDir](QString path, const QString &fileName) {
+        if (!path.isEmpty())
+            return path;
+        return QDir(previewDir).filePath(fileName);
+    };
+    rgbPath = fallbackIfMissing(rgbPath, QStringLiteral("rgb_all.png"));
+    refPath = fallbackIfMissing(refPath, QStringLiteral("reference_intensity.png"));
+    maskSheetPath = fallbackIfMissing(maskSheetPath, QStringLiteral("mask_overlaps.png"));
+    spectraSheetPath = fallbackIfMissing(spectraSheetPath, QStringLiteral("roi_spectra_plots.png"));
+
+    QStringList written;
+    QStringList names;
+    const QStringList candidates{rgbPath, refPath, maskSheetPath, spectraSheetPath};
+    for (const QString &path : candidates)
+    {
+        if (path.isEmpty() || !QFileInfo::exists(path) || written.contains(path))
+            continue;
+        written.push_back(path);
+        names.push_back(QFileInfo(path).fileName());
+    }
+    if (!names.isEmpty())
+        appendLog(QStringLiteral("Session preview: wrote preview/%1").arg(names.join(QStringLiteral(", "))));
+    return written;
 }
 
 } // namespace hf::processing

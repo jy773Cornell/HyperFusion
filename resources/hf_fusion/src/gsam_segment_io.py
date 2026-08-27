@@ -127,7 +127,7 @@ def write_roi_csv(
         wavelengths=wavelengths,
         detections=detections,
         y_axis_label=spectrum_y_axis_label(mode_name),
-        copy_csv_to_preprocessed=True,
+        copy_csv_to_preprocessed=False,
     )
 
 

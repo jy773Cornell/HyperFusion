@@ -12,7 +12,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from src.gsam_client import DEFAULT_GSAM_URL, require_gsam_ready
-from src.gsam_overlay_sheet import write_session_qa_sheets
+from src.gsam_overlay_sheet import preview_sheet_paths, write_session_qa_sheets
 from src.gsam_plan_segment import (
     load_gsam_plan,
     segment_stream_from_plan,
@@ -41,7 +41,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--write-sheet",
         action="store_true",
-        help="Only write session mask_overlaps.png and roi_spectra_plots.png from existing GSAM outputs",
+        help="Only write {session}/preview QA sheets from existing preprocessed outputs",
     )
     return parser
 
@@ -60,19 +60,9 @@ def main(argv: list[str] | None = None) -> int:
             print(str(exc), file=sys.stderr)
             return 1
         if not sheets:
-            print(
-                f"No segmentation overlay.png or roi_spectra_plot.png under {session}",
-                file=sys.stderr,
-            )
+            print(f"No preview sheets could be written under {session}", file=sys.stderr)
             return 1
-        payload = {
-            "ok": True,
-            "session": str(session),
-            "mask_overlaps": str(sheets["mask_overlaps"]) if "mask_overlaps" in sheets else "",
-            "roi_spectra_plots": str(sheets["roi_spectra_plots"])
-            if "roi_spectra_plots" in sheets
-            else "",
-        }
+        payload = {"ok": True, "session": str(session), **preview_sheet_paths(session)}
         print(json.dumps(payload))
         return 0
 
@@ -138,12 +128,7 @@ def main(argv: list[str] | None = None) -> int:
         "prompt": results[-1].prompt if results else "",
         "reused_from": results[-1].reused_from if results else "",
         "segmentation_dir": str(results[-1].segmentation_dir) if results else "",
-        "mask_overlaps": str(session / "mask_overlaps.png")
-        if (session / "mask_overlaps.png").is_file()
-        else "",
-        "roi_spectra_plots": str(session / "roi_spectra_plots.png")
-        if (session / "roi_spectra_plots.png").is_file()
-        else "",
+        **preview_sheet_paths(session),
         "streams": [
             {
                 "stream": item.stream,

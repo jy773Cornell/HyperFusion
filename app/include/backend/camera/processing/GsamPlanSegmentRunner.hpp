@@ -28,7 +28,9 @@ struct GsamPlanSegmentRunResult
 
 GsamPlanSegmentRunResult runGsamPlanSegment(const GsamPlanSegmentRunRequest &request);
 
-/// Write {session}/mask_overlaps.png and {session}/roi_spectra_plots.png from existing
-/// GSAM outputs. Does not fail the session; returns the mask sheet path when present.
-QString writeSessionMaskOverlapsSheet(const QString &sessionDirectory, QStringList *logLines = nullptr);
+/// Write {session}/preview QA collages from existing preprocessed outputs.
+/// Always includes rgb_all and reference_intensity when those sources exist;
+/// GSAM adds mask_overlaps and roi_spectra_plots when those outputs exist.
+/// Per-stream ROI spectra stay in preprocessed/segmentation/. Does not fail the session.
+QStringList writeSessionPreviewSheets(const QString &sessionDirectory, QStringList *logLines = nullptr);
 } // namespace hf::processing

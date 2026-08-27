@@ -442,6 +442,24 @@ void updateDatasetManifestForPreprocessing(const QString &sessionDirectory,
     appendManifestFileEntries(manifestPath, entries);
 }
 
+void appendPreviewSheetEntries(const QString &sessionDirectory, const QStringList &sheetPaths)
+{
+    const QString manifestPath = QDir(sessionDirectory).filePath(QStringLiteral("manifest.xml"));
+    if (!QFileInfo::exists(manifestPath) || sheetPaths.isEmpty())
+        return;
+
+    std::vector<ManifestFileEntry> entries;
+    for (const QString &path : sheetPaths)
+    {
+        if (path.isEmpty() || !QFileInfo::exists(path))
+            continue;
+        const QFileInfo info(path);
+        entries.push_back({info.suffix().toLower(), QStringLiteral("preview"),
+                           manifestRelativePath(sessionDirectory, path)});
+    }
+    appendManifestFileEntries(manifestPath, entries);
+}
+
 bool writeProcessingManifestJson(const QString &preprocessedDir,
                    const CaptureWriterSessionSummary &summary,
                    const std::vector<StreamProcessReport> &reports,
@@ -1294,17 +1312,22 @@ CapturePostProcessResult processCaptureSession(const CaptureWriterSessionSummary
                                                   options);
     }
 
-    bool wroteSegmentation = false;
+    bool anyProcessed = false;
     for (const StreamProcessReport &report : reports)
     {
-        if (report.segmentationOk)
+        if (report.darkPlotOk || report.whitePlotOk || report.ffcOk || report.rgbOk
+            || report.segmentationOk)
         {
-            wroteSegmentation = true;
+            anyProcessed = true;
             break;
         }
     }
-    if (wroteSegmentation)
-        writeSessionMaskOverlapsSheet(summary.sessionDirectory, &result.logLines);
+    if (anyProcessed)
+    {
+        const QStringList previewPaths =
+            writeSessionPreviewSheets(summary.sessionDirectory, &result.logLines);
+        appendPreviewSheetEntries(summary.sessionDirectory, previewPaths);
+    }
 
     if (options.runHfFusion)
     {
