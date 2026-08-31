@@ -1404,6 +1404,51 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                                                .arg(value));
                 }
             }
+            else if (key == QStringLiteral("dlp_led_max_ma")
+                     || key == QStringLiteral("led_max_ma"))
+            {
+                bool ok = false;
+                const int ma = value.toInt(&ok);
+                if (!ok || ma < 1)
+                    warnings.push_back(QStringLiteral("Invalid dlp_led_max_ma: %1").arg(value));
+                else if (ma > 2400)
+                {
+                    warnings.push_back(
+                        QStringLiteral("dlp_led_max_ma (%1) exceeds EVM optical-engine max 2400 mA — clamped")
+                            .arg(ma));
+                    config.dlp.ledMaxMa = 2400;
+                }
+                else
+                    config.dlp.ledMaxMa = ma;
+            }
+            else if (key == QStringLiteral("dlp_led_red_ma") || key == QStringLiteral("led_red_ma"))
+            {
+                bool ok = false;
+                const int ma = value.toInt(&ok);
+                if (!ok || ma < 0)
+                    warnings.push_back(QStringLiteral("Invalid dlp_led_red_ma: %1").arg(value));
+                else
+                    config.dlp.ledRedMa = ma;
+            }
+            else if (key == QStringLiteral("dlp_led_green_ma")
+                     || key == QStringLiteral("led_green_ma"))
+            {
+                bool ok = false;
+                const int ma = value.toInt(&ok);
+                if (!ok || ma < 0)
+                    warnings.push_back(QStringLiteral("Invalid dlp_led_green_ma: %1").arg(value));
+                else
+                    config.dlp.ledGreenMa = ma;
+            }
+            else if (key == QStringLiteral("dlp_led_blue_ma") || key == QStringLiteral("led_blue_ma"))
+            {
+                bool ok = false;
+                const int ma = value.toInt(&ok);
+                if (!ok || ma < 0)
+                    warnings.push_back(QStringLiteral("Invalid dlp_led_blue_ma: %1").arg(value));
+                else
+                    config.dlp.ledBlueMa = ma;
+            }
             else
                 warnings.push_back(QStringLiteral("Unknown key in [multiview]: %1").arg(key));
         }
@@ -1419,6 +1464,20 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
 
     if (!sampleStageDraft.rawValues.isEmpty())
         resolveSampleStagePositions(sampleStageDraft, config, warnings);
+
+    const auto clampDlpLed = [&](const char *name, int &ma) {
+        if (ma > config.dlp.ledMaxMa)
+        {
+            warnings.push_back(QStringLiteral("dlp %1 (%2) exceeds dlp_led_max_ma (%3) — clamped")
+                                   .arg(QString::fromUtf8(name))
+                                   .arg(ma)
+                                   .arg(config.dlp.ledMaxMa));
+            ma = config.dlp.ledMaxMa;
+        }
+    };
+    clampDlpLed("led_red_ma", config.dlp.ledRedMa);
+    clampDlpLed("led_green_ma", config.dlp.ledGreenMa);
+    clampDlpLed("led_blue_ma", config.dlp.ledBlueMa);
 
     return true;
 }
@@ -1616,7 +1675,13 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "bfs_camera_cx = 2084.4011955271963\n"
         << "bfs_camera_cy = 1526.0259879957282\n"
         << "# Brown-Conrady: k1,k2,p1,p2,k3\n"
-        << "bfs_camera_distortion = -0.16223465, 0.10156067, 0.0025228506, 0.00068692294, -0.029189458\n";
+        << "bfs_camera_distortion = -0.16223465, 0.10156067, 0.0025228506, 0.00068692294, -0.029189458\n"
+        << "# DLP3010EVM-LC (Multiview DLP tab). Connect also arms. Blank turns output off.\n"
+        << "# LED current is milliamps. Max 2400 mA = optical-engine spec (TI DLPU070B Table 1).\n"
+        << "dlp_led_max_ma = 2400\n"
+        << "dlp_led_red_ma = 30\n"
+        << "dlp_led_green_ma = 30\n"
+        << "dlp_led_blue_ma = 30\n";
 
     if (!file.commit())
     {

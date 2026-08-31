@@ -1,6 +1,6 @@
 ﻿cmake_minimum_required(VERSION 3.16)
 
-project(app VERSION 0.1 LANGUAGES CXX)
+project(app VERSION 0.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -21,6 +21,31 @@ elseif(NOT LUMO_SDK_ROOT)
 endif()
 
 set(LUMO_SDK_ROOT "${LUMO_SDK_ROOT}" CACHE PATH "Specim Lumo Sensor SDK root (include/, bin/x64/)")
+
+# Texas Instruments DLPC-API (DLP3010EVM-LC / DLPC3478). Override with -DDLPC_API_ROOT=... or env.
+set(HF_DEFAULT_DLPC_API_ROOT "C:/ti/DLPC-API-1.12")
+if(DEFINED ENV{DLPC_API_ROOT} AND NOT "$ENV{DLPC_API_ROOT}" STREQUAL "")
+    set(DLPC_API_ROOT "$ENV{DLPC_API_ROOT}")
+elseif(NOT DLPC_API_ROOT)
+    set(DLPC_API_ROOT "${HF_DEFAULT_DLPC_API_ROOT}")
+endif()
+if(NOT EXISTS "${DLPC_API_ROOT}/api/dlpc34xx.h")
+    set(_hf_dlpc_onedrive
+        "$ENV{USERPROFILE}/OneDrive - Cornell University/Documents/Texas Instruments/DLPC-API-1.12")
+    if(EXISTS "${_hf_dlpc_onedrive}/api/dlpc34xx.h")
+        set(DLPC_API_ROOT "${_hf_dlpc_onedrive}")
+    endif()
+endif()
+set(DLPC_API_ROOT "${DLPC_API_ROOT}" CACHE PATH "TI DLPC-API root (api/, samples/, third_party/cyusbserial/)")
+if(EXISTS "${DLPC_API_ROOT}/api/dlpc34xx.h"
+   AND EXISTS "${DLPC_API_ROOT}/api/dlpc_common.c"
+   AND EXISTS "${DLPC_API_ROOT}/third_party/cyusbserial/cyusbserial.lib")
+    set(HF_HAVE_DLPC_API ON)
+    message(STATUS "DLPC-API found at ${DLPC_API_ROOT}")
+else()
+    set(HF_HAVE_DLPC_API OFF)
+    message(STATUS "DLPC-API not found (DLPC_API_ROOT). DLP adapter will build as stub.")
+endif()
 
 # Teledyne Spinnaker SDK (Blackfly S / BFS RGB). Override with -DSPINNAKER_ROOT=... or env.
 set(HF_DEFAULT_SPINNAKER_ROOT "C:/Program Files/Teledyne/Spinnaker")
@@ -84,6 +109,7 @@ qt_add_executable(app WIN32
     src/frontend/controllers/CapturePanelController.cpp
     src/frontend/controllers/Ur3ePanelController.cpp
     src/frontend/controllers/BfsPanelController.cpp
+    src/frontend/controllers/DlpPanelController.cpp
     src/frontend/logging/AppLog.cpp
     src/frontend/logging/AppLogSession.cpp
     src/frontend/widgets/MainWindowTabHelpers.cpp
@@ -98,6 +124,7 @@ qt_add_executable(app WIN32
     src/frontend/widgets/Ur3eStreamTab.cpp
     src/frontend/widgets/Ur3eSettingsTab.cpp
     src/frontend/widgets/BfsCameraSettingsWidget.cpp
+    src/frontend/widgets/DlpProjectorSettingsWidget.cpp
     src/frontend/widgets/CaptureSettingsTab.cpp
     src/frontend/streaming/FrameCoalescer.cpp
     src/frontend/streaming/CameraStreamPipeline.cpp
@@ -115,6 +142,7 @@ qt_add_executable(app WIN32
     include/frontend/widgets/Ur3eHemisphereScanPreviewWidget.hpp
     include/frontend/widgets/Ur3eJointBarWidget.hpp
     include/frontend/widgets/BfsCameraSettingsWidget.hpp
+    include/frontend/widgets/DlpProjectorSettingsWidget.hpp
     include/frontend/widgets/LumoCameraUi.hpp
     include/frontend/widgets/WaterfallDisplayWidget.hpp
     include/frontend/widgets/StreamPaneHelpers.hpp
@@ -126,6 +154,7 @@ qt_add_executable(app WIN32
     include/frontend/controllers/CapturePanelController.hpp
     include/frontend/controllers/Ur3ePanelController.hpp
     include/frontend/controllers/BfsPanelController.hpp
+    include/frontend/controllers/DlpPanelController.hpp
     include/frontend/logging/AppLog.hpp
     include/frontend/logging/AppLogSession.hpp
     include/frontend/widgets/MainWindowTabHelpers.hpp
@@ -187,6 +216,7 @@ qt_add_executable(app WIN32
     src/backend/multiview/Ur3eWslPathUtil.cpp
     src/backend/multiview/BfsSpinnakerCamera.cpp
     src/backend/multiview/BfsCameraWorker.cpp
+    src/backend/fpp/DlpProjectorWorker.cpp
     src/backend/multiview/BfsTiffIo.cpp
     src/backend/multiview/Ur3eCameraTransforms.cpp
     src/backend/multiview/Ur3eScanPlanCache.cpp
@@ -240,6 +270,8 @@ qt_add_executable(app WIN32
     include/backend/multiview/BfsCameraTypes.hpp
     include/backend/multiview/BfsSpinnakerCamera.hpp
     include/backend/multiview/BfsCameraWorker.hpp
+    include/backend/fpp/DlpTypes.hpp
+    include/backend/fpp/DlpProjectorWorker.hpp
     include/backend/multiview/BfsTiffIo.hpp
     include/backend/multiview/Ur3eCameraTransforms.hpp
     include/backend/multiview/Ur3eScanPlanCache.hpp
@@ -262,6 +294,7 @@ qt_add_executable(app WIN32
     src/adapters/lumo/Swir3NiCamera.cpp
     src/adapters/mcc/Mcc1208LighthouseController.cpp
     src/adapters/mcc/MccUniversalLibrary.cpp
+    src/adapters/dlp/Dlpc3478Projector.cpp
     include/adapters/zaber/ZaberStageController.hpp
     include/adapters/zaber/ZaberStageConfigurator.hpp
     include/adapters/zaber/ZaberStageHoming.hpp
@@ -275,9 +308,39 @@ qt_add_executable(app WIN32
     include/adapters/mcc/Mcc1208LighthouseController.hpp
     include/adapters/mcc/Mcc1208Profile.hpp
     include/adapters/mcc/MccUniversalLibrary.hpp
+    include/adapters/dlp/Dlpc3478Projector.hpp
+    include/adapters/dlp/DlpcCypressI2c.h
 )
 
 target_include_directories(app PRIVATE include)
+
+if(HF_HAVE_DLPC_API)
+    target_compile_definitions(app PRIVATE HF_HAVE_DLPC_API)
+    # TI cyusbserial.lib is Win32. Drive the EVM from a 32-bit helper next to app.exe.
+    set(HF_DLPC_BRIDGE_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src/adapters/dlp/bridge")
+    set(HF_DLPC_BRIDGE_BIN "${CMAKE_BINARY_DIR}/src/adapters/dlp/bridge")
+    add_custom_target(hf_dlpc_bridge ALL
+        COMMAND ${CMAKE_COMMAND}
+                -S "${HF_DLPC_BRIDGE_SRC}"
+                -B "${HF_DLPC_BRIDGE_BIN}"
+                -G "${CMAKE_GENERATOR}"
+                -A Win32
+                "-DCMAKE_GENERATOR_INSTANCE=${CMAKE_GENERATOR_INSTANCE}"
+                "-DDLPC_API_ROOT=${DLPC_API_ROOT}"
+        COMMAND ${CMAKE_COMMAND} --build "${HF_DLPC_BRIDGE_BIN}" --config $<CONFIG>
+        VERBATIM)
+    add_dependencies(app hf_dlpc_bridge)
+    add_custom_command(
+        TARGET app POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${HF_DLPC_BRIDGE_BIN}/$<CONFIG>/hf_dlpc_bridge.exe"
+                "$<TARGET_FILE_DIR:app>"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${DLPC_API_ROOT}/third_party/cyusbserial/cyusbserial.dll"
+                "$<TARGET_FILE_DIR:app>"
+        COMMENT "Copying 32-bit DLP helper and cyusbserial.dll")
+    message(STATUS "DLP backend: 32-bit hf_dlpc_bridge (TI Cypress USB-Serial is x86)")
+endif()
 
 if(HF_HAVE_SPINNAKER)
     target_compile_definitions(app PRIVATE HF_HAVE_SPINNAKER)

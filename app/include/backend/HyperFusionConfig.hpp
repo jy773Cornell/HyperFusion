@@ -202,6 +202,17 @@ struct HardwareConfig
 
     Ur3eConfig ur3e;
 
+    struct DlpConfig
+    {
+        /// Hard cap for RGB LED current spin boxes (mA). DLP3010EVM-LC optical engine: 2400 mA.
+        int ledMaxMa = 2400;
+        int ledRedMa = 30;
+        int ledGreenMa = 30;
+        int ledBlueMa = 30;
+    };
+
+    DlpConfig dlp;
+
     QString filePath;
     bool loadedFromFile = false;
     QStringList warnings;

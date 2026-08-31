@@ -1,6 +1,7 @@
-﻿// Multiview settings: nested UR3e robot panel + BFS camera settings (UI
+﻿// Multiview settings: nested UR3e robot panel + BFS camera + DLP projector (UI
 // only).
 #include "frontend/widgets/BfsCameraSettingsWidget.hpp"
+#include "frontend/widgets/DlpProjectorSettingsWidget.hpp"
 #include "frontend/widgets/MainWindow.hpp"
 #include "frontend/widgets/MainWindowTabHelpers.hpp"
 #include "frontend/widgets/Ur3eHemisphereScanSettingsWidget.hpp"
@@ -199,6 +200,8 @@ QWidget *MainWindow::createUr3eSettingsTab()
     scanningSettingsTabs_->addTab(scrollArea, QStringLiteral("UR3e"));
     bfsCameraSettings_ = new ui::BfsCameraSettingsWidget(scanningSettingsTabs_);
     scanningSettingsTabs_->addTab(bfsCameraSettings_, QStringLiteral("BFS"));
+    dlpProjectorSettings_ = new ui::DlpProjectorSettingsWidget(scanningSettingsTabs_);
+    scanningSettingsTabs_->addTab(dlpProjectorSettings_, QStringLiteral("DLP"));
 
     outerLayout->addWidget(scanningSettingsTabs_, 1);
     return outerPage;

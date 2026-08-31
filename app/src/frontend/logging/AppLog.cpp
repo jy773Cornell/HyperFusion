@@ -48,7 +48,9 @@ Channel classifyMessage(const QString &message)
     if (trimmed.isEmpty())
         return Channel::App;
 
-    if (startsWithInsensitive(trimmed, QStringLiteral("UR3e")))
+    if (startsWithInsensitive(trimmed, QStringLiteral("UR3e"))
+        || startsWithInsensitive(trimmed, QStringLiteral("BFS"))
+        || startsWithInsensitive(trimmed, QStringLiteral("DLP")))
         return Channel::Ur3e;
 
     if (startsWithInsensitive(trimmed, QStringLiteral("Light:"))

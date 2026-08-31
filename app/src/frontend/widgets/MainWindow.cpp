@@ -10,6 +10,7 @@
 #include "frontend/controllers/StagePanelController.hpp"
 #include "frontend/controllers/Ur3ePanelController.hpp"
 #include "frontend/controllers/BfsPanelController.hpp"
+#include "frontend/controllers/DlpPanelController.hpp"
 
 #include "adapters/lumo/LumoCamera.hpp"
 #include "adapters/lumo/LumoDeviceTypes.hpp"
@@ -160,6 +161,7 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     {
         ur3ePanel_ = std::make_unique<hf::ur3e::Ur3ePanelController>(this);
         bfsPanel_ = std::make_unique<hf::bfs::BfsPanelController>(this);
+        dlpPanel_ = std::make_unique<hf::dlp::DlpPanelController>(this);
     }
     lightPanel_ = std::make_unique<hf::light::LightPanelController>(this);
     cameraPanel_ = std::make_unique<hf::camera::CameraPanelController>(this);
@@ -227,6 +229,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
         ur3ePanel_->wireSettingsTabConnections();
         bfsPanel_->initializeWorker();
         bfsPanel_->wireSettingsTabConnections();
+        dlpPanel_->initializeWorker();
+        dlpPanel_->wireSettingsTabConnections();
     }
     lightPanel_->initializeWorker();
 
@@ -294,6 +298,8 @@ void MainWindow::onSettingsTabChanged(const int index)
 hf::stage::StagePanelController *MainWindow::stagePanel() const { return stagePanel_.get(); }
 hf::ur3e::Ur3ePanelController *MainWindow::ur3ePanel() const { return ur3ePanel_.get(); }
 hf::bfs::BfsPanelController *MainWindow::bfsPanel() const { return bfsPanel_.get(); }
+
+hf::dlp::DlpPanelController *MainWindow::dlpPanel() const { return dlpPanel_.get(); }
 hf::light::LightPanelController *MainWindow::lightPanel() const { return lightPanel_.get(); }
 hf::camera::CameraPanelController *MainWindow::cameraPanel() const { return cameraPanel_.get(); }
 hf::settings::UiSettingsController *MainWindow::settingsPanel() const { return settingsPanel_.get(); }
@@ -417,6 +423,17 @@ bool MainWindow::performGracefulShutdown()
         waitWithBusyDialog(waitDialog, [this]() {
             if (cameraPanel_ != nullptr)
                 cameraPanel_->shutdownCoordinatorSync();
+        });
+    }
+
+    // Blank DLP before other teardown so projector output cannot stay on.
+    if (useMultiview_ && dlpPanel_ != nullptr)
+    {
+        waitDialog.setStatusText(tr("Blanking DLP projector\u2026"));
+        QApplication::processEvents();
+        waitWithBusyDialog(waitDialog, [this]() {
+            if (dlpPanel_ != nullptr)
+                dlpPanel_->shutdownSync();
         });
     }
 

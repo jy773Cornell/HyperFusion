@@ -24,6 +24,11 @@ namespace hf::bfs
 class BfsPanelController;
 }
 
+namespace hf::dlp
+{
+class DlpPanelController;
+}
+
 namespace hf::camera
 {
 class CameraPanelController;
@@ -75,6 +80,7 @@ class IntensityBarWidget;
 class ProfilePlotWidget;
 class StageAxisWidget;
 class BfsCameraSettingsWidget;
+class DlpProjectorSettingsWidget;
 class Ur3eJointBarWidget;
 class Ur3eScanRoutePlanWidget;
 class Ur3eHemisphereScanSettingsWidget;
@@ -98,6 +104,7 @@ class MainWindow : public QMainWindow
     friend class hf::stage::StagePanelController;
     friend class hf::ur3e::Ur3ePanelController;
     friend class hf::bfs::BfsPanelController;
+    friend class hf::dlp::DlpPanelController;
     friend class hf::light::LightPanelController;
     friend class hf::camera::CameraPanelController;
     friend class hf::settings::UiSettingsController;
@@ -110,6 +117,7 @@ public:
     [[nodiscard]] hf::stage::StagePanelController *stagePanel() const;
     [[nodiscard]] hf::ur3e::Ur3ePanelController *ur3ePanel() const;
     [[nodiscard]] hf::bfs::BfsPanelController *bfsPanel() const;
+    [[nodiscard]] hf::dlp::DlpPanelController *dlpPanel() const;
     [[nodiscard]] hf::light::LightPanelController *lightPanel() const;
     [[nodiscard]] hf::camera::CameraPanelController *cameraPanel() const;
     [[nodiscard]] hf::settings::UiSettingsController *settingsPanel() const;
@@ -245,6 +253,7 @@ private:
     QGroupBox *captureCamerasBox_ = nullptr;
     QTabWidget *scanningSettingsTabs_ = nullptr;
     ui::BfsCameraSettingsWidget *bfsCameraSettings_ = nullptr;
+    ui::DlpProjectorSettingsWidget *dlpProjectorSettings_ = nullptr;
     QWidget *ur3eSettingsPage_ = nullptr;
     QLineEdit *ur3eRobotIpEdit_ = nullptr;
     QPushButton *ur3eConnectBtn_ = nullptr;
@@ -291,6 +300,7 @@ private:
     std::unique_ptr<hf::stage::StagePanelController> stagePanel_;
     std::unique_ptr<hf::ur3e::Ur3ePanelController> ur3ePanel_;
     std::unique_ptr<hf::bfs::BfsPanelController> bfsPanel_;
+    std::unique_ptr<hf::dlp::DlpPanelController> dlpPanel_;
     std::unique_ptr<hf::light::LightPanelController> lightPanel_;
     std::unique_ptr<hf::camera::CameraPanelController> cameraPanel_;
     std::unique_ptr<hf::settings::UiSettingsController> settingsPanel_;

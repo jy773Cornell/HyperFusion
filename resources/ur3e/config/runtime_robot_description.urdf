@@ -311,10 +311,32 @@
   <!-- Placeholder for ros2_control transmission which don't yet exist -->
   <ros2_control name="ur3e" rw_rate="0" type="system">
     <hardware>
-      <plugin>mock_components/GenericSystem</plugin>
-      <param name="mock_sensor_commands">True</param>
-      <param name="state_following_offset">0.0</param>
-      <param name="calculate_dynamics">true</param>
+      <plugin>ur_robot_driver/URPositionHardwareInterface</plugin>
+      <param name="robot_ip">192.168.1.10</param>
+      <param name="script_filename">/opt/ros/jazzy/share/ur_client_library/resources/external_control.urscript</param>
+      <param name="output_recipe_filename">/opt/ros/jazzy/share/ur_robot_driver/resources/rtde_output_recipe.txt</param>
+      <param name="input_recipe_filename">/opt/ros/jazzy/share/ur_robot_driver/resources/rtde_input_recipe.txt</param>
+      <param name="headless_mode">False</param>
+      <param name="reverse_port">50001</param>
+      <param name="script_sender_port">50002</param>
+      <param name="reverse_ip">192.168.1.20</param>
+      <param name="script_command_port">50004</param>
+      <param name="trajectory_port">50003</param>
+      <param name="tf_prefix"></param>
+      <param name="non_blocking_read">True</param>
+      <param name="servoj_gain">2000</param>
+      <param name="servoj_lookahead_time">0.03</param>
+      <param name="use_tool_communication">False</param>
+      <param name="kinematics/hash">calib_16756443741236045476</param>
+      <param name="tool_voltage">0</param>
+      <param name="tool_parity">0</param>
+      <param name="tool_baud_rate">115200</param>
+      <param name="tool_stop_bits">1</param>
+      <param name="tool_rx_idle_chars">1.5</param>
+      <param name="tool_tx_idle_chars">3.5</param>
+      <param name="tool_device_name">/tmp/ttyUR</param>
+      <param name="tool_tcp_port">54321</param>
+      <param name="robot_receive_timeout">0.04</param>
     </hardware>
     <joint name="shoulder_pan_joint">
       <command_interface name="position"/>

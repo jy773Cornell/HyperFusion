@@ -72,6 +72,11 @@ void UiSettingsController::loadHardwareConfig()
                   .arg(config.lighthouseIdleIntensityPercent)
                   .arg(config.lighthouseReflectancePercent)
                   .arg(config.lighthouseTransmittancePercent));
+    host_->appendLog(QStringLiteral("  dlp led_max=%1 mA, RGB=%2/%3/%4 mA")
+                  .arg(config.dlp.ledMaxMa)
+                  .arg(config.dlp.ledRedMa)
+                  .arg(config.dlp.ledGreenMa)
+                  .arg(config.dlp.ledBlueMa));
 
     for (const QString &warning : config.warnings)
         host_->appendLog(QStringLiteral("Hardware config: %1").arg(warning));

@@ -444,6 +444,30 @@ void AppSettingsStore::saveBfsCameraSettings(const PersistedBfsCameraSettings &b
     settings.setValue(QStringLiteral("bfs/balanceWhiteAuto"), bfs.balanceWhiteAuto);
 }
 
+PersistedDlpProjectorSettings AppSettingsStore::loadDlpProjectorSettings()
+{
+    QSettings &settings = storage();
+    const PersistedDlpProjectorSettings defaults;
+    PersistedDlpProjectorSettings dlp;
+    dlp.deviceId = settings.value(QStringLiteral("dlp/deviceId"), defaults.deviceId).toString();
+    dlp.testPattern =
+        settings.value(QStringLiteral("dlp/testPattern"), defaults.testPattern).toString();
+    dlp.ledRedMa = settings.value(QStringLiteral("dlp/ledRedMa"), defaults.ledRedMa).toInt();
+    dlp.ledGreenMa = settings.value(QStringLiteral("dlp/ledGreenMa"), defaults.ledGreenMa).toInt();
+    dlp.ledBlueMa = settings.value(QStringLiteral("dlp/ledBlueMa"), defaults.ledBlueMa).toInt();
+    return dlp;
+}
+
+void AppSettingsStore::saveDlpProjectorSettings(const PersistedDlpProjectorSettings &dlp)
+{
+    QSettings &settings = storage();
+    settings.setValue(QStringLiteral("dlp/deviceId"), dlp.deviceId);
+    settings.setValue(QStringLiteral("dlp/testPattern"), dlp.testPattern);
+    settings.setValue(QStringLiteral("dlp/ledRedMa"), dlp.ledRedMa);
+    settings.setValue(QStringLiteral("dlp/ledGreenMa"), dlp.ledGreenMa);
+    settings.setValue(QStringLiteral("dlp/ledBlueMa"), dlp.ledBlueMa);
+}
+
 void AppSettingsStore::saveCameraSettings(const std::size_t cameraIndex,
                                           const PersistedCameraSettings &camera)
 {

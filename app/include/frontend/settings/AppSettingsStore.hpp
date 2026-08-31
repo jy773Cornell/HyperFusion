@@ -98,6 +98,16 @@ struct PersistedUr3eHemisphereScanSettings
     int semiFixedPanDirection = 1;
 };
 
+struct PersistedDlpProjectorSettings
+{
+    QString deviceId;
+    QString testPattern = QStringLiteral("FPP scanning");
+    /// Negative = use hyperfusion.cfg defaults.
+    int ledRedMa = -1;
+    int ledGreenMa = -1;
+    int ledBlueMa = -1;
+};
+
 struct PersistedBfsCameraSettings
 {
     QString cameraId;
@@ -144,6 +154,9 @@ public:
 
     static PersistedBfsCameraSettings loadBfsCameraSettings();
     static void saveBfsCameraSettings(const PersistedBfsCameraSettings &settings);
+
+    static PersistedDlpProjectorSettings loadDlpProjectorSettings();
+    static void saveDlpProjectorSettings(const PersistedDlpProjectorSettings &settings);
 
     static void sync();
 };

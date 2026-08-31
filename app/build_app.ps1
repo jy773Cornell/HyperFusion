@@ -24,6 +24,8 @@ param(
 
     [string]$ZmlRoot = $(if ($env:ZML_ROOT) { $env:ZML_ROOT } else { "C:\Program Files\Zaber Motion Library" }),
 
+    [string]$DlpcApiRoot = $(if ($env:DLPC_API_ROOT) { $env:DLPC_API_ROOT } else { "" }),
+
     [switch]$NoRun,
 
     [switch]$NoClean,
@@ -104,6 +106,9 @@ Write-Host "==> CMake generator: $CmakeGenerator"
 Write-Host "==> Qt prefix:    $QtPrefixPath"
 Write-Host "==> Lumo SDK:     $LumoSdkRoot"
 Write-Host "==> ZML root:     $ZmlRoot"
+if ($DlpcApiRoot) {
+    Write-Host "==> DLPC-API:     $DlpcApiRoot"
+}
 Write-Host "==> Config:       $Config"
 if ($NoClean) {
     Write-Host "==> Keeping existing build dir: $BuildDir"
@@ -119,11 +124,20 @@ if ($NoClean) {
 }
 
 Write-Host "==> Configuring ($CmakeGenerator, x64)"
-& cmake -S $AppDir -B $BuildDir -G $CmakeGenerator -A x64 `
-    "-DCMAKE_GENERATOR_INSTANCE=$vsPath" `
-    "-DCMAKE_PREFIX_PATH=$QtPrefixPath" `
-    "-DLUMO_SDK_ROOT=$LumoSdkRoot" `
+$cmakeArgs = @(
+    "-S", $AppDir
+    "-B", $BuildDir
+    "-G", $CmakeGenerator
+    "-A", "x64"
+    "-DCMAKE_GENERATOR_INSTANCE=$vsPath"
+    "-DCMAKE_PREFIX_PATH=$QtPrefixPath"
+    "-DLUMO_SDK_ROOT=$LumoSdkRoot"
     "-DZML_ROOT=$ZmlRoot"
+)
+if ($DlpcApiRoot) {
+    $cmakeArgs += "-DDLPC_API_ROOT=$DlpcApiRoot"
+}
+& cmake @cmakeArgs
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "CMake configure failed (exit $LASTEXITCODE)."
