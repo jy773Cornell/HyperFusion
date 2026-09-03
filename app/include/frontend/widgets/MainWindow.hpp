@@ -277,6 +277,7 @@ private:
     QDoubleSpinBox *captureTargetLengthSpin_ = nullptr;
     QDoubleSpinBox *captureScanningSpeedSpin_ = nullptr;
     QCheckBox *captureScanningSpeedAutoCheck_ = nullptr;
+    QDoubleSpinBox *captureScanningHomeSpin_ = nullptr;
     QCheckBox *captureUseStageForRecordingCheck_ = nullptr;
     QGroupBox *capturePreprocessingBox_ = nullptr;
     QCheckBox *capturePreprocessAfterScanCheck_ = nullptr;

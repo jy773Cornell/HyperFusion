@@ -61,7 +61,7 @@ struct Ur3eSemiFixedRouteInfo
 /// Ensure route.hasTopPose; if missing, install defaultSemiFixedTopPose().
 void ensureSemiFixedTopPose(Ur3eSemiFixedRoute &route);
 
-/// Named Semi plans beside app.exe (`ur3e_semi_scan_plans`, copied from app/preset).
+/// Named Semi plans beside app.exe (`mvs_semi_scan_plans`, copied from app/preset).
 [[nodiscard]] QString defaultUr3eSemiScanRoutesDir();
 
 [[nodiscard]] bool saveUr3eSemiFixedRoute(const QString &path,

@@ -99,6 +99,15 @@ void UiSettingsController::applyHardwareConfigToUi()
         else if (host_->captureTargetLengthSpin_->value() < kMinTargetLengthMm)
             host_->captureTargetLengthSpin_->setValue(kMinTargetLengthMm);
     }
+
+    if (host_->captureScanningHomeSpin_ != nullptr)
+    {
+        host_->captureScanningHomeSpin_->setRange(zaber_stage::kTravelMinimumMm,
+                                                 zaber_stage::kTravelLengthMm);
+        const double homeMm = host_->captureScanningHomeSpin_->value();
+        host_->captureScanningHomeSpin_->setValue(
+            qBound(zaber_stage::kTravelMinimumMm, homeMm, zaber_stage::kTravelLengthMm));
+    }
 }
 
 void UiSettingsController::loadPersistedUiSettings()
@@ -106,6 +115,10 @@ void UiSettingsController::loadPersistedUiSettings()
     const PersistedCapturePosition capturePosition = AppSettingsStore::loadCapturePosition();
     if (host_->captureTargetLengthSpin_ != nullptr)
         host_->captureTargetLengthSpin_->setValue(capturePosition.targetLengthMm);
+    if (host_->captureScanningHomeSpin_ != nullptr)
+        host_->captureScanningHomeSpin_->setValue(
+            qBound(zaber_stage::kTravelMinimumMm, capturePosition.scanningHomeMm,
+                   zaber_stage::kTravelLengthMm));
     if (host_->captureUseStageForRecordingCheck_ != nullptr)
         host_->captureUseStageForRecordingCheck_->setChecked(capturePosition.useStageForRecording);
     if (host_->capturePreprocessAfterScanCheck_ != nullptr)
@@ -142,6 +155,8 @@ void UiSettingsController::savePersistedUiSettings()
     PersistedCapturePosition capturePosition;
     if (host_->captureTargetLengthSpin_ != nullptr)
         capturePosition.targetLengthMm = host_->captureTargetLengthSpin_->value();
+    if (host_->captureScanningHomeSpin_ != nullptr)
+        capturePosition.scanningHomeMm = host_->captureScanningHomeSpin_->value();
     if (host_->captureUseStageForRecordingCheck_ != nullptr)
         capturePosition.useStageForRecording = host_->captureUseStageForRecordingCheck_->isChecked();
     if (host_->capturePreprocessAfterScanCheck_ != nullptr)
@@ -328,6 +343,8 @@ void UiSettingsController::connectAutosave()
 
     if (host_->captureTargetLengthSpin_ != nullptr)
         connect(host_->captureTargetLengthSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged), this, schedule);
+    if (host_->captureScanningHomeSpin_ != nullptr)
+        connect(host_->captureScanningHomeSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged), this, schedule);
     if (host_->captureUseStageForRecordingCheck_ != nullptr)
         connect(host_->captureUseStageForRecordingCheck_, &QCheckBox::toggled, this, schedule);
     if (host_->capturePreprocessAfterScanCheck_ != nullptr)

@@ -10,6 +10,7 @@ struct PersistedCapturePosition
 {
     double targetLengthMm = 125.0;
     double scanningSpeedMmPerSec = 25.0;
+    double scanningHomeMm = 50.0;
     bool useStageForRecording = true;
     bool preprocessAfterScan = true;
     bool saveFfcImage = true;
@@ -77,7 +78,7 @@ struct PersistedUr3eHemisphereScanSettings
     PersistedUr3eScanModePanelSettings semiPanel{};
     /// Last selected Auto named-route JSON path (combo selection).
     QString lastAutoRoutePath;
-    /// Last selected Semi plan JSON path (ur3e_semi_scan_plans).
+    /// Last selected Semi plan JSON path (mvs_semi_scan_plans).
     QString lastSemiFixedPlanPath;
     /// Last loaded/saved Semi-fixed route JSON path (legacy rings list).
     QString lastSemiFixedRoutePath;

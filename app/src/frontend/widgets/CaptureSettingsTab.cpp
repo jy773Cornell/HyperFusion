@@ -194,8 +194,8 @@ QWidget *MainWindow::createCaptureSettingsTab()
     auto *positionBox = new QGroupBox(QStringLiteral("Position"), page);
     capturePositionBox_ = positionBox;
     positionBox->setToolTip(
-        tr("Requires a connected camera and stage. Configure target length and scan speed. "
-           "Reference positions come from hyperfusion.cfg."));
+        tr("Requires a connected camera and stage. Configure target length, scan speed, "
+           "and scanning home. Reference positions come from hyperfusion.cfg."));
     auto *positionLayout = new QVBoxLayout(positionBox);
     positionLayout->setContentsMargins(6, 4, 6, 6);
     positionLayout->setSpacing(6);
@@ -272,6 +272,25 @@ QWidget *MainWindow::createCaptureSettingsTab()
     scanningSpeedRowLayout->addWidget(captureScanningSpeedAutoCheck_);
     scanningSpeedRowLayout->addSpacing(40);
     positionContentLayout->addLayout(scanningSpeedRowLayout);
+
+    auto *scanningHomeRowLayout = new QHBoxLayout();
+    scanningHomeRowLayout->setSpacing(6);
+    auto *scanningHomeLabel =
+        new QLabel(QStringLiteral("Scanning home"), capturePositionContent_);
+    scanningHomeLabel->setMinimumWidth(96);
+    captureScanningHomeSpin_ = new QDoubleSpinBox(capturePositionContent_);
+    captureScanningHomeSpin_->setRange(zaber_stage::kTravelMinimumMm, zaber_stage::kTravelLengthMm);
+    captureScanningHomeSpin_->setDecimals(2);
+    captureScanningHomeSpin_->setSingleStep(1.0);
+    captureScanningHomeSpin_->setSuffix(QStringLiteral(" mm"));
+    captureScanningHomeSpin_->setValue(50.0);
+    captureScanningHomeSpin_->setToolTip(
+        tr("Park position after a scan. The stage waits here for the next capture "
+           "instead of seeking the home sensor. Full homing still runs on disconnect "
+           "and application shutdown."));
+    scanningHomeRowLayout->addWidget(scanningHomeLabel);
+    scanningHomeRowLayout->addWidget(captureScanningHomeSpin_, 1);
+    positionContentLayout->addLayout(scanningHomeRowLayout);
 
     positionLayout->addWidget(capturePositionContent_);
     if (capturePanel() != nullptr)
@@ -364,8 +383,8 @@ QWidget *MainWindow::createCaptureSettingsTab()
     captureRunHfFusionCheck_->setToolTip(
         tr("After preprocessing, align and fuse FX10e + SWIR3 cubes per chip ROI "
            "for each illumination mode in the session (reflectance, transmittance, …). "
-           "Requires GSAM segmentation on both cameras and the hf_fusion Python "
-           "environment beside the app."));
+           "Available only when both FX10e and SWIR3 are connected. Also requires "
+           "GSAM segmentation and the hf_fusion Python environment beside the app."));
     preprocessingLayout->addWidget(captureRunHfFusionCheck_);
 
     auto *metadataBox = new QGroupBox(QStringLiteral("Metadata"), page);

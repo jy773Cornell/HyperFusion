@@ -134,13 +134,13 @@ void ensureSemiFixedTopPose(Ur3eSemiFixedRoute &route)
 QString defaultUr3eSemiScanRoutesDir()
 {
     const QString besideExe = QDir(QCoreApplication::applicationDirPath())
-                                  .filePath(QStringLiteral("ur3e_semi_scan_plans"));
+                                  .filePath(QStringLiteral("mvs_semi_scan_plans"));
     if (QDir(besideExe).exists())
         return besideExe;
 
 #ifdef HF_APP_SOURCE_DIR
     const QString fromPreset = QDir(QString::fromUtf8(HF_APP_SOURCE_DIR))
-                                   .filePath(QStringLiteral("preset/ur3e_semi_scan_plans"));
+                                   .filePath(QStringLiteral("preset/mvs_semi_scan_plans"));
     if (QDir(fromPreset).exists())
         return fromPreset;
 #endif

@@ -29,7 +29,8 @@ struct GsamPlanSegmentRunResult
 GsamPlanSegmentRunResult runGsamPlanSegment(const GsamPlanSegmentRunRequest &request);
 
 /// Write {session}/preview QA collages from existing preprocessed outputs.
-/// Always includes rgb_all and reference_intensity when those sources exist;
+/// Always creates preview/ when the session directory exists (single- or multi-mode).
+/// Includes rgb_all (collage of all streams) and reference_intensity when those sources exist;
 /// GSAM adds mask_overlaps and roi_spectra_plots when those outputs exist.
 /// Per-stream ROI spectra stay in preprocessed/segmentation/. Does not fail the session.
 QStringList writeSessionPreviewSheets(const QString &sessionDirectory, QStringList *logLines = nullptr);

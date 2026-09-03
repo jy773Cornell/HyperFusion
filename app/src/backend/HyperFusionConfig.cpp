@@ -1679,9 +1679,9 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "# DLP3010EVM-LC (Multiview DLP tab). Connect also arms. Blank turns output off.\n"
         << "# LED current is milliamps. Max 2400 mA = optical-engine spec (TI DLPU070B Table 1).\n"
         << "dlp_led_max_ma = 2400\n"
-        << "dlp_led_red_ma = 30\n"
-        << "dlp_led_green_ma = 30\n"
-        << "dlp_led_blue_ma = 30\n";
+        << "dlp_led_red_ma = 2400\n"
+        << "dlp_led_green_ma = 2400\n"
+        << "dlp_led_blue_ma = 2400\n";
 
     if (!file.commit())
     {

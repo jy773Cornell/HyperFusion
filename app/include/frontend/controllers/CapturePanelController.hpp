@@ -265,6 +265,7 @@ private:
     void appendCaptureRecordFrame(const FramePacket &frame);
     void homeStageBeforeCapture();
     void homeStageAfterCapture();
+    [[nodiscard]] double scanningHomePositionMm() const;
     void handleCapturePreviewFrame(const SharedFramePacket &frame);
     LumoCameraUi *cameraUiForIndex(std::size_t cameraIndex);
     [[nodiscard]] bool hasReflectanceAndTransmittanceCaptureModes() const;

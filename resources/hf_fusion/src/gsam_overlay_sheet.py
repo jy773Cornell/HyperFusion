@@ -1,6 +1,6 @@
 # Session QA collages written to {session}/preview/ (backend/offline).
 # FFC-only: rgb_all + reference_intensity. GSAM also adds mask_overlaps + roi_spectra_plots.
-# Per-stream ROI spectra files stay in preprocessed/segmentation/.
+# Per-stream RGB and ROI spectra stay under preprocessed/; preview/ keeps rgb_all only.
 from __future__ import annotations
 
 from pathlib import Path
@@ -64,11 +64,56 @@ def _stream_label(session: Path, path: Path) -> str:
     try:
         relative = path.relative_to(session)
         parts = relative.parts
-        if len(parts) >= 2:
+        if len(parts) >= 2 and parts[0].lower() != "preprocessed":
             return f"{parts[0]} / {parts[1]}"
+        if parts and parts[0].lower() == "preprocessed":
+            return "session / capture"
     except ValueError:
         pass
     return path.parent.parent.name
+
+
+def iter_preprocessed_dirs(session: Path) -> list[tuple[str, str, Path]]:
+    """Yield (mode, camera, preprocessed_dir) for every stream that exists.
+
+    Preferred dual-mode order first, then any other mode/camera (single-mode
+    reflectance-only, transmittance-only, or a flat preprocessed/ folder).
+    """
+    found: dict[str, tuple[str, str, Path]] = {}
+    for mode, camera in PREFERRED_STREAMS:
+        pre = session / mode / camera / "preprocessed"
+        if pre.is_dir():
+            found[f"{mode}/{camera}"] = (mode, camera, pre)
+
+    for pre in session.glob("**/preprocessed"):
+        if not pre.is_dir() or pre.name.lower() != "preprocessed":
+            continue
+        try:
+            parts = pre.relative_to(session).parts
+        except ValueError:
+            continue
+        if len(parts) >= 3:
+            mode, camera = parts[0], parts[1]
+        elif len(parts) == 1:
+            mode, camera = "session", "capture"
+        else:
+            continue
+        key = f"{mode}/{camera}"
+        if key not in found:
+            found[key] = (mode, camera, pre)
+
+    ordered: list[tuple[str, str, Path]] = []
+    used: set[str] = set()
+    for mode, camera in PREFERRED_STREAMS:
+        key = f"{mode}/{camera}"
+        item = found.get(key)
+        if item is not None:
+            ordered.append(item)
+            used.add(key)
+    for key, item in sorted(found.items()):
+        if key not in used:
+            ordered.append(item)
+    return ordered
 
 
 def _collect_stream_artifacts(session: Path, relative_under_stream: str) -> list[tuple[str, Path]]:
@@ -84,8 +129,9 @@ def _collect_stream_artifacts(session: Path, relative_under_stream: str) -> list
         label = f"{mode} / {camera}"
         path = found.get(label)
         if path is None:
-            path = session / mode / camera / "preprocessed" / Path(relative_under_stream)
-        if path.is_file():
+            matches = sorted((session / mode / camera / "preprocessed").glob(relative_under_stream))
+            path = matches[0] if matches else None
+        if path is not None and path.is_file():
             ordered.append((label, path))
             used.add(label)
     for label, path in sorted(found.items()):
@@ -103,13 +149,7 @@ def collect_roi_spectra_plots(session: Path) -> list[tuple[str, Path]]:
 
 
 def collect_rgb_previews(session: Path) -> list[tuple[str, Path]]:
-    panels: list[tuple[str, Path]] = []
-    for mode, camera in PREFERRED_STREAMS:
-        pre = session / mode / camera / "preprocessed"
-        matches = sorted(pre.glob("*_rgb.png"))
-        if matches:
-            panels.append((f"{mode} / {camera}", matches[0]))
-    return panels
+    return _collect_stream_artifacts(session, "*_rgb.png")
 
 
 def write_labeled_image_sheet(
@@ -184,7 +224,6 @@ def write_session_rgb_all(session: Path) -> Path | None:
         collect_rgb_previews(session),
         out_name=RGB_SHEET_NAME,
         title="RGB previews",
-        cols=2,
     )
 
 
@@ -237,10 +276,13 @@ def write_collection_image_sheet(
 def write_session_qa_sheets(session: Path) -> dict[str, Path]:
     """Write session preview sheets under {session}/preview/.
 
-    Always writes rgb_all and reference_intensity when those sources exist.
-    mask_overlaps and roi_spectra_plots are written only when GSAM outputs exist.
+    Always creates {session}/preview/. Writes rgb_all and reference_intensity
+    when those sources exist (one stream is enough). mask_overlaps and
+    roi_spectra_plots are written only when GSAM outputs exist.
+    Per-stream RGB stays in preprocessed/; preview/ only keeps rgb_all.
     Per-stream ROI spectra files stay in preprocessed/segmentation/.
     """
+    session_preview_dir(session)
     migrate_legacy_session_qa_pngs(session)
     written: dict[str, Path] = {}
     rgb = write_session_rgb_all(session)

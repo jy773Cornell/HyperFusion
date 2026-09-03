@@ -12,7 +12,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from src.gsam_client import DEFAULT_GSAM_URL, require_gsam_ready
-from src.gsam_overlay_sheet import preview_sheet_paths, write_session_qa_sheets
+from src.gsam_overlay_sheet import preview_sheet_paths, session_preview_dir, write_session_qa_sheets
 from src.gsam_plan_segment import (
     load_gsam_plan,
     segment_stream_from_plan,
@@ -55,14 +55,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.write_sheet:
         try:
+            session_preview_dir(session)
             sheets = write_session_qa_sheets(session)
         except Exception as exc:
             print(str(exc), file=sys.stderr)
             return 1
-        if not sheets:
-            print(f"No preview sheets could be written under {session}", file=sys.stderr)
-            return 1
-        payload = {"ok": True, "session": str(session), **preview_sheet_paths(session)}
+        payload = {
+            "ok": True,
+            "session": str(session),
+            "sheet_count": len(sheets),
+            **preview_sheet_paths(session),
+        }
         print(json.dumps(payload))
         return 0
 

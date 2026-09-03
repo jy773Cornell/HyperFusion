@@ -23,6 +23,7 @@
 #include "frontend/controllers/StagePanelController.hpp"
 #include "frontend/controllers/Ur3ePanelController.hpp"
 #include "frontend/controllers/UiSettingsController.hpp"
+#include "frontend/widgets/CaptureSessionSummaryDialog.hpp"
 #include "frontend/widgets/LumoCameraUi.hpp"
 #include "frontend/widgets/MainWindow.hpp"
 #include "frontend/widgets/OperationWaitDialog.hpp"
@@ -1058,26 +1059,22 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
   const bool gsamChecked =
       host_->captureRunGsamCheck_ != nullptr &&
       host_->captureRunGsamCheck_->isChecked();
-  const bool dualCameraReflectanceSelected =
-      bothFx10eAndSwir3CaptureCamerasConnected() &&
-      host_->captureCamera1Check_ != nullptr &&
-      host_->captureCamera2Check_ != nullptr &&
-      host_->captureCamera1Check_->isChecked() &&
-      host_->captureCamera2Check_->isChecked();
-  const bool fusionEnabled = gsamChecked && idleOfflinePreprocess;
+  const bool bothCamerasConnected = bothFx10eAndSwir3CaptureCamerasConnected();
+  const bool fusionEnabled =
+      gsamChecked && idleOfflinePreprocess && bothCamerasConnected;
   if (host_->captureRunHfFusionCheck_ != nullptr) {
     if (!fusionEnabled) {
       const QSignalBlocker blocker(host_->captureRunHfFusionCheck_);
       host_->captureRunHfFusionCheck_->setChecked(false);
     }
     host_->captureRunHfFusionCheck_->setEnabled(fusionEnabled);
-    if (!gsamChecked) {
+    if (!bothCamerasConnected) {
+      host_->captureRunHfFusionCheck_->setToolTip(
+          tr("Requires both FX10e and SWIR3 connected."));
+    } else if (!gsamChecked) {
       host_->captureRunHfFusionCheck_->setToolTip(
           tr("Enable GSAM segmentation first. Fusion needs chip ROIs from GSAM "
              "on both FX10e and SWIR3."));
-    } else if (afterScanPreprocessReady && !dualCameraReflectanceSelected) {
-      host_->captureRunHfFusionCheck_->setToolTip(
-          tr("Requires FX10e and SWIR3 connected and both selected for capture."));
     } else {
       host_->captureRunHfFusionCheck_->setToolTip(
           tr("After preprocessing, align and fuse FX10e + SWIR3 cubes per chip ROI "
@@ -1161,6 +1158,8 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
 
   if (host_->captureTargetLengthSpin_ != nullptr)
     host_->captureTargetLengthSpin_->setEnabled(!scanActive);
+  if (host_->captureScanningHomeSpin_ != nullptr)
+    host_->captureScanningHomeSpin_->setEnabled(!scanActive);
   updateScanningSpeedControls();
 
   host_->lightPanel()->updateConnectionDisplay();
@@ -1526,34 +1525,9 @@ void hf::capture::CapturePanelController::notifyRecordComplete() {
     return;
   }
 
-  QStringList streamLines;
-  for (auto it = summary.streams.cbegin(); it != summary.streams.cend(); ++it) {
-    const QString label =
-        it->relativeRoot.isEmpty() ? it->baseName : it->relativeRoot;
-    streamLines.push_back(QStringLiteral("%1 \u2014 %2 sample frames")
-                              .arg(label)
-                              .arg(it->frameCount));
-  }
-
-  QStringList sections;
-  if (!summary.sessionDirectory.isEmpty()) {
-    sections.push_back(summary.sessionDirectory);
-    if (!streamLines.isEmpty())
-      sections.push_back(streamLines.join(QLatin1Char('\n')));
-  }
-  if (!lastCaptureMultiviewSummaryText_.isEmpty())
-    sections.push_back(lastCaptureMultiviewSummaryText_);
-
-  const QString details = sections.join(QStringLiteral("\n\n"));
+  const QString extra = lastCaptureMultiviewSummaryText_;
   lastCaptureMultiviewSummaryText_.clear();
-
-  QMessageBox box(host_);
-  box.setIcon(QMessageBox::Information);
-  box.setWindowTitle(tr("Recording complete"));
-  box.setText(tr("Capture scan sequence finished successfully."));
-  box.setInformativeText(details);
-  box.setStandardButtons(QMessageBox::Ok);
-  box.exec();
+  CaptureSessionSummaryDialog::execForSession(host_, summary, extra);
 }
 
 void hf::capture::CapturePanelController::notifyPreviewComplete() {
@@ -1967,19 +1941,28 @@ QString hf::capture::CapturePanelController::buildScanningProcedureSummary(
 bool hf::capture::CapturePanelController::confirmCaptureHoodPreparation(
     const CaptureIlluminationMode mode,
     const bool betweenReflectanceAndTransmittance) {
+  const bool dualMode = betweenReflectanceAndTransmittance ||
+                        hasReflectanceAndTransmittanceCaptureModes();
+  int remainingSeconds = dualMode ? 10 : 5;
+
   QMessageBox box(host_);
   box.setIcon(QMessageBox::Information);
-  box.setStandardButtons(QMessageBox::Ok | QMessageBox::Cancel);
-  box.setDefaultButton(QMessageBox::Ok);
-  if (QAbstractButton *continueButton = box.button(QMessageBox::Ok))
-    continueButton->setText(QStringLiteral("Continue"));
+  box.setStandardButtons(QMessageBox::Yes | QMessageBox::Cancel);
+  box.setDefaultButton(QMessageBox::Yes);
+  QAbstractButton *yesButton = box.button(QMessageBox::Yes);
+  const auto setYesLabel = [yesButton](const int secondsLeft) {
+    if (yesButton == nullptr)
+      return;
+    yesButton->setText(QStringLiteral("Yes (%1)").arg(secondsLeft));
+  };
+  setYesLabel(remainingSeconds);
 
   if (betweenReflectanceAndTransmittance) {
     box.setWindowTitle(QStringLiteral("Prepare transmittance scan"));
     box.setText(QStringLiteral("Reflectance scan finished."));
     QString informativeText = QStringLiteral(
         "Cover the reflectance light guide hood, open the transmittance light "
-        "guide hood, then click Continue to start the transmittance scan.");
+        "guide hood, then click Yes to start the transmittance scan.");
     if (dualModeExposureSwitchEnabled_ && captureUsingTransmittanceExposure_) {
       informativeText += QStringLiteral("\n\n%1").arg(
           buildTransmittanceExposureChangeNotice());
@@ -1988,16 +1971,30 @@ bool hf::capture::CapturePanelController::confirmCaptureHoodPreparation(
   } else if (mode == CaptureIlluminationMode::Reflectance) {
     box.setWindowTitle(QStringLiteral("Prepare reflectance scan"));
     box.setText(QStringLiteral(
-        "Cover the transmittance light guide hood, then click Continue "
+        "Cover the transmittance light guide hood, then click Yes "
         "to start the reflectance scan."));
   } else {
     box.setWindowTitle(QStringLiteral("Prepare transmittance scan"));
     box.setText(QStringLiteral(
-        "Cover the reflectance light guide hood, then click Continue to "
+        "Cover the reflectance light guide hood, then click Yes to "
         "start the transmittance scan."));
   }
 
-  return box.exec() == QMessageBox::Ok;
+  QTimer countdown;
+  countdown.setInterval(1000);
+  QObject::connect(&countdown, &QTimer::timeout, &box, [&]() {
+    --remainingSeconds;
+    if (remainingSeconds <= 0) {
+      countdown.stop();
+      if (yesButton != nullptr)
+        yesButton->click();
+      return;
+    }
+    setYesLabel(remainingSeconds);
+  });
+  countdown.start();
+
+  return box.exec() == QMessageBox::Yes;
 }
 
 bool hf::capture::CapturePanelController::confirmContinuousCaptureWithoutStage()
@@ -4370,6 +4367,16 @@ void hf::capture::CapturePanelController::homeStageBeforeCapture() {
   }
 
   captureStageSequenceActive_ = true;
+
+  if (host_->stageWorker()->currentTopology().axesHomed) {
+    host_->appendLog(
+        QStringLiteral("%1: stage already referenced \u2014 starting from "
+                       "current position (scanning home).")
+            .arg(captureSequenceLogPrefix()));
+    onStageHomedForCapture();
+    return;
+  }
+
   host_->stageHomingKind_ = MainWindow::StageHomingKind::BeforeCapture;
   host_->stageWorker()->requestHome();
 }
@@ -4424,6 +4431,12 @@ void hf::capture::CapturePanelController::stopRecorder() {
   }
 }
 
+double hf::capture::CapturePanelController::scanningHomePositionMm() const {
+  if (host_->captureScanningHomeSpin_ != nullptr)
+    return host_->captureScanningHomeSpin_->value();
+  return 50.0;
+}
+
 void hf::capture::CapturePanelController::homeStageAfterCapture() {
   if (host_->performingGracefulShutdown_)
     return;
@@ -4435,8 +4448,33 @@ void hf::capture::CapturePanelController::homeStageAfterCapture() {
       host_->stageWorker()->currentState() != StageState::Connected)
     return;
 
-  host_->stageHomingKind_ = MainWindow::StageHomingKind::AfterCapture;
-  host_->stageWorker()->requestHome();
+  const double parkMm =
+      qBound(zaber_stage::kTravelMinimumMm, scanningHomePositionMm(),
+             zaber_stage::kTravelLengthMm);
+  const double configuredSpeed = hf::hardwareConfig().operationScanningSpeedMmPerSec;
+  const double speedMmPerSec =
+      configuredSpeed > 0.0 ? configuredSpeed : zaber_stage::kMaxSpeedMmPerSec;
+
+  host_->appendLog(
+      QStringLiteral("Capture: parking at scanning home %1 mm @ %2 mm/s\u2026")
+          .arg(parkMm, 0, 'f', 2)
+          .arg(speedMmPerSec, 0, 'f', 1));
+
+  host_->stageWorker()->requestMoveAbsoluteMm(
+      parkMm, speedMmPerSec, true, [this](const bool success) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, success]() {
+              if (success)
+                host_->appendLog(
+                    QStringLiteral("Capture: parked at scanning home."));
+              else
+                host_->appendLog(
+                    QStringLiteral("Capture: scanning home move failed."));
+              onStageHomedAfterCapture();
+            },
+            Qt::QueuedConnection);
+      });
 }
 
 void hf::capture::CapturePanelController::finishScan() {

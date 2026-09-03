@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 
-from src.gsam_overlay_sheet import PREFERRED_STREAMS, write_labeled_image_sheet
+from src.gsam_overlay_sheet import iter_preprocessed_dirs, write_labeled_image_sheet
 
 # Avoid circular import at module load; overlay_sheet may import this lazily.
 from src.utils.envi import parse_envi_hdr, read_bil_cube
@@ -116,8 +116,7 @@ def write_stream_reference_plots(session: Path, mode: str, camera: str, stem: st
 
 def collect_reference_plots(session: Path, stem: str) -> list[tuple[str, Path]]:
     panels: list[tuple[str, Path]] = []
-    for mode, camera in PREFERRED_STREAMS:
-        pre = session / mode / camera / "preprocessed"
+    for mode, camera, pre in iter_preprocessed_dirs(session):
         dark = pre / f"DARKREF_{stem}_ref_plot.png"
         white = pre / f"WHITEREF_{stem}_ref_plot.png"
         if not dark.is_file():
@@ -140,7 +139,6 @@ def write_session_reference_intensity(session: Path, stem: str | None = None) ->
         collect_reference_plots(session, stem),
         out_name=REF_SHEET_NAME,
         title="black / white reference intensity",
-        cols=2,
     )
 
 
@@ -159,8 +157,7 @@ def write_collection_reference_sheet(collection: Path, session_sheets: list[Path
 def process_session_references(session: Path, stem: str | None = None) -> dict[str, Path]:
     stem = stem or session.name
     written: dict[str, Path] = {}
-    for mode, camera in PREFERRED_STREAMS:
-        pre = session / mode / camera / "preprocessed"
+    for mode, camera, pre in iter_preprocessed_dirs(session):
         capture = session / mode / camera / "capture"
         if not pre.is_dir() or not capture.is_dir():
             continue

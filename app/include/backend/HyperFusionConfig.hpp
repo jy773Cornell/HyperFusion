@@ -206,9 +206,9 @@ struct HardwareConfig
     {
         /// Hard cap for RGB LED current spin boxes (mA). DLP3010EVM-LC optical engine: 2400 mA.
         int ledMaxMa = 2400;
-        int ledRedMa = 30;
-        int ledGreenMa = 30;
-        int ledBlueMa = 30;
+        int ledRedMa = 2400;
+        int ledGreenMa = 2400;
+        int ledBlueMa = 2400;
     };
 
     DlpConfig dlp;

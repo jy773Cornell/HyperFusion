@@ -51,9 +51,9 @@ struct DlpDeviceInfo
 struct DlpProjectorSettings
 {
     QString deviceId;
-    int ledRedMa = 30;
-    int ledGreenMa = 30;
-    int ledBlueMa = 30;
+    int ledRedMa = 2400;
+    int ledGreenMa = 2400;
+    int ledBlueMa = 2400;
     QString testPattern = QStringLiteral("FPP scanning");
 };
 

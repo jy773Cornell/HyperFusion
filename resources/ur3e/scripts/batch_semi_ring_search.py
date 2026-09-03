@@ -397,7 +397,7 @@ def main() -> int:
     parser.add_argument(
         "--cfg",
         type=Path,
-        default=_repo_root() / "app" / "hyperfusion.cfg",
+        default=_repo_root() / "app" / "preset" / "hyperfusion.cfg",
     )
     parser.add_argument("--base-url", default="http://127.0.0.1:8766")
     parser.add_argument(
@@ -427,6 +427,11 @@ def main() -> int:
         "--resume",
         action="store_true",
         help="Skip combos already recorded in progress JSON.",
+    )
+    parser.add_argument(
+        "--reverse",
+        action="store_true",
+        help="Sweep largest radius and theta first.",
     )
     args = parser.parse_args()
 
@@ -459,6 +464,10 @@ def main() -> int:
     while r <= args.radius_max_mm + 1.0e-9:
         radii_mm.append(round(r, 6))
         r += args.radius_step_mm
+
+    if args.reverse:
+        thetas.reverse()
+        radii_mm.reverse()
 
     combos = [(rm, th) for rm in radii_mm for th in thetas]
     progress_path = args.out_dir / "_batch_semi_ring_search_progress.json"
@@ -566,6 +575,18 @@ def main() -> int:
                 f"[{i}/{len(combos)}] {key} {apex_tag}{n_ring} ({dt:.1f}s)",
                 flush=True,
             )
+            release_copy = (
+                _repo_root()
+                / "app"
+                / "build"
+                / "Release"
+                / "mvs_semi_scan_plans"
+                / out_file.name
+            )
+            if release_copy.parent.is_dir() and out_file.resolve() != release_copy.resolve():
+                release_copy.write_text(
+                    out_file.read_text(encoding="utf-8"), encoding="utf-8"
+                )
         else:
             done[key] = {
                 "ok": True,

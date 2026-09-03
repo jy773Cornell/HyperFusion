@@ -1,0 +1,638 @@
+{
+  "R300_T40": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 1053.58
+  },
+  "R300_T39": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 439.97
+  },
+  "R300_T38": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.06
+  },
+  "R300_T37": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.15
+  },
+  "R300_T36": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 593.96
+  },
+  "R300_T35": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 577.9
+  },
+  "R300_T34": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 561.04
+  },
+  "R300_T33": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 563.57
+  },
+  "R300_T32": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 558.63
+  },
+  "R300_T31": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 553.34
+  },
+  "R300_T30": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 539.63
+  },
+  "R300_T29": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 546.0
+  },
+  "R300_T28": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 546.31
+  },
+  "R300_T27": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 439.99
+  },
+  "R300_T26": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.02
+  },
+  "R300_T25": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.08
+  },
+  "R300_T24": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.08
+  },
+  "R300_T23": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.04
+  },
+  "R300_T22": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.19
+  },
+  "R300_T21": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.06
+  },
+  "R300_T20": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.2
+  },
+  "R295_T40": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 660.18
+  },
+  "R295_T39": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 630.22
+  },
+  "R295_T38": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.12
+  },
+  "R295_T37": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.08
+  },
+  "R295_T36": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 593.61
+  },
+  "R295_T35": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 577.31
+  },
+  "R295_T34": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 564.19
+  },
+  "R295_T33": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 565.13
+  },
+  "R295_T32": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 547.45
+  },
+  "R295_T31": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 555.08
+  },
+  "R295_T30": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 538.09
+  },
+  "R295_T29": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 545.55
+  },
+  "R295_T28": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 537.64
+  },
+  "R295_T27": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 539.33
+  },
+  "R295_T26": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.17
+  },
+  "R295_T25": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.11
+  },
+  "R295_T24": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.12
+  },
+  "R295_T23": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.09
+  },
+  "R295_T22": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.1
+  },
+  "R295_T21": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.13
+  },
+  "R295_T20": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.17
+  },
+  "R290_T40": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 637.87
+  },
+  "R290_T39": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 619.8
+  },
+  "R290_T38": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 598.52
+  },
+  "R290_T37": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.07
+  },
+  "R290_T36": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 589.82
+  },
+  "R290_T35": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 593.44
+  },
+  "R290_T34": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 586.94
+  },
+  "R290_T33": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 568.35
+  },
+  "R290_T32": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 540.08
+  },
+  "R290_T31": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 560.79
+  },
+  "R290_T30": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 547.21
+  },
+  "R290_T29": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 536.97
+  },
+  "R290_T28": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 540.23
+  },
+  "R290_T27": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 538.44
+  },
+  "R290_T26": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.15
+  },
+  "R290_T25": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.1
+  },
+  "R290_T24": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.11
+  },
+  "R290_T23": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.13
+  },
+  "R290_T22": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.25
+  },
+  "R290_T21": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.13
+  },
+  "R290_T20": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.14
+  },
+  "R285_T40": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 637.15
+  },
+  "R285_T39": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 579.05
+  },
+  "R285_T38": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 610.57
+  },
+  "R285_T37": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 619.9
+  },
+  "R285_T36": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 628.35
+  },
+  "R285_T35": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 575.1
+  },
+  "R285_T34": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 563.34
+  },
+  "R285_T33": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 565.45
+  },
+  "R285_T32": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 559.74
+  },
+  "R285_T31": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 541.99
+  },
+  "R285_T30": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 537.9
+  },
+  "R285_T29": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 560.93
+  },
+  "R285_T28": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 544.84
+  },
+  "R285_T27": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 551.06
+  },
+  "R285_T26": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 545.68
+  },
+  "R285_T25": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.08
+  },
+  "R285_T24": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.07
+  },
+  "R285_T23": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.12
+  },
+  "R285_T22": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.09
+  },
+  "R285_T21": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.18
+  },
+  "R285_T20": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.13
+  },
+  "R280_T40": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 630.91
+  },
+  "R280_T39": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 634.59
+  },
+  "R280_T38": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 639.71
+  },
+  "R280_T37": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 604.72
+  },
+  "R280_T36": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 664.96
+  },
+  "R280_T35": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 653.78
+  },
+  "R280_T34": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 855.17
+  },
+  "R280_T33": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 570.99
+  },
+  "R280_T32": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 553.23
+  },
+  "R280_T31": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 550.5
+  },
+  "R280_T30": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 546.64
+  },
+  "R280_T29": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 552.03
+  },
+  "R280_T28": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 543.97
+  },
+  "R280_T27": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 544.38
+  },
+  "R280_T26": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 558.31
+  },
+  "R280_T25": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.95
+  },
+  "R280_T24": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.67
+  },
+  "R280_T23": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.76
+  },
+  "R280_T22": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.5
+  },
+  "R280_T21": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 440.58
+  },
+  "R280_T20": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 898.54
+  },
+  "R275_T40": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": true,
+    "seconds": 643.75
+  }
+}

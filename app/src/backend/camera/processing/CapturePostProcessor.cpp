@@ -1312,17 +1312,14 @@ CapturePostProcessResult processCaptureSession(const CaptureWriterSessionSummary
                                                   options);
     }
 
-    bool anyProcessed = false;
-    for (const StreamProcessReport &report : reports)
+    const QString previewDir =
+        QDir(summary.sessionDirectory).filePath(QStringLiteral("preview"));
+    if (!QDir().mkpath(previewDir))
     {
-        if (report.darkPlotOk || report.whitePlotOk || report.ffcOk || report.rgbOk
-            || report.segmentationOk)
-        {
-            anyProcessed = true;
-            break;
-        }
+        result.logLines.push_back(
+            QStringLiteral("Capture post-process: could not create preview/."));
     }
-    if (anyProcessed)
+    else
     {
         const QStringList previewPaths =
             writeSessionPreviewSheets(summary.sessionDirectory, &result.logLines);

@@ -97,6 +97,7 @@ qt_add_executable(app WIN32
     src/frontend/widgets/StageAxisWidget.cpp
     src/frontend/widgets/IntensityBarWidget.cpp
     src/frontend/widgets/OperationWaitDialog.cpp
+    src/frontend/widgets/CaptureSessionSummaryDialog.cpp
     src/frontend/widgets/Ur3eExternalControlWaitDialog.cpp
     src/frontend/widgets/WaterfallDisplayWidget.cpp
     src/frontend/widgets/StreamPaneHelpers.cpp
@@ -132,6 +133,7 @@ qt_add_executable(app WIN32
     src/frontend/processing/WavelengthLookup.cpp
     include/frontend/widgets/MainWindow.hpp
     include/frontend/widgets/OperationWaitDialog.hpp
+    include/frontend/widgets/CaptureSessionSummaryDialog.hpp
     include/frontend/widgets/Ur3eExternalControlWaitDialog.hpp
     include/frontend/widgets/DetectorCrosshairWidget.hpp
     include/frontend/widgets/ProfilePlotWidget.hpp
@@ -474,7 +476,7 @@ if(WIN32)
         VS_RESOURCE_COMPILE_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/resources")
 endif()
 
-# Ship app/preset (hyperfusion.cfg, gsam_plans, ur3e_semi_scan_plans, …) beside app.exe.
+# Ship app/preset (hyperfusion.cfg, gsam_plans, mvs_semi_scan_plans, …) beside app.exe.
 set(HF_PRESET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/preset")
 if(EXISTS "${HF_PRESET_DIR}")
     add_custom_command(
