@@ -18,7 +18,7 @@ timeout 15 ros2 topic echo /robot_description --once 2>/dev/null \
   | grep -o 'hyperfusion_tool_payload' | head -3 || echo "(no link in topic output)"
 
 echo "=== xacro preflight ==="
-REPO="${HYPERFUSION_UR3E_REPO:-/mnt/d/Pototypy/HyperFusion/resources/ur3e}"
+REPO="${HYPERFUSION_UR3E_REPO:-/mnt/d/Pototypy/HyperFusion/app/sidecars/ur3e}"
 xacro "${REPO}/urdf/hyperfusion_ur3e.urdf.xacro" \
   ur_type:=ur3e name:=ur3e use_mock_hardware:=false ceiling_mount:=true \
   tool_payload_enabled:=true tool_payload_shape:=mesh \

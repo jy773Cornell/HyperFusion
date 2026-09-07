@@ -1,4 +1,4 @@
-﻿# UR3e WSL sidecar (ROS 2) for HyperFusion
+# UR3e WSL sidecar (ROS 2) for HyperFusion
 
 HyperFusion controls a **Universal Robots UR3e** via a **WSL sidecar**: the Windows app starts `ur3e_server` in Ubuntu through `wsl.exe`, mirroring the GSAM2 pattern. The sidecar always uses **ROS 2 / ur_robot_driver**. Set `use_mock_hardware = true` for simulation (no physical robot) or `false` for the real arm.
 
@@ -18,7 +18,7 @@ UI lives under **Multiview** (UR3e robot + BFS camera). Hemisphere scan planning
 Optional: if WSL cannot reach the robot, or External Control cannot reach the PC, run (Administrator PowerShell recommended):
 
 ```powershell
-cd resources\ur3e
+cd app\sidecars\ur3e
 .\scripts\setup_wsl_robot_network.ps1 -ShutdownWsl
 ```
 
@@ -33,7 +33,7 @@ This writes `%USERPROFILE%\.wslconfig` (`networkingMode=mirrored`), adds inbound
 ### From Windows PowerShell (recommended)
 
 ```powershell
-cd D:\Pototypy\HyperFusion\resources\ur3e   # adjust drive/path
+cd D:\Pototypy\HyperFusion\app\sidecars\ur3e   # adjust drive/path
 .\install_env.ps1
 ```
 
@@ -42,7 +42,7 @@ cd D:\Pototypy\HyperFusion\resources\ur3e   # adjust drive/path
 ### From WSL
 
 ```bash
-cd /mnt/d/Pototypy/HyperFusion/resources/ur3e   # adjust drive/path
+cd /mnt/d/Pototypy/HyperFusion/app/sidecars/ur3e   # adjust drive/path
 chmod +x install_env.sh scripts/*.sh
 ./install_env.sh
 ```
@@ -66,7 +66,7 @@ Re-run after pulling package changes: `rm -rf venv && ./install_env.sh` (or `.\i
 ## Manual server test (simulation)
 
 ```bash
-cd /mnt/d/Pototypy/HyperFusion/resources/ur3e
+cd /mnt/d/Pototypy/HyperFusion/app/sidecars/ur3e
 source /opt/ros/jazzy/setup.bash   # or humble on 22.04
 ./venv/bin/ur3e_server --use-mock-hardware --port 8766
 ```
@@ -103,7 +103,7 @@ MoveIt + RViz runs in a **separate WSL window** — not inside the HyperFusion s
 From WSL:
 
 ```bash
-cd /mnt/d/Pototypy/HyperFusion/resources/ur3e
+cd /mnt/d/Pototypy/HyperFusion/app/sidecars/ur3e
 ./scripts/launch_moveit.sh jazzy ur3e    # ros_distro, ur_type
 ```
 
@@ -174,7 +174,7 @@ In `app/preset/hyperfusion.cfg` → `[multiview]` (aliases `[3d scanning]` and `
 ```ini
 use_multiview = true
 wsl_distro = Ubuntu
-ur3e_repo_linux =                          ; empty = auto (/mnt/d/.../resources/ur3e)
+ur3e_repo_linux =                          ; empty = auto (/mnt/d/.../app/sidecars/ur3e)
 server_port = 8766
 robot_ip = 192.168.1.10
 reverse_ip = 192.168.1.20                  ; External Control remote PC
@@ -250,7 +250,7 @@ Connect waits for live `/joint_states` before reporting success (required for Mo
 ## Layout
 
 ```
-resources/ur3e/
+app/sidecars/ur3e/
   package.xml / setup.py
   hyperfusion_ur3e/
     bridge/                        # ROS ↔ HTTP adapter

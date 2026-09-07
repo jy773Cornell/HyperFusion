@@ -65,12 +65,12 @@ void normalizeHemisphereScanParams(Ur3eHemisphereScanParams &params);
 /// Ring-dome / look-at center on the tray (metres). Fixed at (0,0) — under base_link
 /// when mount_offset_x/y_mm = 0 (Semi pans about the base).
 void scanCenterOffsetM(double &xM, double &yM);
-/// Apex pin XY only: optical TCP at home_joints_deg projected onto the tray.
+/// Apex pin XY only: camera TCP (tool_tcp_*) at home_joints_deg projected onto the tray.
 void homeTcpScanCenterOffsetM(double &xM, double &yM);
 /// Grid pin count including the always-present apex (θ=0) pin.
 [[nodiscard]] int hemisphereScanPointCount(const Ur3eHemisphereScanParams &params);
 /// Latitude/longitude grid plus a fixed apex pin first.
-/// Apex sits over home TCP XY (perpendicular look-down); rings use base XY (0,0).
+/// Apex sits over home camera-TCP XY (perpendicular look-down); rings use base XY (0,0).
 /// Apex camera-up / TCP upper face → world +X; other pins use scan_camera_up_world_z.
 [[nodiscard]] std::vector<Ur3eHemisphereScanPoint>
 generateHemisphereScanPoints(const Ur3eHemisphereScanParams &params);

@@ -123,21 +123,19 @@ DlpProjectorSettingsWidget::DlpProjectorSettingsWidget(QWidget *parent)
     configureForm(patForm);
 
     testPatternCombo_ = makeExpandingCombo(patBox);
-    testPatternCombo_->addItems({QStringLiteral("FPP scanning"),
+    testPatternCombo_->addItems({QStringLiteral("FPP HDMI"),
                                  QStringLiteral("Checkerboard"),
                                  QStringLiteral("Horizontal ramp"),
                                  QStringLiteral("Vertical ramp"),
                                  QStringLiteral("Solid field"),
                                  QStringLiteral("Color bars")});
-    testPatternCombo_->setCurrentText(QStringLiteral("FPP scanning"));
-    testPatternCombo_->setToolTip(QStringLiteral(
-        "FPP scanning: loops Black, White, coarse code, Gray codes, then 8 px fringe 0/90/180/270. "
-        "GUI test only. Blank stops."));
+    testPatternCombo_->setCurrentText(QStringLiteral("FPP HDMI"));
+    testPatternCombo_->setToolTip(
+        QStringLiteral("FPP HDMI streams 26 sine frames (u then v) over HDMI. Other items are TI TPG (USB)."));
     patForm->addRow(testPatternCombo_);
 
     testPatternBtn_ = new QPushButton(QStringLiteral("Show pattern"), patBox);
-    testPatternBtn_->setToolTip(
-        QStringLiteral("Requires Connect. FPP scanning loops until Blank."));
+    testPatternBtn_->setToolTip(QStringLiteral("Requires Connect. FPP HDMI loops until Blank."));
     testPatternBtn_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     blankBtn_ = new QPushButton(QStringLiteral("Blank"), patBox);
     blankBtn_->setToolTip(QStringLiteral("Immediately disable projector output."));
@@ -322,9 +320,14 @@ void DlpProjectorSettingsWidget::loadFromSettings()
     if (!saved.testPattern.isEmpty())
     {
         QString pattern = saved.testPattern;
-        if (QString::compare(pattern, QStringLiteral("FPP fringe"), Qt::CaseInsensitive) == 0)
-            pattern = QStringLiteral("FPP scanning");
-        setComboText(testPatternCombo_, pattern);
+        if (hf::dlp::isFppScanningPattern(pattern)
+            || pattern.startsWith(QStringLiteral("Splash "), Qt::CaseInsensitive)
+            || pattern.startsWith(QStringLiteral("FPP lines"), Qt::CaseInsensitive))
+            pattern = QStringLiteral("FPP HDMI");
+        if (testPatternCombo_->findText(pattern) >= 0)
+            setComboText(testPatternCombo_, pattern);
+        else
+            testPatternCombo_->setCurrentText(QStringLiteral("FPP HDMI"));
     }
 
     ledRedSpin_->setValue(hf::dlp::clampLedMilliamp(

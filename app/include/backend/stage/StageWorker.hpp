@@ -32,7 +32,7 @@ public:
     /// When @p homeBeforeDisconnect is false, motion is stopped and the stage disconnects immediately.
     void shutdownSync(bool homeBeforeDisconnect = true);
     void requestStopMotion(std::function<void()> onComplete = nullptr, bool waitUntilIdle = true);
-    void requestHome();
+    void requestHome(std::function<void(bool success)> onComplete = nullptr);
     void requestMoveRelativeMm(double distanceMm,
                                double speedMmPerSec = zaber_stage::kMaxSpeedMmPerSec);
     void requestMoveAbsoluteMm(double positionMm,

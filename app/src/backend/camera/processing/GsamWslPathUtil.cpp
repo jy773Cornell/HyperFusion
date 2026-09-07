@@ -29,11 +29,11 @@ QString resolveSam2ResourcesWindowsPath()
     QDir dir(QCoreApplication::applicationDirPath());
     for (int depth = 0; depth < 8; ++depth)
     {
-        const QString candidate = dir.filePath(QStringLiteral("resources/gsam2"));
+        const QString candidate = dir.filePath(QStringLiteral("sidecars/gsam2"));
         if (QFileInfo::exists(candidate))
             return QFileInfo(candidate).absoluteFilePath();
 
-        const QString alt = dir.filePath(QStringLiteral("../resources/gsam2"));
+        const QString alt = dir.filePath(QStringLiteral("resources/gsam2"));
         if (QFileInfo::exists(alt))
             return QFileInfo(alt).absoluteFilePath();
 

@@ -11,7 +11,7 @@ Integrated by `src/hf_fusion_pipeline.py`. The app invokes `fusion_cli.py` as a 
 ## Layout
 
 ```
-resources/hf_fusion/
+app/sidecars/hf_fusion/
   fusion_cli.py                  # CLI entry (used by HyperFusion app)
   requirements.txt
   src/
@@ -25,7 +25,7 @@ resources/hf_fusion/
 ## CLI
 
 ```powershell
-cd resources\hf_fusion
+cd app\sidecars\hf_fusion
 .\.venv\Scripts\Activate.ps1
 python fusion_cli.py --session E:\chiptest --mode reflectance
 ```
@@ -85,11 +85,11 @@ print(result.alignment_json)
 One venv in the repo (not in git — too large):
 
 ```powershell
-cd resources\hf_fusion
+cd app\sidecars\hf_fusion
 .\setup_venv.ps1
 ```
 
-The app always uses `resources/hf_fusion/` (code + `.venv`), not a copy beside `app.exe`.
+The app always uses `app/sidecars/hf_fusion/` (code + `.venv`), not a copy beside `app.exe`.
 
 ## App integration (`hyperfusion.cfg`)
 

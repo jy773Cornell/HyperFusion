@@ -1,0 +1,13 @@
+# Vendor SDK installers live in this folder only (not docs/).
+# Format:  filename-or-folder | detect-id
+# Already-installed APIs are skipped at install time.
+
+vcredist_x64.exe | vcredist
+SpecSensor_setup_2020_519.exe | lumo
+eBUS SDK 64-bit.5.1.10.4642.exe | pleora
+VAS1851 | ni
+mccdaq.exe | mcc
+icalsetup.exe | mcc
+ZaberMotionCppInstaller-9.3.1-Windows_x64.exe | zaber
+SpinnakerSDK_FULL_4.3.0.190_x64.exe | spinnaker
+DLPC-API-1.12-Setup.exe | dlpc

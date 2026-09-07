@@ -136,13 +136,14 @@ void StageWorker::requestStopMotion(std::function<void()> onComplete, const bool
         enqueueCommand(std::move(command));
 }
 
-void StageWorker::requestHome()
+void StageWorker::requestHome(std::function<void(bool success)> onComplete)
 {
-    enqueueCommand([this]() {
+    enqueueCommand([this, onComplete = std::move(onComplete)]() {
         StageError error;
         notifyState(StageState::Homing);
 
-        if (controller_->home(error))
+        const bool ok = controller_ != nullptr && controller_->home(error);
+        if (ok)
         {
             notifyTopology(controller_->topology());
             notifyState(StageState::Connected);
@@ -152,6 +153,8 @@ void StageWorker::requestHome()
             notifyState(StageState::Connected);
             notifyError(error);
         }
+        if (onComplete)
+            onComplete(ok);
     });
 }
 

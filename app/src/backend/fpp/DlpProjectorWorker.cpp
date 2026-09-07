@@ -75,10 +75,139 @@ void DlpProjectorWorker::stopFppScan()
     commandCv_.notify_all();
 }
 
+bool DlpProjectorWorker::applyFppStep(int stepIndex, DlpError &error)
+{
+    if (projector_ == nullptr)
+    {
+        error = {DlpErrorCode::InternalError, "DLP projector missing.", true};
+        return false;
+    }
+    if (stepIndex < 0 || stepIndex >= kFppScanningStepCount)
+    {
+        error = {DlpErrorCode::InvalidState, "FPP step index out of range.", false};
+        return false;
+    }
+
+    const FppScanStep &step = kFppScanningSteps[stepIndex];
+    if (step.kind == FppScanStepKind::AmbientBlank)
+    {
+        if (!projector_->blank(error))
+            return false;
+    }
+    else if (!projector_->showExternalVideo(error))
+        return false;
+
+    HdmiShowCallback hdmi;
+    {
+        std::lock_guard<std::mutex> lock(callbackMutex_);
+        hdmi = hdmiShowCallback_;
+    }
+    if (!hdmi)
+    {
+        error = {DlpErrorCode::InternalError, "HDMI pattern window is not attached.", false};
+        return false;
+    }
+    return hdmi(stepIndex, error);
+}
+
+bool DlpProjectorWorker::showFppStepSync(int stepIndex, DlpError &error)
+{
+    stopFppScan();
+    if (!running_.load() || projector_ == nullptr)
+    {
+        error = {DlpErrorCode::InvalidState, "DLP worker is not running.", false};
+        return false;
+    }
+
+    std::mutex doneMutex;
+    std::condition_variable doneCv;
+    bool done = false;
+    bool ok = false;
+    DlpError localError;
+
+    enqueue([this, stepIndex, &doneMutex, &doneCv, &done, &ok, &localError]() {
+        ok = applyFppStep(stepIndex, localError);
+        if (!ok)
+        {
+            notifyState(DlpProjectorState::Fault);
+            notifyError(localError);
+        }
+        else
+        {
+            const FppScanStep &step = kFppScanningSteps[stepIndex];
+            notifyState(step.kind == FppScanStepKind::AmbientBlank ? DlpProjectorState::Armed
+                                                                  : DlpProjectorState::Projecting);
+            notifyLog(std::string("DLP: FPP pin: ") + step.label);
+        }
+        {
+            std::lock_guard<std::mutex> lock(doneMutex);
+            done = true;
+        }
+        doneCv.notify_one();
+    });
+
+    {
+        std::unique_lock<std::mutex> lock(doneMutex);
+        if (!doneCv.wait_for(lock, std::chrono::seconds(20), [&done]() { return done; }))
+        {
+            error = {DlpErrorCode::InternalError, "Timed out showing FPP step.", false};
+            return false;
+        }
+    }
+    error = localError;
+    return ok;
+}
+
+bool DlpProjectorWorker::blankSync(DlpError &error)
+{
+    stopFppScan();
+    if (!running_.load() || projector_ == nullptr)
+    {
+        error = {DlpErrorCode::InvalidState, "DLP worker is not running.", false};
+        return false;
+    }
+
+    std::mutex doneMutex;
+    std::condition_variable doneCv;
+    bool done = false;
+    bool ok = false;
+    DlpError localError;
+
+    enqueue([this, &doneMutex, &doneCv, &done, &ok, &localError]() {
+        ok = projector_->blank(localError);
+        if (!ok)
+        {
+            notifyState(DlpProjectorState::Fault);
+            notifyError(localError);
+        }
+        else
+        {
+            notifyLog("DLP: blanked.");
+            notifyState(DlpProjectorState::Armed);
+        }
+        {
+            std::lock_guard<std::mutex> lock(doneMutex);
+            done = true;
+        }
+        doneCv.notify_one();
+    });
+
+    {
+        std::unique_lock<std::mutex> lock(doneMutex);
+        if (!doneCv.wait_for(lock, std::chrono::seconds(8), [&done]() { return done; }))
+        {
+            error = {DlpErrorCode::InternalError, "Timed out blanking DLP.", false};
+            return false;
+        }
+    }
+    error = localError;
+    return ok;
+}
+
 void DlpProjectorWorker::runFppScanningLoop()
 {
     fppStop_ = false;
-    notifyLog("DLP: FPP scanning loop (GUI test). Blank or Disconnect to stop.");
+    notifyLog("DLP: FPP HDMI sine loop (GUI test). Blank or Disconnect to stop.");
     notifyState(DlpProjectorState::Projecting);
 
     int cycle = 0;
@@ -90,32 +219,17 @@ void DlpProjectorWorker::runFppScanningLoop()
             if (!running_.load() || fppStop_.load())
                 break;
 
-            const FppScanStep &step = kFppScanningSteps[i];
             DlpError error;
-            if (step.kind == FppScanStepKind::AmbientBlank)
+            if (!applyFppStep(i, error))
             {
-                if (!projector_->blank(error))
-                {
-                    notifyState(DlpProjectorState::Fault);
-                    notifyError(error);
-                    fppStop_ = true;
-                    return;
-                }
-            }
-            else
-            {
-                const QString name = QString::fromUtf8(step.patternName);
-                if (!projector_->showTestPattern(name, error))
-                {
-                    notifyState(DlpProjectorState::Fault);
-                    notifyError(error);
-                    fppStop_ = true;
-                    return;
-                }
+                notifyState(DlpProjectorState::Fault);
+                notifyError(error);
+                fppStop_ = true;
+                return;
             }
 
             if (cycle == 1)
-                notifyLog(std::string("DLP: FPP scanning: ") + step.label);
+                notifyLog(std::string("DLP: FPP scanning: ") + kFppScanningSteps[i].label);
 
             std::unique_lock<std::mutex> lock(commandMutex_);
             commandCv_.wait_for(lock, std::chrono::milliseconds(kFppScanningDwellMs), [this]() {
@@ -301,6 +415,12 @@ void DlpProjectorWorker::setLogCallback(LogCallback callback)
 {
     std::lock_guard<std::mutex> lock(callbackMutex_);
     logCallback_ = std::move(callback);
+}
+
+void DlpProjectorWorker::setHdmiShowCallback(HdmiShowCallback callback)
+{
+    std::lock_guard<std::mutex> lock(callbackMutex_);
+    hdmiShowCallback_ = std::move(callback);
 }
 
 void DlpProjectorWorker::controlLoop()

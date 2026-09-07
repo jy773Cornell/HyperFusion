@@ -7,6 +7,7 @@
 #include <QObject>
 #include <QTimer>
 
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -32,6 +33,13 @@ public:
 
     /// Thread-safe copy of the latest streamed RGB frame (for Capture Multiview stills).
     [[nodiscard]] bool tryCopyLastFrame(BfsRgbFrame &out) const;
+    /// Latest grab counter (0 if none). Safe from the scan worker thread.
+    [[nodiscard]] std::uint64_t lastFrameIndex() const;
+    /// Block until lastFrame_.frameIndex >= afterIndex + minNewFrames. Safe from a worker thread.
+    [[nodiscard]] bool waitForNewerFrame(std::uint64_t afterIndex,
+                                         int minNewFrames,
+                                         int timeoutMs,
+                                         BfsRgbFrame *out = nullptr) const;
 
 private:
     void onRefreshClicked();

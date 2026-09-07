@@ -39,7 +39,7 @@ Why WSL:
 Main code locations:
 
 ```text
-resources/gsam2/
+app/sidecars/gsam2/
   gsam2_segmenter.py      # GroundingDINO + SAM2 wrapper
   gsam2_server.py         # HTTP sidecar server
   README.md               # WSL setup instructions
@@ -278,7 +278,7 @@ The sidecar server exposes three endpoints:
 The Windows app launches the server in WSL using `Gsam2ServerManager`:
 
 ```text
-cd /mnt/d/.../resources/gsam2
+cd /mnt/d/.../app/sidecars/gsam2
 ./venv/bin/python gsam2_server.py --host 0.0.0.0 --port 8765 --warmup
 ```
 
@@ -514,7 +514,7 @@ Fusion does **not** rerun GSAM. It consumes the masks already written during pre
 
 See also:
 
-- `resources/hf_fusion/hyperspectral-fusion.md`
+- `app/sidecars/hf_fusion/hyperspectral-fusion.md`
 
 ## Performance Notes
 

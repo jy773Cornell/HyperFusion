@@ -12,6 +12,14 @@
 __declspec(dllimport) void __stdcall Sleep(unsigned long dwMilliseconds);
 #endif
 
+#ifndef DLP3010_WIDTH
+#define DLP3010_WIDTH 1280
+#define DLP3010_HEIGHT 720
+#endif
+
+static int writeGeometry(uint16_t startPixel);
+static void cmdSplash(int index);
+
 static uint8_t s_writeBuffer[1024 + 8];
 static uint8_t s_readBuffer[256 + 8];
 static int s_busHeld = 0;
@@ -213,6 +221,70 @@ static void cmdBlank(void)
     replyOk();
 }
 
+static void cmdVideo(void)
+{
+    /* HDMI / external video port — unused by the hybrid FPP burst. */
+    if (!writeGeometry(0))
+        return;
+    if (!check(DLPC34XX_WriteOperatingModeSelect(DLPC34XX_OM_EXTERNAL_VIDEO_PORT),
+               "WriteOperatingModeSelect"))
+        return;
+    if (!check(DLPC34XX_WriteDisplayImageCurtain(DLPC34XX_ICE_DISABLE, DLPC34XX_C_BLACK),
+               "WriteDisplayImageCurtain"))
+        return;
+    if (!check(DLPC34XX_WriteRgbLedEnable(1, 1, 1), "WriteRgbLedEnable"))
+        return;
+    replyOk();
+}
+
+static void cmdSplash(int index)
+{
+    /* Display-splash (DLPU075 Table 3-32). Not Splash Pattern — that needs
+     * Trigger/Pattern Config or the DMD stays black. */
+    DLPC34XX_SplashScreenHeader_s header;
+    uint16_t inW = DLP3010_WIDTH;
+    uint16_t inH = DLP3010_HEIGHT;
+
+    if (index < 0 || index > 3)
+    {
+        replyErr("SPLASH index must be 0-3");
+        return;
+    }
+
+    memset(&header, 0, sizeof(header));
+    if (DLPC34XX_ReadSplashScreenHeader((uint8_t)index, &header) == SUCCESS
+        && header.WidthInPixels > 0 && header.HeightInPixels > 0)
+    {
+        inW = header.WidthInPixels;
+        inH = header.HeightInPixels;
+    }
+
+    (void)DLPC34XX_WriteImageFreeze(1);
+    if (!check(DLPC34XX_WriteSplashScreenSelect((uint8_t)index), "WriteSplashScreenSelect"))
+        return;
+    if (!check(DLPC34XX_WriteInputImageSize(inW, inH), "WriteInputImageSize"))
+        return;
+    if (!check(DLPC34XX_WriteImageCrop(0, 0, inW, inH), "WriteImageCrop"))
+        return;
+    /* Scale splash to full DMD. Factory slots 2–3 are 854×480; we flash 640×360. */
+    if (!check(DLPC34XX_WriteDisplaySize(0, 0, DLP3010_WIDTH, DLP3010_HEIGHT),
+               "WriteDisplaySize"))
+        return;
+    if (!check(DLPC34XX_WriteOperatingModeSelect(DLPC34XX_OM_SPLASH_SCREEN),
+               "WriteOperatingModeSelect"))
+        return;
+    if (!check(DLPC34XX_WriteSplashScreenExecute(), "WriteSplashScreenExecute"))
+        return;
+    if (!check(DLPC34XX_WriteDisplayImageCurtain(DLPC34XX_ICE_DISABLE, DLPC34XX_C_BLACK),
+               "WriteDisplayImageCurtain"))
+        return;
+    if (!check(DLPC34XX_WriteRgbLedEnable(1, 1, 1), "WriteRgbLedEnable"))
+        return;
+    Sleep(800);
+    fprintf(stdout, "OK splash=%d %ux%u\n", index, (unsigned)inW, (unsigned)inH);
+    fflush(stdout);
+}
+
 static int writeGeometry(uint16_t startPixel)
 {
     const uint16_t width = DLP3010_WIDTH;
@@ -231,7 +303,9 @@ static int writeGeometry(uint16_t startPixel)
 static int writeFppVerticalLines(unsigned width, int phaseDeg)
 {
     DLPC34XX_VerticalLines_s lines;
-    uint16_t offset = 0;
+    unsigned fg;
+    unsigned bg;
+    unsigned quarter;
     int inverted = 0;
 
     memset(&lines, 0, sizeof(lines));
@@ -240,12 +314,35 @@ static int writeFppVerticalLines(unsigned width, int phaseDeg)
     if (width > 255)
         width = 255;
 
-    if (phaseDeg == 90 || phaseDeg == 270)
-        offset = (uint16_t)(width / 2);
+    /* TPG VerticalLines always starts at x=0. Image crop does not pan the bars,
+     * so 0° and 90° were identical. Encode phase with duty + color swap:
+     *   0°   W width / B width
+     *   90°  W width/2 / B (width + width/2)   same period, edges moved
+     *   180° B width / W width
+     *   270° B width/2 / W (width + width/2) */
     if (phaseDeg == 180 || phaseDeg == 270)
         inverted = 1;
+    quarter = width / 2;
+    if ((phaseDeg == 90 || phaseDeg == 270) && quarter >= 1)
+    {
+        fg = quarter;
+        bg = width + quarter;
+    }
+    else
+    {
+        fg = width;
+        bg = width;
+    }
+    if (fg < 1)
+        fg = 1;
+    if (bg < 1)
+        bg = 1;
+    if (fg > 255)
+        fg = 255;
+    if (bg > 255)
+        bg = 255;
 
-    if (!writeGeometry(offset))
+    if (!writeGeometry(0))
         return 0;
 
     lines.Border = DLPC34XX_BE_DISABLE;
@@ -259,8 +356,8 @@ static int writeFppVerticalLines(unsigned width, int phaseDeg)
         lines.BackgroundColor = DLPC34XX_C_BLACK;
         lines.ForegroundColor = DLPC34XX_C_WHITE;
     }
-    lines.ForegroundLineWidth = (uint8_t)width;
-    lines.BackgroundLineWidth = (uint8_t)width;
+    lines.ForegroundLineWidth = (uint8_t)fg;
+    lines.BackgroundLineWidth = (uint8_t)bg;
     return check(DLPC34XX_WriteVerticalLines(&lines), "WriteVerticalLines");
 }
 
@@ -317,6 +414,17 @@ static int writePattern(const char *name)
 
 static void cmdPattern(const char *name)
 {
+    if (_strnicmp(name, "Splash ", 7) == 0)
+    {
+        int index = 0;
+        if (sscanf(name + 7, "%d", &index) != 1)
+        {
+            replyErr("Splash needs index 0-3");
+            return;
+        }
+        cmdSplash(index);
+        return;
+    }
     if (!writeGeometry(0))
         return;
     if (!writePattern(name))
@@ -404,6 +512,18 @@ int main(void)
         else if (_stricmp(cmd, "BLANK") == 0)
         {
             cmdBlank();
+        }
+        else if (_stricmp(cmd, "VIDEO") == 0)
+        {
+            cmdVideo();
+        }
+        else if (_strnicmp(cmd, "SPLASH ", 7) == 0)
+        {
+            int index = 0;
+            if (sscanf(cmd + 7, "%d", &index) != 1)
+                replyErr("SPLASH needs index 0-3");
+            else
+                cmdSplash(index);
         }
         else if (_stricmp(cmd, "DISCONNECT") == 0)
         {

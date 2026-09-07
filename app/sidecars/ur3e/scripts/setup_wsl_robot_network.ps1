@@ -2,7 +2,7 @@
 # The ROS driver runs in WSL; the robot must reach the PC reverse ports on the LAN NIC.
 # Idempotent - safe to re-run. Does not run wsl --shutdown unless -ShutdownWsl is passed.
 # Usage (from repo):
-#   .\resources\ur3e\scripts\setup_wsl_robot_network.ps1
+#   .\app\sidecars\ur3e\scripts\setup_wsl_robot_network.ps1
 # Firewall rules require an elevated (Administrator) PowerShell.
 param(
     [switch]$SkipFirewall,

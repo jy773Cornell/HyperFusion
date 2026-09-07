@@ -30,35 +30,11 @@ Ur3eServerManager::Ur3eServerManager(QObject *parent)
     : QObject(parent)
 {
     connect(&process_, &QProcess::readyReadStandardError, this, [this]() {
-        if (silentMode_ && state_ == State::Starting)
-            return;
-
-        const QByteArray chunk = process_.readAllStandardError();
-        if (chunk.trimmed().isEmpty())
-            return;
-
-        const QString text = sanitizeWslProcessOutput(chunk);
-        if (text.isEmpty() || text.contains(QStringLiteral("GET /health")))
-            return;
-
-        lastDetail_ = text;
-        emit stateChanged(state_, lastDetail_);
+        ingestProcessOutput(process_.readAllStandardError(), true);
     });
 
     connect(&process_, &QProcess::readyReadStandardOutput, this, [this]() {
-        if (silentMode_ && state_ == State::Starting)
-            return;
-
-        const QByteArray chunk = process_.readAllStandardOutput();
-        if (chunk.trimmed().isEmpty())
-            return;
-
-        const QString text = sanitizeWslProcessOutput(chunk);
-        if (text.contains(QStringLiteral("GET /health")))
-            return;
-
-        lastDetail_ = text;
-        emit stateChanged(state_, lastDetail_);
+        ingestProcessOutput(process_.readAllStandardOutput(), true);
     });
 
     connect(
@@ -68,17 +44,20 @@ Ur3eServerManager::Ur3eServerManager(QObject *parent)
         [this](const int exitCode, const QProcess::ExitStatus status) {
             if (state_ == State::Starting || state_ == State::Running)
             {
+                ingestProcessOutput(process_.readAllStandardError(), false);
+                ingestProcessOutput(process_.readAllStandardOutput(), false);
+                const QString detail = launchFailureDetail(
+                    QStringLiteral("UR3e server exited (code=%1, status=%2)")
+                        .arg(exitCode)
+                        .arg(status == QProcess::NormalExit ? QStringLiteral("normal")
+                                                            : QStringLiteral("crash")));
                 if (silentMode_)
                 {
+                    lastDetail_ = detail;
                     markUnavailable();
                     return;
                 }
 
-                const QString detail =
-                    QStringLiteral("UR3e server exited (code=%1, status=%2)")
-                        .arg(exitCode)
-                        .arg(status == QProcess::NormalExit ? QStringLiteral("normal")
-                                                            : QStringLiteral("crash"));
                 setState(State::Failed, detail);
             }
             else
@@ -99,11 +78,15 @@ Ur3eServerManager::Ur3eServerManager(QObject *parent)
         if (state_ != State::Starting)
             return;
 
+        const QString detail =
+            QStringLiteral("Failed to start wsl.exe: %1").arg(process_.errorString());
         if (silentMode_)
+        {
+            lastDetail_ = detail;
             markUnavailable();
+        }
         else
-            setState(State::Failed,
-                     QStringLiteral("Failed to start wsl.exe: %1").arg(process_.errorString()));
+            setState(State::Failed, detail);
     });
 
     connect(
@@ -161,9 +144,42 @@ void Ur3eServerManager::markUnavailable()
 {
     silentMode_ = false;
     if (lastDetail_.isEmpty())
-        lastDetail_ = QStringLiteral("Sidecar unavailable (check WSL, resources/ur3e, Log tab)");
+        lastDetail_ = QStringLiteral("Sidecar unavailable (check WSL, app/sidecars/ur3e, Log tab)");
     state_ = State::Unavailable;
     emit stateChanged(state_, lastDetail_);
+}
+
+void Ur3eServerManager::ingestProcessOutput(const QByteArray &chunk, const bool emitToUi)
+{
+    if (chunk.trimmed().isEmpty())
+        return;
+
+    const QString text = sanitizeWslProcessOutput(chunk);
+    if (text.isEmpty() || text.contains(QStringLiteral("GET /health")))
+        return;
+
+    if (!lastLaunchOutput_.isEmpty())
+        lastLaunchOutput_ += QLatin1Char('\n');
+    lastLaunchOutput_ += text;
+    if (lastLaunchOutput_.size() > 4000)
+        lastLaunchOutput_ = lastLaunchOutput_.right(4000);
+
+    if (!emitToUi)
+        return;
+
+    lastDetail_ = text;
+    emit stateChanged(state_, lastDetail_);
+}
+
+QString Ur3eServerManager::launchFailureDetail(const QString &prefix) const
+{
+    const QString extra = lastLaunchOutput_.trimmed();
+    if (extra.isEmpty())
+        return prefix;
+    QString tail = extra;
+    if (tail.size() > 800)
+        tail = tail.right(800);
+    return prefix + QStringLiteral("\n") + tail;
 }
 
 QString Ur3eServerManager::buildLaunchCommand() const
@@ -172,7 +188,7 @@ QString Ur3eServerManager::buildLaunchCommand() const
     const QString repoLinux = resolveUr3eRepoLinuxPath();
 
     QString serverArgs =
-        QStringLiteral("./venv/bin/ur3e_server --host 0.0.0.0 --port %1")
+        QStringLiteral("./venv/bin/python -m hyperfusion_ur3e.sidecar.server --host 0.0.0.0 --port %1")
             .arg(cfg.serverPort);
     serverArgs += QStringLiteral(" --robot-ip %1").arg(cfg.robotIp);
     if (!cfg.reverseIp.trimmed().isEmpty())
@@ -193,12 +209,13 @@ QString Ur3eServerManager::buildLaunchCommand() const
         serverArgs += QStringLiteral(" --tool-payload-shape %1").arg(shape);
         serverArgs += QStringLiteral(" --tool-payload-mesh-file %1").arg(mesh);
     }
-    serverArgs += QStringLiteral(" --tool-tcp-x-mm %1").arg(cfg.toolTcpXMm, 0, 'f', 3);
-    serverArgs += QStringLiteral(" --tool-tcp-y-mm %1").arg(cfg.toolTcpYMm, 0, 'f', 3);
-    serverArgs += QStringLiteral(" --tool-tcp-z-mm %1").arg(cfg.toolTcpZMm, 0, 'f', 3);
-    serverArgs += QStringLiteral(" --tool-tcp-roll-deg %1").arg(cfg.toolTcpRollDeg, 0, 'f', 4);
-    serverArgs += QStringLiteral(" --tool-tcp-pitch-deg %1").arg(cfg.toolTcpPitchDeg, 0, 'f', 4);
-    serverArgs += QStringLiteral(" --tool-tcp-yaw-deg %1").arg(cfg.toolTcpYawDeg, 0, 'f', 4);
+    const auto tcp = cfg.cameraToolTcpMm();
+    serverArgs += QStringLiteral(" --tool-tcp-x-mm %1").arg(tcp.xMm, 0, 'f', 3);
+    serverArgs += QStringLiteral(" --tool-tcp-y-mm %1").arg(tcp.yMm, 0, 'f', 3);
+    serverArgs += QStringLiteral(" --tool-tcp-z-mm %1").arg(tcp.zMm, 0, 'f', 3);
+    serverArgs += QStringLiteral(" --tool-tcp-roll-deg %1").arg(tcp.rollDeg, 0, 'f', 4);
+    serverArgs += QStringLiteral(" --tool-tcp-pitch-deg %1").arg(tcp.pitchDeg, 0, 'f', 4);
+    serverArgs += QStringLiteral(" --tool-tcp-yaw-deg %1").arg(tcp.yawDeg, 0, 'f', 4);
     if (cfg.useMockHardware)
         serverArgs += QStringLiteral(" --use-mock-hardware");
     else
@@ -318,7 +335,7 @@ void Ur3eServerManager::launchServerProcess()
     const QString repoLinux = resolveUr3eRepoLinuxPath();
     if (repoLinux.isEmpty())
     {
-        const QString detail = QStringLiteral("Could not locate resources/ur3e for WSL.");
+        const QString detail = QStringLiteral("Could not locate app/sidecars/ur3e for WSL.");
         if (silentMode_)
         {
             lastDetail_ = detail;
@@ -353,6 +370,7 @@ void Ur3eServerManager::tryAutoStart()
     cleanupBeforeLaunch_ = true;
     ++startupGeneration_;
     healthPollInFlight_.store(false, std::memory_order_release);
+    lastLaunchOutput_.clear();
 
     setState(State::Starting, QStringLiteral("Cleaning stale WSL processes\u2026"));
     beginAsyncCleanup();
@@ -370,6 +388,7 @@ void Ur3eServerManager::startServer()
     cleanupBeforeLaunch_ = true;
     ++startupGeneration_;
     healthPollInFlight_.store(false, std::memory_order_release);
+    lastLaunchOutput_.clear();
 
     setState(State::Starting, QStringLiteral("Cleaning stale WSL processes\u2026"));
     beginAsyncCleanup();
@@ -390,24 +409,30 @@ void Ur3eServerManager::handleHealthPollResult(const bool /*ok*/, const QString 
     ++healthPollAttempts_;
     if (healthPollAttempts_ >= 120)
     {
+        const QString detail = launchFailureDetail(
+            error.isEmpty() ? QStringLiteral("UR3e server did not become ready.") : error);
         if (silentMode_)
+        {
+            lastDetail_ = detail;
             markUnavailable();
+        }
         else
-            setState(State::Failed,
-                     error.isEmpty() ? QStringLiteral("UR3e server did not become ready.") : error);
+            setState(State::Failed, detail);
         return;
     }
 
     if (process_.state() == QProcess::NotRunning)
     {
+        const QString detail = launchFailureDetail(
+            lastDetail_.isEmpty() ? QStringLiteral("UR3e server process exited during startup.")
+                                  : lastDetail_);
         if (silentMode_)
-            markUnavailable();
-        else
         {
-            setState(State::Failed,
-                     lastDetail_.isEmpty() ? QStringLiteral("UR3e server process exited during startup.")
-                                           : lastDetail_);
+            lastDetail_ = detail;
+            markUnavailable();
         }
+        else
+            setState(State::Failed, detail);
         return;
     }
 

@@ -9,6 +9,7 @@
 #include <QElapsedTimer>
 #include <QObject>
 #include <QString>
+#include <QtGlobal>
 
 #include <array>
 #include <cstddef>
@@ -73,7 +74,7 @@ public:
         SampleScan,
         /// Single stage pass: white ref then sample windows per camera (dual or single).
         CombinedRecordScan,
-        /// Absolute move to sample_multiview_position_mm before hemisphere BFS capture.
+        /// Absolute move to apex or MVS stage pose before hemisphere BFS capture.
         MoveToMultiviewPosition,
     };
 
@@ -319,6 +320,11 @@ private:
     bool captureMultiviewInProgress_ = false;
     /// After HSI: stage moves to Multiview pose first; confirm dialog runs when that move completes.
     bool captureMultiviewAwaitingOperatorConfirm_ = false;
+    /// Two-stage MVS: apex stills done; next MoveToMultiviewPosition is the ring stop.
+    bool captureMultiviewNeedRingsLeg_ = false;
+    int captureMultiviewFramesSoFar_ = 0;
+    int captureMultiviewPinsSoFar_ = 0;
+    qint64 captureMultiviewElapsedMsSoFar_ = 0;
     /// Filled after Capture-driven Multiview; merged into Recording complete (empty if Multiview skipped).
     QString lastCaptureMultiviewSummaryText_;
     /// True after HSI dump ended and post-process was queued for this session (may run during Multiview).

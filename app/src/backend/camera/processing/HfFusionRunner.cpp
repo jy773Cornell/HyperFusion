@@ -79,30 +79,33 @@ QString findHyperFusionCfgPath()
 
 QString resolveRepoHfFusionDirectory()
 {
+    if (QCoreApplication::instance() != nullptr)
+    {
+        // Prefer sidecars next to the installed app.exe, then walk up for dev builds.
+        QDir dir(QCoreApplication::applicationDirPath());
+        for (int depth = 0; depth < 8; ++depth)
+        {
+            const QString sidecars = dir.filePath(QStringLiteral("sidecars/hf_fusion"));
+            if (QFileInfo::exists(QDir(sidecars).filePath(QStringLiteral("fusion_cli.py"))))
+                return QFileInfo(sidecars).absoluteFilePath();
+            const QString legacy = dir.filePath(QStringLiteral("resources/hf_fusion"));
+            if (QFileInfo::exists(QDir(legacy).filePath(QStringLiteral("fusion_cli.py"))))
+                return QFileInfo(legacy).absoluteFilePath();
+
+            if (!dir.cdUp())
+                break;
+        }
+    }
+
 #ifdef HF_APP_SOURCE_DIR
     {
         const QString fromSource =
             QDir(QString::fromUtf8(HF_APP_SOURCE_DIR))
-                .filePath(QStringLiteral("../resources/hf_fusion"));
+                .filePath(QStringLiteral("sidecars/hf_fusion"));
         if (QFileInfo::exists(QDir(fromSource).filePath(QStringLiteral("fusion_cli.py"))))
             return QFileInfo(fromSource).absoluteFilePath();
     }
 #endif
-
-    if (QCoreApplication::instance() == nullptr)
-        return {};
-
-    // Walk up from app.exe (e.g. app/build/Release → repo root).
-    QDir dir(QCoreApplication::applicationDirPath());
-    for (int depth = 0; depth < 8; ++depth)
-    {
-        const QString resources = dir.filePath(QStringLiteral("resources/hf_fusion"));
-        if (QFileInfo::exists(QDir(resources).filePath(QStringLiteral("fusion_cli.py"))))
-            return QFileInfo(resources).absoluteFilePath();
-
-        if (!dir.cdUp())
-            break;
-    }
 
     return {};
 }
@@ -140,7 +143,7 @@ bool parseFusionCliJson(const QByteArray &stdoutPayload, HfFusionRunResult *resu
 
 QString resolveHfFusionDirectory()
 {
-    // Always use repo resources/hf_fusion (code + .venv live there).
+    // Always use repo app/sidecars/hf_fusion (code + .venv live there).
     return resolveRepoHfFusionDirectory();
 }
 
@@ -625,7 +628,7 @@ HfFusionRunResult runHfFusion(const HfFusionRunRequest &request)
         result.errorMessage =
             QStringLiteral("hf_fusion Python venv not found at %1/.venv. "
                            "Run: cd resources\\hf_fusion ; .\\setup_venv.ps1")
-                .arg(fusionDir.isEmpty() ? QStringLiteral("resources/hf_fusion") : fusionDir);
+                .arg(fusionDir.isEmpty() ? QStringLiteral("app/sidecars/hf_fusion") : fusionDir);
         result.logLines.push_back(QStringLiteral("Capture fusion: %1").arg(result.errorMessage));
         return result;
     }

@@ -24,6 +24,9 @@ struct SemiFixedScanExecuteInput
     int stabilizeMs = 500;
     int sessionId = 0;
     Ur3eWristSweepParams wristSweep{};
+    /// All = top then rings (default). ApexOnly = top only. RingsOnly = skip top.
+    bool skipTop = false;
+    bool skipRings = false;
 };
 
 struct SemiFixedScanExecuteHost
@@ -45,6 +48,9 @@ struct SemiFixedScanExecuteHost
     /// Capture one still. ringIndex=-1 = top/apex pose; sampleIndex=0 there.
     std::function<bool(const Ur3eScanTcpPose &plannedTcp, int ringIndex, int sampleIndex)>
         captureStill;
+    /// Optional full-scan stage move (apex then MVS). Empty = ignore stage.
+    /// Return false on failed/aborted move. Do not install when the stage is disconnected.
+    std::function<bool(double targetMm, const QString &label, QString *errorOut)> moveStage;
     std::function<void(bool ok,
                        const QString &error,
                        int executedSamples,

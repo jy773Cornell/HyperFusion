@@ -47,7 +47,7 @@ Ur3eScanTcpPose tcpPoseForHemispherePoint(const Ur3eHemisphereScanPoint &gridPoi
         Ur3eMountTransform::sceneAlignFromConfig(hf::hardwareConfig().ur3e);
     mount.transformPoint(tcp.xM, tcp.yM, tcp.zM);
 
-    // Apex look-at: under home TCP XY (perpendicular). Rings: under base XY (0,0).
+    // Apex look-at: under home camera-TCP XY (perpendicular). Rings: under base XY (0,0).
     const bool isApexPin = std::abs(gridPoint.thetaDeg) <= 1.0e-9;
     double centerXM = 0.0;
     double centerYM = 0.0;

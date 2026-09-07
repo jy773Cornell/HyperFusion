@@ -78,17 +78,22 @@ CMakeLists.txt.user*
 **/.cache/huggingface/
 **/.cache/torch/
 
-# SAM2 / GSAM2 model weights (large; see resources/gsam2/envsetup.md)
-resources/gsam2/checkpoints/*.pt
-resources/gsam2/checkpoints/*.pth
-resources/gsam2/checkpoints/*.ckpt
-resources/gsam2/.cache/
-resources/gsam2/venv/
+# SAM2 / GSAM2 model weights (large; see app/sidecars/gsam2/envsetup.md)
+app/sidecars/gsam2/checkpoints/*.pt
+app/sidecars/gsam2/checkpoints/*.pth
+app/sidecars/gsam2/checkpoints/*.ckpt
+app/sidecars/gsam2/.cache/
+app/sidecars/gsam2/venv/
 resources/sam2/
 
 # --- HyperFusion local runtime / capture data ---
 /processing/
 app/calibration/multiview/results/undistort_preview/
+# FPP plane-calib stills + per-pose npz (multi-GB / ~340 MB). Keep README + index.
+app/calibration/multiview/FPP/*
+!app/calibration/multiview/FPP/README.md
+!app/calibration/multiview/FPP/fpp_calib_index.json
+!app/calibration/multiview/FPP/fpp_calib_quality.json
 
 # Logs / temp
 *.log
@@ -99,3 +104,8 @@ app/calibration/multiview/results/undistort_preview/
 
 # Documentation (local / generated; not versioned here)
 docs/
+
+# Installer staging and bundled vendor SDK binaries (do not commit)
+dist/
+tools/vendor_installers/**
+!tools/vendor_installers/install_order.txt

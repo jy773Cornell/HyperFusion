@@ -104,7 +104,7 @@ bool runElevatedWslNetworkSetup(QString *detail)
     if (scriptPath.isEmpty())
     {
         if (detail != nullptr)
-            *detail = QStringLiteral("UR3e network setup script not found (resources/ur3e/scripts).");
+            *detail = QStringLiteral("UR3e network setup script not found (app/sidecars/ur3e/scripts).");
         return false;
     }
 
@@ -156,7 +156,7 @@ bool runStaleUr3eProcessCleanup(QString *detail)
     if (repoLinux.isEmpty())
     {
         if (detail != nullptr)
-            *detail = QStringLiteral("Could not locate resources/ur3e for stale-process cleanup.");
+            *detail = QStringLiteral("Could not locate app/sidecars/ur3e for stale-process cleanup.");
         return false;
     }
 

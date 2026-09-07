@@ -385,6 +385,25 @@ bool Dlpc3478Projector::showTestPattern(const QString &patternName, DlpError &er
 #endif
 }
 
+bool Dlpc3478Projector::showExternalVideo(DlpError &error)
+{
+    error = {};
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!requireConnected(error))
+        return false;
+
+#if defined(HF_HAVE_DLPC_API)
+    if (!commandOkLocked(QStringLiteral("VIDEO"), error, kBridgeTimeoutMs))
+        return false;
+    ledsEnabled_ = true;
+    state_ = DlpProjectorState::Projecting;
+    return true;
+#else
+    state_ = DlpProjectorState::Projecting;
+    return true;
+#endif
+}
+
 bool Dlpc3478Projector::applyLedCurrents(const DlpProjectorSettings &settings, DlpError &error)
 {
     error = {};

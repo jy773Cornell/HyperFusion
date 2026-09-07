@@ -1,5 +1,5 @@
 #Requires -Version 5.1
-# Create or refresh the hf_fusion Python venv in this directory (resources/hf_fusion/.venv).
+# Create or refresh the hf_fusion Python venv in this directory (app/sidecars/hf_fusion/.venv).
 param(
     [switch]$Force
 )

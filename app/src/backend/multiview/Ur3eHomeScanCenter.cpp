@@ -1,5 +1,5 @@
-﻿// Tray scan centers: base XY for ring dome; home optical-TCP XY for apex (backend).
-// FK matches HyperFusion URDF chain (ceiling mount + UR3e + hyperfusion_tcp).
+﻿// Tray scan centers: base XY for ring dome; home camera-TCP XY for apex (backend).
+// FK matches HyperFusion URDF chain (ceiling mount + UR3e + camera tool_tcp_*).
 #include "backend/multiview/Ur3eHemisphereScan.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
@@ -126,14 +126,15 @@ Mat4 ur3eOpticalTcpWorldFromJoints(const std::array<double, 6> &qRad,
     // wrist_3 → flange → tool0 (ROS-Industrial)
     t = t * Mat4::fromRpyXyz(0.0, -kPi * 0.5, -kPi * 0.5, 0.0, 0.0, 0.0);
     t = t * Mat4::fromRpyXyz(kPi * 0.5, 0.0, kPi * 0.5, 0.0, 0.0, 0.0);
-    // tool0 → hyperfusion_tcp (URDF rpy: Rz(yaw) * Ry(pitch) * Rx(roll))
+    // tool0 → camera lens (tool_tcp_*)
+    const auto tcp = cfg.cameraToolTcpMm();
     t = t
-        * Mat4::fromRpyXyz(cfg.toolTcpRollDeg * kPi / 180.0,
-                           cfg.toolTcpPitchDeg * kPi / 180.0,
-                           cfg.toolTcpYawDeg * kPi / 180.0,
-                           cfg.toolTcpXMm * 0.001,
-                           cfg.toolTcpYMm * 0.001,
-                           cfg.toolTcpZMm * 0.001);
+        * Mat4::fromRpyXyz(tcp.rollDeg * kPi / 180.0,
+                           tcp.pitchDeg * kPi / 180.0,
+                           tcp.yawDeg * kPi / 180.0,
+                           tcp.xMm * 0.001,
+                           tcp.yMm * 0.001,
+                           tcp.zMm * 0.001);
     return t;
 }
 
@@ -190,7 +191,7 @@ void scanCenterOffsetM(double &xM, double &yM)
 
 void homeTcpScanCenterOffsetM(double &xM, double &yM)
 {
-    // Apex only: optical TCP XY at home_joints_deg (reachable look-down locus).
+    // Apex only: camera TCP XY at home_joints_deg (reachable look-down locus).
     homeOpticalTcpTrayXyM(xM, yM);
 }
 

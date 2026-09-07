@@ -15,11 +15,11 @@ QString resolveUr3eResourcesWindowsPath()
     QDir dir(QCoreApplication::applicationDirPath());
     for (int depth = 0; depth < 8; ++depth)
     {
-        const QString candidate = dir.filePath(QStringLiteral("resources/ur3e"));
+        const QString candidate = dir.filePath(QStringLiteral("sidecars/ur3e"));
         if (QFileInfo::exists(candidate))
             return QFileInfo(candidate).absoluteFilePath();
 
-        const QString alt = dir.filePath(QStringLiteral("../resources/ur3e"));
+        const QString alt = dir.filePath(QStringLiteral("resources/ur3e"));
         if (QFileInfo::exists(alt))
             return QFileInfo(alt).absoluteFilePath();
 
@@ -67,6 +67,7 @@ QString buildToolPayloadEnvExports(const hf::HardwareConfig::Ur3eConfig &cfg)
     const QString mesh =
         cfg.toolPayloadMesh.trimmed().isEmpty() ? QStringLiteral("ur_tool_payload.stl")
                                                 : cfg.toolPayloadMesh.trimmed();
+    const auto tcp = cfg.cameraToolTcpMm();
     return QStringLiteral("export HYPERFUSION_TOOL_PAYLOAD_ENABLED='true' && "
                           "export HYPERFUSION_TOOL_PAYLOAD_SHAPE='%1' && "
                           "export HYPERFUSION_TOOL_PAYLOAD_MESH_FILE='%2' && "
@@ -80,12 +81,12 @@ QString buildToolPayloadEnvExports(const hf::HardwareConfig::Ur3eConfig &cfg)
         .arg(shape,
              mesh,
              QString::number(cfg.toolPayloadRadiusMm / 1000.0, 'f', 6),
-             QString::number(cfg.toolTcpXMm / 1000.0, 'f', 6),
-             QString::number(cfg.toolTcpYMm / 1000.0, 'f', 6),
-             QString::number(cfg.toolTcpZMm / 1000.0, 'f', 6),
-             QString::number(cfg.toolTcpRollDeg, 'f', 6),
-             QString::number(cfg.toolTcpPitchDeg, 'f', 6),
-             QString::number(cfg.toolTcpYawDeg, 'f', 6));
+             QString::number(tcp.xMm / 1000.0, 'f', 6),
+             QString::number(tcp.yMm / 1000.0, 'f', 6),
+             QString::number(tcp.zMm / 1000.0, 'f', 6),
+             QString::number(tcp.rollDeg, 'f', 6),
+             QString::number(tcp.pitchDeg, 'f', 6),
+             QString::number(tcp.yawDeg, 'f', 6));
 }
 
 } // namespace hf::ur3e

@@ -15,15 +15,15 @@ elif [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != "-" && -f "${BASH_SOU
 else
   # Piped via `sed … | bash -s` — BASH_SOURCE is not the script path.
   SCRIPT_DIR=""
-  for candidate in /mnt/*/Pototypy/HyperFusion/resources/ur3e/scripts \
-                   /mnt/*/HyperFusion/resources/ur3e/scripts; do
+  for candidate in /mnt/*/Pototypy/HyperFusion/app/sidecars/ur3e/scripts \
+                   /mnt/*/HyperFusion/app/sidecars/ur3e/scripts; do
     if [[ -f "${candidate}/wait_for_joint_states.sh" ]]; then
       SCRIPT_DIR="${candidate}"
       break
     fi
   done
   if [[ -z "${SCRIPT_DIR}" ]]; then
-    echo "UR3e RViz: ERROR — cannot locate resources/ur3e/scripts (set HYPERFUSION_UR3E_REPO)." >&2
+    echo "UR3e RViz: ERROR — cannot locate app/sidecars/ur3e/scripts (set HYPERFUSION_UR3E_REPO)." >&2
     exit 1
   fi
 fi

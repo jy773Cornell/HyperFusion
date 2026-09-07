@@ -11,15 +11,15 @@ elif [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != "-" && -f "${BASH_SOU
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 else
   SCRIPT_DIR=""
-  for candidate in /mnt/*/Pototypy/HyperFusion/resources/ur3e/scripts \
-                   /mnt/*/HyperFusion/resources/ur3e/scripts; do
+  for candidate in /mnt/*/Pototypy/HyperFusion/app/sidecars/ur3e/scripts \
+                   /mnt/*/HyperFusion/app/sidecars/ur3e/scripts; do
     if [[ -f "${candidate}/wait_for_joint_states.sh" ]]; then
       SCRIPT_DIR="${candidate}"
       break
     fi
   done
   if [[ -z "${SCRIPT_DIR}" ]]; then
-    echo "UR3e MoveIt headless: ERROR — cannot locate resources/ur3e/scripts." >&2
+    echo "UR3e MoveIt headless: ERROR — cannot locate app/sidecars/ur3e/scripts." >&2
     exit 1
   fi
 fi

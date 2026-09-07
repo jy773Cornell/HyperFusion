@@ -157,6 +157,32 @@ bool resolveSampleStagePositions(const SampleStagePositionDraft &draft,
                  config.sampleMultiviewPositionMm,
                  QStringLiteral("sample_multiview_position_mm"))
          && ok;
+    if (!resolved.contains(QStringLiteral("sample_multiview_apex_position_mm")))
+        config.sampleMultiviewApexPositionMm = config.sampleMultiviewPositionMm;
+    else
+    {
+        ok = require(QStringLiteral("sample_multiview_apex_position_mm"),
+                     config.sampleMultiviewApexPositionMm,
+                     QStringLiteral("sample_multiview_apex_position_mm"))
+             && ok;
+    }
+
+    const QString axisRaw =
+        draft.rawValues.value(QStringLiteral("sample_multiview_stage_axis")).trimmed().toLower();
+    if (axisRaw == QStringLiteral("x") || axisRaw == QStringLiteral("+x"))
+        config.sampleMultiviewStageAxis = hf::HardwareConfig::SampleMultiviewStageAxis::PosX;
+    else if (axisRaw == QStringLiteral("-x"))
+        config.sampleMultiviewStageAxis = hf::HardwareConfig::SampleMultiviewStageAxis::NegX;
+    else if (axisRaw == QStringLiteral("y") || axisRaw == QStringLiteral("+y"))
+        config.sampleMultiviewStageAxis = hf::HardwareConfig::SampleMultiviewStageAxis::PosY;
+    else if (axisRaw == QStringLiteral("-y"))
+        config.sampleMultiviewStageAxis = hf::HardwareConfig::SampleMultiviewStageAxis::NegY;
+    else if (!axisRaw.isEmpty())
+    {
+        warnings.push_back(
+            QStringLiteral("Unknown sample_multiview_stage_axis '%1' (use x, -x, y, -y)")
+                .arg(axisRaw));
+    }
 
     config.cameraPositionMm[0] = config.whiteRefMm[0];
     config.cameraPositionMm[1] = config.whiteRefMm[1];
@@ -1449,6 +1475,30 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 else
                     config.dlp.ledBlueMa = ma;
             }
+            else if (key == QStringLiteral("dlp_fpp_source"))
+            {
+                const QString src = value.trimmed().toLower();
+                if (src == QStringLiteral("usb") || src == QStringLiteral("hybrid")
+                    || src == QStringLiteral("tpg"))
+                    warnings.push_back(QStringLiteral(
+                        "dlp_fpp_source=%1 is removed; FPP is HDMI 26-frame sine (u+v).").arg(value));
+                else if (src != QStringLiteral("hdmi") && src != QStringLiteral("hdmi_psp")
+                         && src != QStringLiteral("psp") && !src.isEmpty())
+                    warnings.push_back(QStringLiteral("Unknown dlp_fpp_source (ignored): %1").arg(value));
+            }
+            else if (key == QStringLiteral("dlp_hdmi_screen_index"))
+            {
+                bool ok = false;
+                const int index = value.toInt(&ok);
+                if (!ok || index < -1)
+                    warnings.push_back(QStringLiteral("Invalid dlp_hdmi_screen_index: %1").arg(value));
+                else
+                    config.dlp.hdmiScreenIndex = index;
+            }
+            else if (key == QStringLiteral("dlp_hdmi_pattern_dir"))
+            {
+                config.dlp.hdmiPatternDir = value.trimmed();
+            }
             else
                 warnings.push_back(QStringLiteral("Unknown key in [multiview]: %1").arg(key));
         }
@@ -1544,7 +1594,12 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "sample_scanning_starting_position_fx10e_mm = 840\n"
         << "sample_scanning_starting_position_swir3_mm = sample_scanning_starting_position_fx10e_mm - distance_dual_camera_mm\n"
         << "temp_stop_position_mm = 500\n"
+        << "# Apex still (θ=0). Then stage moves to sample_multiview_position_mm for rings.\n"
+        << "sample_multiview_apex_position_mm = 1600\n"
+        << "# MVS ring-pin stop. Apex camera JSON is remapped here (sample treated as static).\n"
         << "sample_multiview_position_mm = 1600\n"
+        << "# +stage travel in base_link for apex→MVS output translation (x, -x, y, -y).\n"
+        << "sample_multiview_stage_axis = x\n"
         << "\n"
         << "[scanning_settings]\n"
         << "operation_scanning_speed_mm_per_sec = 80\n"
@@ -1589,7 +1644,7 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "swir_false_color_blue_nm_max = 1050\n"
         << "\n"
         << "[segmentation]\n"
-        << "# GSAM2 sidecar (WSL). sam2_repo_linux empty = auto from resources/gsam2.\n"
+        << "# GSAM2 sidecar (WSL). sam2_repo_linux empty = auto from app/sidecars/gsam2.\n"
         << "wsl_distro = Ubuntu\n"
         << "# Optional extra shell before server start. Leave empty — app uses ./venv/bin/python.\n"
         << "wsl_bash_command = \n"
@@ -1605,7 +1660,7 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "sam2_device = cuda\n"
         << "\n"
         << "[fusion]\n"
-        << "# Offline FX10e + SWIR3 fusion. Venv: resources/hf_fusion/.venv (run setup_venv.ps1 once there).\n"
+        << "# Offline FX10e + SWIR3 fusion. Venv: app/sidecars/hf_fusion/.venv (run setup_venv.ps1 once there).\n"
         << "fusion_margin_mm = 5.0\n"
         << "fusion_timeout_ms = 3600000\n"
         << "\n"
@@ -1613,7 +1668,7 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "# Set use_multiview = false to hide Multiview UI (UR3e + BFS) and skip WSL sidecar/driver.\n"
         << "# Legacy section [3d scanning] / [ur3e] and keys use_3d_scanning / use_ur3e still accepted.\n"
         << "use_multiview = true\n"
-        << "# UR3e WSL sidecar (ROS 2). See resources/ur3e/README.md.\n"
+        << "# UR3e WSL sidecar (ROS 2). See app/sidecars/ur3e/README.md.\n"
         << "wsl_distro = Ubuntu\n"
         << "wsl_bash_command = \n"
         << "ur3e_repo_linux = \n"
@@ -1635,7 +1690,7 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "tool_payload_shape = mesh\n"
         << "tool_payload_mesh = ur_tool_payload.stl\n"
         << "tool_payload_radius_mm = 77\n"
-        << "# Optical TCP in tool0 (mm + URDF rpy deg). Tsai hand-eye.\n"
+        << "# Optical TCP in tool0 (mm + URDF rpy deg). Tsai hand-eye (BFS camera).\n"
         << "tool_tcp_x_mm = 0.715\n"
         << "tool_tcp_y_mm = -54.197\n"
         << "tool_tcp_z_mm = 73.755\n"
@@ -1681,7 +1736,9 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "dlp_led_max_ma = 2400\n"
         << "dlp_led_red_ma = 2400\n"
         << "dlp_led_green_ma = 2400\n"
-        << "dlp_led_blue_ma = 2400\n";
+        << "dlp_led_blue_ma = 2400\n"
+        << "# FPP burst is HDMI 26-frame 1280x720 sine (u then v) on the EVM display.\n"
+        << "dlp_hdmi_screen_index = -1\n";
 
     if (!file.commit())
     {
@@ -1798,6 +1855,34 @@ double effectiveSpatialMmPerPixelForStageCamera(const HardwareConfig &config,
 {
     return effectiveSpatialMmPerPixel(spatialMmPerPixelForStageCamera(config, stageCameraIndex),
                                       spatialBinning);
+}
+
+bool HardwareConfig::sampleMultiviewTwoStage() const
+{
+    return std::abs(sampleMultiviewPositionMm - sampleMultiviewApexPositionMm) > 0.5;
+}
+
+void HardwareConfig::sampleMultiviewApexOutputShiftM(double &xM, double &yM, double &zM) const
+{
+    xM = 0.0;
+    yM = 0.0;
+    zM = 0.0;
+    const double dM = (sampleMultiviewPositionMm - sampleMultiviewApexPositionMm) * 0.001;
+    switch (sampleMultiviewStageAxis)
+    {
+    case SampleMultiviewStageAxis::PosX:
+        xM = dM;
+        break;
+    case SampleMultiviewStageAxis::NegX:
+        xM = -dM;
+        break;
+    case SampleMultiviewStageAxis::PosY:
+        yM = dM;
+        break;
+    case SampleMultiviewStageAxis::NegY:
+        yM = -dM;
+        break;
+    }
 }
 
 void setHardwareConfig(HardwareConfig config)

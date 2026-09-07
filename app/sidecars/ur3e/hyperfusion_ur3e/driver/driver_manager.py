@@ -314,7 +314,7 @@ class Ur3eRosDriverManager:
         if not STAMPER_BIN.is_file():
             raise RuntimeError(
                 f"joint_states_stamper not installed at {STAMPER_BIN}. "
-                "Run ./install_env.sh in resources/ur3e."
+                "Run ./install_env.sh in app/sidecars/ur3e."
             )
 
         stamper_cmd = (
@@ -577,7 +577,7 @@ class Ur3eRosDriverManager:
     def _format_ros_abi_error(detail: str) -> str:
         hint = (
             "ROS 2 Jazzy UR packages are ABI-mismatched. In WSL run:\n"
-            "  cd resources/ur3e && ./scripts/repair_ros_ur_packages.sh\n"
+            "  cd app/sidecars/ur3e && ./scripts/repair_ros_ur_packages.sh\n"
             "Or: sudo apt update && sudo apt install --only-upgrade "
             "ros-jazzy-ur-robot-driver ros-jazzy-ur-controllers ros-jazzy-ur-msgs "
             "ros-jazzy-controller-manager ros-jazzy-ros2-control ros-jazzy-ros2-controllers"

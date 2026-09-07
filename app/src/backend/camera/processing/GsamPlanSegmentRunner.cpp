@@ -309,7 +309,7 @@ GsamPlanSegmentRunResult runGsamPlanSegment(const GsamPlanSegmentRunRequest &req
         result.errorMessage =
             QStringLiteral("hf_fusion Python venv not found at %1/.venv. "
                            "Run: cd resources\\hf_fusion ; .\\setup_venv.ps1")
-                .arg(fusionDir.isEmpty() ? QStringLiteral("resources/hf_fusion") : fusionDir);
+                .arg(fusionDir.isEmpty() ? QStringLiteral("app/sidecars/hf_fusion") : fusionDir);
         result.logLines.push_back(QStringLiteral("GSAM plan-segment: %1").arg(result.errorMessage));
         return result;
     }

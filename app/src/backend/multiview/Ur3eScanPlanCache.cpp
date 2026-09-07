@@ -73,12 +73,13 @@ QJsonObject robotCfgFingerprintObject(const hf::HardwareConfig::Ur3eConfig &ur3e
     fp.insert(QStringLiteral("schema"), kCacheSchemaVersion);
     fp.insert(QStringLiteral("ur_type"), ur3e.urType);
     // Intentionally omit use_mock_hardware — sim plans must load on real robot (same geometry).
-    fp.insert(QStringLiteral("tool_tcp_x_mm"), ur3e.toolTcpXMm);
-    fp.insert(QStringLiteral("tool_tcp_y_mm"), ur3e.toolTcpYMm);
-    fp.insert(QStringLiteral("tool_tcp_z_mm"), ur3e.toolTcpZMm);
-    fp.insert(QStringLiteral("tool_tcp_roll_deg"), ur3e.toolTcpRollDeg);
-    fp.insert(QStringLiteral("tool_tcp_pitch_deg"), ur3e.toolTcpPitchDeg);
-    fp.insert(QStringLiteral("tool_tcp_yaw_deg"), ur3e.toolTcpYawDeg);
+    const auto tcp = ur3e.cameraToolTcpMm();
+    fp.insert(QStringLiteral("tool_tcp_x_mm"), tcp.xMm);
+    fp.insert(QStringLiteral("tool_tcp_y_mm"), tcp.yMm);
+    fp.insert(QStringLiteral("tool_tcp_z_mm"), tcp.zMm);
+    fp.insert(QStringLiteral("tool_tcp_roll_deg"), tcp.rollDeg);
+    fp.insert(QStringLiteral("tool_tcp_pitch_deg"), tcp.pitchDeg);
+    fp.insert(QStringLiteral("tool_tcp_yaw_deg"), tcp.yawDeg);
     fp.insert(QStringLiteral("tool_payload_shape"), ur3e.toolPayloadShape);
     fp.insert(QStringLiteral("tool_payload_mesh"), ur3e.toolPayloadMesh);
     fp.insert(QStringLiteral("tool_payload_radius_mm"), ur3e.toolPayloadRadiusMm);

@@ -34,6 +34,8 @@ public:
     bool arm(const DlpProjectorSettings &settings, DlpError &error);
     bool blank(DlpError &error);
     bool showTestPattern(const QString &patternName, DlpError &error);
+    /// Switch the EVM to HDMI / external video (pixels come from the PC display).
+    bool showExternalVideo(DlpError &error);
     bool applyLedCurrents(const DlpProjectorSettings &settings, DlpError &error);
     std::vector<DlpDeviceInfo> listDevices(DlpError *error);
     void disconnect();

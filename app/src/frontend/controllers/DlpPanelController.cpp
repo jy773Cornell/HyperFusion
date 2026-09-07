@@ -5,11 +5,14 @@
 #include "adapters/dlp/Dlpc3478Projector.hpp"
 #include "backend/HyperFusionConfig.hpp"
 #include "frontend/logging/AppLog.hpp"
+#include "frontend/widgets/DlpHdmiPatternWindow.hpp"
 #include "frontend/widgets/DlpProjectorSettingsWidget.hpp"
 #include "frontend/widgets/MainWindow.hpp"
+#include "backend/fpp/DlpHdmiPatterns.hpp"
 
 #include <QMetaObject>
 #include <QPushButton>
+#include <QThread>
 
 namespace hf::dlp
 {
@@ -85,11 +88,25 @@ void DlpPanelController::initializeWorker()
             [this, message]() { onWorkerLog(message); },
             Qt::QueuedConnection);
     });
+    worker_->setHdmiShowCallback([this](int stepIndex, DlpError &error) {
+        if (QThread::currentThread() == thread())
+            return showHdmiPngOnGui(stepIndex, error);
+        bool ok = false;
+        DlpError local;
+        QMetaObject::invokeMethod(
+            this,
+            [this, stepIndex, &ok, &local]() { ok = showHdmiPngOnGui(stepIndex, local); },
+            Qt::BlockingQueuedConnection);
+        error = local;
+        return ok;
+    });
     worker_->start();
 }
 
 void DlpPanelController::shutdownSync()
 {
+    if (hdmiWindow_ != nullptr)
+        hdmiWindow_->hidePattern();
     if (worker_ == nullptr)
         return;
 
@@ -144,6 +161,84 @@ bool DlpPanelController::isConnected() const
     const DlpProjectorState state = worker_->currentState();
     return state == DlpProjectorState::Connected || state == DlpProjectorState::Armed
            || state == DlpProjectorState::Projecting;
+}
+
+bool DlpPanelController::showHdmiPngOnGui(int stepIndex, DlpError &error)
+{
+    if (stepIndex < 0 || stepIndex >= kFppScanningStepCount)
+    {
+        error = {DlpErrorCode::InvalidState, "HDMI FPP step index out of range.", false};
+        return false;
+    }
+    const char *file = kFppScanningSteps[stepIndex].hdmiFile;
+    const QString path = hdmiPspPatternFile(file);
+    if (path.isEmpty())
+    {
+        error = {DlpErrorCode::NotAvailable,
+                 "HDMI PSP PNGs not found (calibration/multiview/patterns/psp).",
+                 false};
+        return false;
+    }
+    if (hdmiWindow_ == nullptr)
+        hdmiWindow_ = std::make_unique<ui::DlpHdmiPatternWindow>();
+    QString loadError;
+    if (!hdmiWindow_->showPng(path, &loadError))
+    {
+        error = {DlpErrorCode::InternalError, loadError.toStdString(), false};
+        return false;
+    }
+    return true;
+}
+
+bool DlpPanelController::showFppScanStepSync(int stepIndex, QString *errorOut)
+{
+    if (worker_ == nullptr)
+    {
+        if (errorOut != nullptr)
+            *errorOut = QStringLiteral("DLP worker is not running.");
+        return false;
+    }
+    DlpError error;
+    if (!worker_->showFppStepSync(stepIndex, error))
+    {
+        if (errorOut != nullptr)
+            *errorOut = QString::fromStdString(error.message);
+        return false;
+    }
+    return true;
+}
+
+bool DlpPanelController::blankSync(QString *errorOut)
+{
+    if (worker_ == nullptr)
+    {
+        if (errorOut != nullptr)
+            *errorOut = QStringLiteral("DLP worker is not running.");
+        return false;
+    }
+    DlpError error;
+    if (!worker_->blankSync(error))
+    {
+        if (errorOut != nullptr)
+            *errorOut = QString::fromStdString(error.message);
+        return false;
+    }
+    if (hdmiWindow_ != nullptr)
+    {
+        if (QThread::currentThread() == thread())
+            hdmiWindow_->hidePattern();
+        else
+        {
+            QMetaObject::invokeMethod(
+                this,
+                [this]() {
+                    if (hdmiWindow_ != nullptr)
+                        hdmiWindow_->hidePattern();
+                },
+                Qt::BlockingQueuedConnection);
+        }
+    }
+    return true;
 }
 
 DlpProjectorSettings DlpPanelController::settingsFromUi() const

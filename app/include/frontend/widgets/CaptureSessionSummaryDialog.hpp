@@ -1,5 +1,6 @@
-// Recording-complete summary: one page per illumination mode / camera.
-// Resizable dialog; click a thumbnail to open a full image preview.
+// Recording-complete summary: one page per mode/camera (frontend/ui).
+// Each page: selectable thumbnails on the left, large viewer on the right.
+// Dialog is resizable; the large viewer does not open a click-to-zoom preview.
 #pragma once
 
 #include "backend/camera/CaptureWriterTypes.hpp"

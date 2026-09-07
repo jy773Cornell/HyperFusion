@@ -1,5 +1,5 @@
 <RCC>
     <qresource prefix="/">
-        <file alias="HyperFusionLogo.png">../../assets/HyperFusionLogo.png</file>
+        <file alias="HyperFusionLogo.png">../assets/HyperFusionLogo.png</file>
     </qresource>
 </RCC>

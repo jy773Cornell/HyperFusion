@@ -19,10 +19,10 @@ Optional: CUDA toolkit (`nvcc`) only if you build SAM2 CUDA extensions. HyperFus
 
 ## One-time setup
 
-From **WSL**, in this directory (`resources/gsam2`):
+From **WSL**, in this directory (`app/sidecars/gsam2`):
 
 ```bash
-cd /mnt/d/Pototypy/HyperFusion/resources/gsam2   # adjust drive/path if needed
+cd /mnt/d/Pototypy/HyperFusion/app/sidecars/gsam2   # adjust drive/path if needed
 chmod +x install_venv.sh
 ./install_venv.sh
 ```
@@ -33,7 +33,7 @@ This creates **`./venv`** and installs:
 - GroundingDINO deps (`transformers`, …)
 - SAM2 runtime deps (`hydra-core`, `opencv-python`, `supervision`, …)
 
-**Note:** HyperFusion starts the server with `./venv/bin/python` directly (not `source activate`). If you moved this folder from `resources/sam2` to `resources/gsam2`, re-run `./install_venv.sh` if manual `source ./venv/bin/activate` fails.
+**Note:** HyperFusion starts the server with `./venv/bin/python` directly (not `source activate`). If you moved this folder from `resources/sam2` to `app/sidecars/gsam2`, re-run `./install_venv.sh` if manual `source ./venv/bin/activate` fails.
 
 **Note:** Installing on `/mnt/d/...` can look frozen for several minutes while pip writes large wheels (PyTorch ~3 GB total). That is normal. If you interrupted it, resume with:
 
@@ -59,7 +59,7 @@ In `app/preset/hyperfusion.cfg` → `[segmentation]`:
 ```ini
 wsl_distro = Ubuntu
 wsl_bash_command = source ./venv/bin/activate
-sam2_repo_linux =                          ; empty = auto (/mnt/d/.../resources/gsam2)
+sam2_repo_linux =                          ; empty = auto (/mnt/d/.../app/sidecars/gsam2)
 server_port = 8765
 ```
 
@@ -68,9 +68,9 @@ The app runs: `cd <sam2_repo_linux> && ./venv/bin/python gsam2_server.py ...`
 **Start the server** from the Capture tab → Preprocessing → **Start GSAM server**, or test manually:
 
 ```bash
-cd /mnt/d/Pototypy/HyperFusion/resources/gsam2
+cd /mnt/d/Pototypy/HyperFusion/app/sidecars/gsam2
 source ./venv/bin/activate
-export PYTHONPATH="/mnt/d/Pototypy/HyperFusion/resources:$PYTHONPATH"
+export PYTHONPATH="/mnt/d/Pototypy/HyperFusion/app/sidecars:$PYTHONPATH"
 python gsam2_server.py --host 0.0.0.0 --port 8765 --warmup
 ```
 
@@ -86,7 +86,7 @@ curl http://127.0.0.1:8765/health
 
 | Windows | WSL |
 |---------|-----|
-| `D:\Pototypy\HyperFusion\resources\gsam2` | `/mnt/d/Pototypy/HyperFusion/resources/gsam2` |
+| `D:\Pototypy\HyperFusion\app\sidecars\gsam2` | `/mnt/d/Pototypy/HyperFusion/app/sidecars/gsam2` |
 | Scan output `D:\data\capture\...` | `/mnt/d/data/capture/...` |
 
 - **Code + venv** can live on `/mnt/d/...` (same git tree as the app).

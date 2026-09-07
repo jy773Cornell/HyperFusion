@@ -21,6 +21,8 @@ public:
     using ErrorCallback = std::function<void(const DlpError &)>;
     using DevicesCallback = std::function<void(const std::vector<DlpDeviceInfo> &)>;
     using LogCallback = std::function<void(const std::string &)>;
+    /// GUI-thread HDMI paint. Called from the DLP control thread.
+    using HdmiShowCallback = std::function<bool(int stepIndex, DlpError &)>;
 
     DlpProjectorWorker();
     ~DlpProjectorWorker();
@@ -36,18 +38,26 @@ public:
     void requestShowTestPattern(const DlpProjectorSettings &settings);
     void requestApplyLedCurrents(const DlpProjectorSettings &settings);
 
+    /// Stop the GUI FPP loop, show one burst step, return when the EVM has it.
+    /// Call from a non-control thread (scan execute). Timeout 20 s.
+    [[nodiscard]] bool showFppStepSync(int stepIndex, DlpError &error);
+    /// Stop the GUI FPP loop and blank. Call from a non-control thread.
+    [[nodiscard]] bool blankSync(DlpError &error);
+
     [[nodiscard]] DlpProjectorState currentState() const;
 
     void setStateCallback(StateCallback callback);
     void setErrorCallback(ErrorCallback callback);
     void setDevicesCallback(DevicesCallback callback);
     void setLogCallback(LogCallback callback);
+    void setHdmiShowCallback(HdmiShowCallback callback);
 
 private:
     using ControlCommand = std::function<void()>;
 
     void enqueue(ControlCommand command);
     void stopFppScan();
+    bool applyFppStep(int stepIndex, DlpError &error);
     void runFppScanningLoop();
     void controlLoop();
     void notifyState(DlpProjectorState state);
@@ -61,6 +71,7 @@ private:
     ErrorCallback errorCallback_;
     DevicesCallback devicesCallback_;
     LogCallback logCallback_;
+    HdmiShowCallback hdmiShowCallback_;
 
     mutable std::mutex commandMutex_;
     std::condition_variable commandCv_;

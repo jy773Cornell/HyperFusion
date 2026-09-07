@@ -1,0 +1,118 @@
+{
+  "schema": 4,
+  "name": "R220_T20",
+  "fingerprint": "{\"kind\":\"ur3e_semi_one_ring\",\"sphere_radius_m\":0.22,\"theta_deg\":20.0,\"horizontal_points\":360,\"vertical_points\":2,\"always_apex_pin\":true,\"apex_radius_m\":0.2}",
+  "robot_cfg_fingerprint": "{\"schema\":4,\"ur_type\":\"ur3e\",\"tool_tcp_x_mm\":0.715,\"tool_tcp_y_mm\":-54.197,\"tool_tcp_z_mm\":73.755,\"tool_tcp_roll_deg\":-1.9138,\"tool_tcp_pitch_deg\":0.745,\"tool_tcp_yaw_deg\":0.2868,\"tool_payload_shape\":\"mesh\",\"tool_payload_mesh\":\"ur_tool_payload.stl\",\"tool_payload_radius_mm\":80.0,\"ceiling_mount_height_mm\":629.0,\"workspace_boundary_enabled\":true,\"workspace_length_mm\":900.0,\"workspace_width_mm\":600.0,\"workspace_height_mm\":529.0,\"workspace_ceiling_clearance_mm\":40.0,\"mount_roll_deg\":180.0,\"mount_pitch_deg\":0.0,\"mount_yaw_deg\":0.0,\"mount_offset_x_mm\":0.0,\"mount_offset_y_mm\":0.0,\"scan_center_from_home_tcp\":false,\"scan_center_base_xy\":true,\"apex_over_home_tcp_xy\":true,\"home_joints_deg\":[90.0,-180.0,145.0,-55.0,90.0,-90.0],\"scan_camera_up_world_z\":true,\"pin_pose_tolerance_deg\":0.0,\"pin_pose_tolerance_vertical_only\":true,\"pin_tcp_tilt_deg\":10.0,\"semi_ring_search_candidates\":360}",
+  "scan_params": {
+    "sphere_radius_m": 0.22,
+    "horizontal_points": 360,
+    "vertical_points": 2,
+    "theta_min_deg": 0.0,
+    "theta_max_deg": 20.0,
+    "apex_radius_m": 0.2
+  },
+  "points": [
+    {
+      "grid": {
+        "phi_deg": 2.0,
+        "theta_deg": 20.0,
+        "x_m": 0.07519859465699454,
+        "y_m": 0.0026259927901202784,
+        "z_m": 0.20673237657289986
+      },
+      "tcp": {
+        "x_m": 0.07519859465699454,
+        "y_m": 0.0026259927901202784,
+        "z_m": 0.20673237657289986,
+        "rx": -1.8962782624349117,
+        "ry": -1.9636536241334601,
+        "rz": 0.5261594028010079,
+        "tool_z_x": -0.4996954135095478,
+        "tool_z_y": -0.01744974835125048,
+        "tool_z_z": -0.8660254037844387
+      },
+      "reachable": true,
+      "home_path_ok": true,
+      "base_sweep_ok": true,
+      "planning_error": "",
+      "joints_rad": [
+        -0.7211037559384341,
+        -2.002285083326735,
+        2.4935987543510354,
+        -2.518955884966773,
+        1.9016600245113395,
+        -2.541708774050459
+      ]
+    },
+    {
+      "grid": {
+        "phi_deg": 21.0,
+        "theta_deg": 20.0,
+        "x_m": 0.07024672848085461,
+        "y_m": 0.026965192642698116,
+        "z_m": 0.20673237657289986
+      },
+      "tcp": {
+        "x_m": 0.07024672848085461,
+        "y_m": 0.026965192642698116,
+        "z_m": 0.20673237657289986,
+        "rx": -1.574811021999446,
+        "ry": -2.2913642554620743,
+        "rz": 0.6139692018166034,
+        "tool_z_x": -0.4667902132486008,
+        "tool_z_y": -0.17918397477265013,
+        "tool_z_z": -0.8660254037844387
+      },
+      "reachable": true,
+      "home_path_ok": true,
+      "base_sweep_ok": true,
+      "planning_error": "",
+      "joints_rad": [
+        -1.0527165338325484,
+        -2.002270028562015,
+        2.493593701537586,
+        -2.5189658914758994,
+        1.9016601650904592,
+        -2.541708599532731
+      ]
+    },
+    {
+      "grid": {
+        "phi_deg": 33.0,
+        "theta_deg": 20.0,
+        "x_m": 0.06310529012737706,
+        "y_m": 0.04098105457965056,
+        "z_m": 0.20673237657289986
+      },
+      "tcp": {
+        "x_m": 0.06310529012737706,
+        "y_m": 0.04098105457965056,
+        "z_m": 0.20673237657289986,
+        "rx": -1.344117761562151,
+        "ry": -2.475556960645633,
+        "rz": 0.6633234884222413,
+        "tool_z_x": -0.419335283972712,
+        "tool_z_y": -0.27231951750751354,
+        "tool_z_z": -0.8660254037844387
+      },
+      "reachable": true,
+      "home_path_ok": true,
+      "base_sweep_ok": true,
+      "planning_error": "",
+      "joints_rad": [
+        -1.2621604186983602,
+        -2.0022750904332938,
+        2.4936039763436044,
+        -2.518970023012253,
+        1.90166231767604,
+        -2.5417046289505603
+      ]
+    }
+  ],
+  "reachable_count": 3,
+  "unreachable_count": 0,
+  "home_path_ok_count": 3,
+  "chain_only_count": 0,
+  "moveit_used": true,
+  "error_message": ""
+}

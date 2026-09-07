@@ -18,6 +18,9 @@
 #include "backend/multiview/Ur3eSemiFixedScanExecute.hpp"
 #include "backend/multiview/BfsTiffIo.hpp"
 #include "frontend/controllers/BfsPanelController.hpp"
+#include "frontend/controllers/DlpPanelController.hpp"
+#include "backend/fpp/DlpTypes.hpp"
+#include "backend/stage/StageWorker.hpp"
 #include "frontend/widgets/MainWindow.hpp"
 #include "frontend/widgets/Ur3eExternalControlWaitDialog.hpp"
 #include "frontend/widgets/Ur3eHemisphereScanSettingsWidget.hpp"
@@ -46,6 +49,9 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <cstdint>
+#include <functional>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -112,6 +118,483 @@ CalibrationCaptureExtras extrasFromLivePose(const Ur3ePoseResult &live)
     extras.jointNames = live.jointNames;
     extras.jointsRad = live.jointsRad;
     return extras;
+}
+
+struct OutputPoseShift
+{
+    bool apply = false;
+    double xM = 0.0;
+    double yM = 0.0;
+    double zM = 0.0;
+    double stageCaptureMm = 0.0;
+    double stageOutputMm = 0.0;
+};
+
+[[nodiscard]] bool stageConnectedForScan(MainWindow *host)
+{
+    if (host == nullptr)
+        return false;
+    StageWorker *worker = host->stageWorker();
+    return worker != nullptr && worker->currentState() == StageState::Connected;
+}
+
+/// Blocking absolute move. Caller only invokes this when the stage was connected at execute start.
+[[nodiscard]] bool waitMoveStageAbsolute(MainWindow *host,
+                                         const double targetMm,
+                                         const QString &label,
+                                         const std::function<bool()> &stillOk,
+                                         QString *errorMessage)
+{
+    StageWorker *worker = host != nullptr ? host->stageWorker() : nullptr;
+    if (worker == nullptr || worker->currentState() != StageState::Connected)
+    {
+        if (errorMessage != nullptr)
+        {
+            *errorMessage =
+                QStringLiteral("Stage disconnected during Multiview stage move (%1).").arg(label);
+        }
+        return false;
+    }
+
+    double speed = hf::hardwareConfig().operationScanningSpeedMmPerSec;
+    if (!(speed > 0.0))
+        speed = 80.0;
+
+    if (host != nullptr)
+    {
+        QMetaObject::invokeMethod(
+            host,
+            [host, targetMm, label]() {
+                host->appendLog(QStringLiteral("UR3e scan: stage → %1 (%2 mm)…")
+                                    .arg(label)
+                                    .arg(targetMm, 0, 'f', 1));
+            },
+            Qt::QueuedConnection);
+    }
+
+    std::mutex mu;
+    std::condition_variable cv;
+    bool done = false;
+    bool ok = false;
+    worker->requestMoveAbsoluteMm(targetMm, speed, true, [&](const bool success) {
+        std::lock_guard<std::mutex> lock(mu);
+        ok = success;
+        done = true;
+        cv.notify_one();
+    });
+
+    while (true)
+    {
+        {
+            std::unique_lock<std::mutex> lock(mu);
+            if (cv.wait_for(lock, std::chrono::milliseconds(50), [&]() { return done; }))
+                break;
+        }
+        if (!stillOk || !stillOk())
+        {
+            worker->requestStopMotion();
+            std::unique_lock<std::mutex> lock(mu);
+            cv.wait_for(lock, std::chrono::seconds(30), [&]() { return done; });
+            if (errorMessage != nullptr)
+                *errorMessage = QStringLiteral("Stage move aborted (%1).").arg(label);
+            return false;
+        }
+    }
+
+    if (!ok && errorMessage != nullptr)
+    {
+        *errorMessage =
+            QStringLiteral("Stage move to %1 mm failed (%2).").arg(targetMm, 0, 'f', 1).arg(label);
+    }
+    return ok;
+}
+
+/// After the apex still, park at the MVS ring plane (not the home sensor).
+void parkStageAtMvsAfterExecuteIfUsed(MainWindow *host,
+                                      const bool useStage,
+                                      const std::function<bool()> &stillOk)
+{
+    if (!useStage)
+        return;
+    const double targetMm = hf::hardwareConfig().sampleMultiviewPositionMm;
+    QString stageErr;
+    if (!waitMoveStageAbsolute(host,
+                               targetMm,
+                               QStringLiteral("MVS rings"),
+                               stillOk,
+                               &stageErr)
+        && host != nullptr && !stageErr.isEmpty())
+    {
+        QMetaObject::invokeMethod(
+            host,
+            [host, stageErr]() {
+                host->appendLog(QStringLiteral("UR3e scan warning: %1").arg(stageErr));
+            },
+            Qt::QueuedConnection);
+    }
+}
+
+[[nodiscard]] OutputPoseShift makeApexStageOutputShift()
+{
+    OutputPoseShift shift;
+    const auto &hw = hf::hardwareConfig();
+    if (!hw.sampleMultiviewTwoStage())
+        return shift;
+    shift.apply = true;
+    hw.sampleMultiviewApexOutputShiftM(shift.xM, shift.yM, shift.zM);
+    shift.stageCaptureMm = hw.sampleMultiviewApexPositionMm;
+    shift.stageOutputMm = hw.sampleMultiviewPositionMm;
+    return shift;
+}
+
+/// One BFS TIFF + pose JSON. *fppStepIndex* < 0 = single still (DLP off).
+bool saveOneBfsStillAtPin(Ur3ePanelController *controller,
+                          MainWindow *host,
+                          const QString &serverUrl,
+                          const QString &captureDir,
+                          const Ur3eScanTcpPose &plannedTcp,
+                          int *captured,
+                          TransformsJsonDocument *transformsDoc,
+                          bool *ok,
+                          QString *errorMessage,
+                          const QString &skipContext,
+                          const int fppStepIndex,
+                          const QString &fppStepLabel,
+                          const OutputPoseShift &outputShift = {})
+{
+    hf::bfs::BfsRgbFrame frame;
+    bool gotFrame = false;
+    QMetaObject::invokeMethod(
+        controller,
+        [host, &frame, &gotFrame]() {
+            if (host->bfsPanel() != nullptr)
+                gotFrame = host->bfsPanel()->tryCopyLastFrame(frame);
+        },
+        Qt::BlockingQueuedConnection);
+
+    if (!gotFrame)
+    {
+        QMetaObject::invokeMethod(
+            controller,
+            [host, skipContext, fppStepLabel]() {
+                if (fppStepLabel.isEmpty())
+                {
+                    host->appendLog(
+                        QStringLiteral("UR3e scan capture: no BFS frame at %1 — skipping still.")
+                            .arg(skipContext));
+                }
+                else
+                {
+                    host->appendLog(
+                        QStringLiteral(
+                            "UR3e scan capture: no BFS frame at %1 (%2) — skipping still.")
+                            .arg(skipContext, fppStepLabel));
+                }
+            },
+            Qt::QueuedConnection);
+        return true;
+    }
+
+    Ur3eScanTcpPose tcpForPose = plannedTcp;
+    QString poseSource = QStringLiteral("planned_world_fallback");
+    const Ur3ePoseResult livePose = ur3eGetTcpPose(serverUrl);
+    if (livePose.ok)
+    {
+        tcpForPose = scanTcpFromLivePose(livePose.pose, plannedTcp);
+        poseSource = QStringLiteral("live_tf_base_hyperfusion_tcp");
+    }
+    else
+    {
+        QMetaObject::invokeMethod(
+            controller,
+            [host, skipContext]() {
+                host->appendLog(
+                    QStringLiteral(
+                        "UR3e scan capture: live base_link→hyperfusion_tcp "
+                        "unavailable at %1 — writing planned world pose "
+                        "(pose_source=planned_world_fallback).")
+                        .arg(skipContext));
+            },
+            Qt::QueuedConnection);
+    }
+
+    const QString stem = QStringLiteral("%1").arg(*captured, 5, 10, QLatin1Char('0'));
+    const QString tiffPath = QDir(captureDir).filePath(stem + QStringLiteral(".tif"));
+    const std::string saveError = hf::bfs::saveRgb8AsTiff(
+        tiffPath, frame.width, frame.height, frame.rgb.data(), frame.rgb.size());
+    if (!saveError.empty())
+    {
+        if (ok != nullptr)
+            *ok = false;
+        if (errorMessage != nullptr)
+        {
+            *errorMessage = QStringLiteral("Failed to save BFS TIFF %1: %2")
+                                .arg(tiffPath, QString::fromStdString(saveError));
+        }
+        return false;
+    }
+
+    if (outputShift.apply)
+    {
+        tcpForPose.xM += outputShift.xM;
+        tcpForPose.yM += outputShift.yM;
+        tcpForPose.zM += outputShift.zM;
+    }
+
+    const auto &ur3eCfg = hf::hardwareConfig().ur3e;
+    CameraIntrinsics intrinsics;
+    intrinsics.fx = ur3eCfg.bfsCameraFx;
+    intrinsics.fy = ur3eCfg.bfsCameraFy;
+    intrinsics.width = frame.width;
+    intrinsics.height = frame.height;
+    intrinsics.cx = ur3eCfg.bfsCameraCx > 0.0
+                        ? ur3eCfg.bfsCameraCx
+                        : (frame.width > 0 ? 0.5 * static_cast<double>(frame.width) : 0.0);
+    intrinsics.cy = ur3eCfg.bfsCameraCy > 0.0
+                        ? ur3eCfg.bfsCameraCy
+                        : (frame.height > 0 ? 0.5 * static_cast<double>(frame.height) : 0.0);
+    intrinsics.distortion = ur3eCfg.bfsCameraDistortion;
+
+    const Mat4 c2w = cameraToWorldOpenGlFromTcp(tcpForPose);
+    const CameraExtrinsicsRt extrinsics = cameraExtrinsicsOpenCvFromTcp(tcpForPose);
+    const QString imageName = stem + QStringLiteral(".tif");
+    const QString poseJsonPath = QDir(captureDir).filePath(stem + QStringLiteral(".json"));
+    QString poseError;
+    CalibrationCaptureExtras calib = extrasFromLivePose(livePose);
+    calib.fppStepIndex = fppStepIndex;
+    calib.fppStepLabel = fppStepLabel;
+    if (fppStepIndex >= 0 && fppStepIndex < hf::dlp::kFppScanningStepCount)
+    {
+        const hf::dlp::FppScanStep &step = hf::dlp::kFppScanningSteps[fppStepIndex];
+        const char *patternName = step.patternName;
+        calib.fppPattern = patternName != nullptr
+                               ? QString::fromUtf8(patternName)
+                               : QStringLiteral("Black");
+        if (calib.fppStepLabel.isEmpty())
+            calib.fppStepLabel = QString::fromUtf8(step.label);
+    }
+    if (outputShift.apply)
+    {
+        calib.haveOutputStageShift = true;
+        calib.stageCapturePositionMm = outputShift.stageCaptureMm;
+        calib.stageOutputPositionMm = outputShift.stageOutputMm;
+        calib.outputShiftXM = outputShift.xM;
+        calib.outputShiftYM = outputShift.yM;
+        calib.outputShiftZM = outputShift.zM;
+    }
+    if (!calib.haveFlange)
+    {
+        QMetaObject::invokeMethod(
+            controller,
+            [host, poseJsonPath]() {
+                host->appendLog(
+                    QStringLiteral(
+                        "UR3e scan capture: no base_T_flange (live tool0 TF "
+                        "missing) — %1 not usable for hand-eye.")
+                        .arg(QFileInfo(poseJsonPath).fileName()));
+            },
+            Qt::QueuedConnection);
+    }
+    if (!writeCameraPoseJson(poseJsonPath,
+                             tcpForPose,
+                             c2w,
+                             extrinsics,
+                             intrinsics,
+                             imageName,
+                             poseSource,
+                             &plannedTcp,
+                             &poseError,
+                             &calib))
+    {
+        if (ok != nullptr)
+            *ok = false;
+        if (errorMessage != nullptr)
+        {
+            *errorMessage = QStringLiteral("Failed to save pose JSON %1: %2")
+                                .arg(poseJsonPath, poseError);
+        }
+        return false;
+    }
+
+    if (transformsDoc->intrinsics.width <= 0)
+        transformsDoc->intrinsics = intrinsics;
+    TransformsJsonFrame entry;
+    entry.filePathStem = stem;
+    entry.transformMatrix = c2w;
+    entry.extrinsics = extrinsics;
+    entry.fppStepIndex = calib.fppStepIndex;
+    entry.fppStepLabel = calib.fppStepLabel;
+    entry.fppPattern = calib.fppPattern;
+    transformsDoc->frames.push_back(std::move(entry));
+    ++(*captured);
+    return true;
+}
+
+/// If DLP is connected: 11 FPP steps, 0.5 s dwell, one still each, then blank.
+/// Otherwise one still (existing Multiview behavior).
+bool capturePinStillsMaybeFpp(Ur3ePanelController *controller,
+                              MainWindow *host,
+                              const QString &serverUrl,
+                              const QString &captureDir,
+                              const Ur3eScanTcpPose &plannedTcp,
+                              int *captured,
+                              TransformsJsonDocument *transformsDoc,
+                              bool *ok,
+                              QString *errorMessage,
+                              const QString &skipContext,
+                              const std::function<bool()> &sessionActive,
+                              const OutputPoseShift &outputShift = {})
+{
+    hf::dlp::DlpPanelController *dlp = host != nullptr ? host->dlpPanel() : nullptr;
+    const bool fpp = dlp != nullptr && dlp->isConnected();
+    if (!fpp)
+    {
+        return saveOneBfsStillAtPin(controller,
+                                    host,
+                                    serverUrl,
+                                    captureDir,
+                                    plannedTcp,
+                                    captured,
+                                    transformsDoc,
+                                    ok,
+                                    errorMessage,
+                                    skipContext,
+                                    -1,
+                                    {},
+                                    outputShift);
+    }
+
+    const int fppSteps = hf::dlp::kFppScanningStepCount;
+    QMetaObject::invokeMethod(
+        controller,
+        [host, skipContext, fppSteps]() {
+            host->appendLog(
+                QStringLiteral(
+                    "UR3e scan capture: FPP burst at %1 (%2 patterns, wait %3 new + %4 settle BFS frame(s)).")
+                    .arg(skipContext)
+                    .arg(fppSteps)
+                    .arg(hf::dlp::kFppCaptureMinNewFrames)
+                    .arg(hf::dlp::kFppCaptureStabilizeFrames));
+        },
+        Qt::QueuedConnection);
+
+    bool burstOk = true;
+    for (int step = 0; step < fppSteps; ++step)
+    {
+        if (sessionActive && !sessionActive())
+            break;
+
+        QString dlpError;
+        if (!dlp->showFppScanStepSync(step, &dlpError))
+        {
+            if (ok != nullptr)
+                *ok = false;
+            if (errorMessage != nullptr)
+            {
+                *errorMessage = QStringLiteral("DLP FPP step %1 failed at %2: %3")
+                                    .arg(step)
+                                    .arg(skipContext, dlpError);
+            }
+            burstOk = false;
+            break;
+        }
+
+        hf::bfs::BfsPanelController *bfs = host->bfsPanel();
+        if (bfs == nullptr)
+        {
+            if (ok != nullptr)
+                *ok = false;
+            if (errorMessage != nullptr)
+                *errorMessage = QStringLiteral("BFS panel unavailable for FPP capture.");
+            burstOk = false;
+            break;
+        }
+        const std::uint64_t beforeIndex = bfs->lastFrameIndex();
+        if (!bfs->waitForNewerFrame(beforeIndex,
+                                    hf::dlp::kFppCaptureMinNewFrames,
+                                    hf::dlp::kFppCaptureFrameWaitMs))
+        {
+            if (ok != nullptr)
+                *ok = false;
+            if (errorMessage != nullptr)
+            {
+                *errorMessage =
+                    QStringLiteral(
+                        "Timed out waiting for %1 new BFS frame(s) after FPP step %2 at %3 "
+                        "(last frameIndex=%4).")
+                        .arg(hf::dlp::kFppCaptureMinNewFrames)
+                        .arg(step)
+                        .arg(skipContext)
+                        .arg(bfs->lastFrameIndex());
+            }
+            burstOk = false;
+            break;
+        }
+        if (!bfs->waitForNewerFrame(bfs->lastFrameIndex(),
+                                    hf::dlp::kFppCaptureStabilizeFrames,
+                                    hf::dlp::kFppCaptureStabilizeWaitMs))
+        {
+            if (ok != nullptr)
+                *ok = false;
+            if (errorMessage != nullptr)
+            {
+                *errorMessage =
+                    QStringLiteral(
+                        "Timed out waiting for %1 settle BFS frame(s) after FPP step %2 at %3 "
+                        "(last frameIndex=%4).")
+                        .arg(hf::dlp::kFppCaptureStabilizeFrames)
+                        .arg(step)
+                        .arg(skipContext)
+                        .arg(bfs->lastFrameIndex());
+            }
+            burstOk = false;
+            break;
+        }
+
+        if (sessionActive && !sessionActive())
+            break;
+
+        const QString label = QString::fromUtf8(hf::dlp::kFppScanningSteps[step].label);
+        if (!saveOneBfsStillAtPin(controller,
+                                  host,
+                                  serverUrl,
+                                  captureDir,
+                                  plannedTcp,
+                                  captured,
+                                  transformsDoc,
+                                  ok,
+                                  errorMessage,
+                                  skipContext,
+                                  step,
+                                  label,
+                                  outputShift))
+        {
+            burstOk = false;
+            break;
+        }
+    }
+
+    QString blankError;
+    if (!dlp->blankSync(&blankError))
+    {
+        QMetaObject::invokeMethod(
+            controller,
+            [host, blankError]() {
+                host->appendLog(
+                    QStringLiteral("UR3e scan capture: DLP blank after FPP failed — %1")
+                        .arg(blankError));
+            },
+            Qt::QueuedConnection);
+        if (burstOk)
+        {
+            if (ok != nullptr)
+                *ok = false;
+            if (errorMessage != nullptr)
+                *errorMessage = QStringLiteral("DLP blank after FPP failed: %1").arg(blankError);
+            burstOk = false;
+        }
+    }
+    return burstOk;
 }
 
 void appendScanPlanFailureReport(MainWindow *host, const Ur3eHemisphereScanPlan &plan)
@@ -1782,7 +2265,25 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
         return false;
     }
 
-    const std::vector<int> order = buildHemisphereScanExecutionOrder(plannedScanPlan_);
+    std::vector<int> order = buildHemisphereScanExecutionOrder(plannedScanPlan_);
+    if (options.pinSet != HemisphereScanPinSet::All)
+    {
+        std::vector<int> filtered;
+        filtered.reserve(order.size());
+        for (const int index : order)
+        {
+            if (index < 0 || index >= static_cast<int>(plannedScanPlan_.points.size()))
+                continue;
+            const bool apex =
+                std::abs(plannedScanPlan_.points[static_cast<std::size_t>(index)].gridPoint.thetaDeg)
+                <= 1.0e-9;
+            if (options.pinSet == HemisphereScanPinSet::ApexOnly && apex)
+                filtered.push_back(index);
+            else if (options.pinSet == HemisphereScanPinSet::RingsOnly && !apex)
+                filtered.push_back(index);
+        }
+        order = std::move(filtered);
+    }
     if (order.empty())
     {
         host_->appendLog(QStringLiteral("UR3e scan execute rejected: no stored joint solutions."));
@@ -1839,13 +2340,43 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
     }
 
     const QString serverUrl = serverManager_->serverUrl();
+    const bool driveStage = options.pinSet == HemisphereScanPinSet::All;
+    const bool useStage = driveStage && stageConnectedForScan(host_);
+    const auto &hwCfg = hf::hardwareConfig();
+    const bool twoStage = hwCfg.sampleMultiviewTwoStage();
+    QString captureNote = captureStills ? QStringLiteral(", BFS stills → ") + captureDir
+                                        : QStringLiteral(", motion-only");
+    if (captureStills && host_->dlpPanel() != nullptr && host_->dlpPanel()->isConnected())
+    {
+        captureNote += QStringLiteral(", FPP %1 patterns × %2 new + %3 settle BFS frame(s)")
+                           .arg(hf::dlp::kFppScanningStepCount)
+                           .arg(hf::dlp::kFppCaptureMinNewFrames)
+                           .arg(hf::dlp::kFppCaptureStabilizeFrames);
+    }
+    if (useStage)
+    {
+        if (twoStage)
+        {
+            captureNote += QStringLiteral(", stage apex %1 mm then MVS %2 mm")
+                               .arg(hwCfg.sampleMultiviewApexPositionMm, 0, 'f', 0)
+                               .arg(hwCfg.sampleMultiviewPositionMm, 0, 'f', 0);
+        }
+        else
+        {
+            captureNote += QStringLiteral(", stage %1 mm")
+                               .arg(hwCfg.sampleMultiviewPositionMm, 0, 'f', 0);
+        }
+    }
+    else if (driveStage)
+    {
+        captureNote += QStringLiteral(", stage not connected (sample_multiview_* ignored)");
+    }
     host_->appendLog(
         QStringLiteral("UR3e scan execute: %1 reachable point(s), top-ring-first clockwise sweep "
                        "(%2 ms settle%3%4)…")
             .arg(order.size())
             .arg(stabilizeMs)
-            .arg(captureStills ? QStringLiteral(", BFS stills → ") + captureDir
-                               : QStringLiteral(", motion-only"))
+            .arg(captureNote)
             .arg(wristSummary));
     stopRequested_.store(false, std::memory_order_release);
     scanExecuting_ = true;
@@ -1855,7 +2386,12 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
         int basePins = 0;
         for (const Ur3ePlannedScanPoint &pt : plannedScanPlan_.points)
         {
-            if (pt.reachable)
+            if (!pt.reachable)
+                continue;
+            const bool apex = std::abs(pt.gridPoint.thetaDeg) <= 1.0e-9;
+            if (options.pinSet == HemisphereScanPinSet::All
+                || (options.pinSet == HemisphereScanPinSet::ApexOnly && apex)
+                || (options.pinSet == HemisphereScanPinSet::RingsOnly && !apex))
                 ++basePins;
         }
         const int plannedPins = basePins * std::max(1, wristPosesPerPin);
@@ -1872,6 +2408,13 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
         if (scanExecuteThread_.joinable())
             scanExecuteThread_.join();
 
+        const int startFrameIndex = std::max(0, options.startFrameIndex);
+        const bool appendTransformsJson = options.appendTransformsJson;
+        const bool applyApexShiftAlways = options.applyApexStageOutputShift;
+        OutputPoseShift outputShift;
+        if (applyApexShiftAlways || (useStage && twoStage))
+            outputShift = makeApexStageOutputShift();
+
         scanExecuteThread_ = std::thread([this,
                                           serverUrl,
                                           order,
@@ -1880,10 +2423,15 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                                           captureDir,
                                           captureStills,
                                           stabilizeMs,
-                                          wristSweep]() {
+                                          wristSweep,
+                                          startFrameIndex,
+                                          appendTransformsJson,
+                                          outputShift,
+                                          applyApexShiftAlways,
+                                          useStage]() {
             int executed = 0;
             int skipped = 0;
-            int captured = 0;
+            int captured = startFrameIndex;
             int wristSkipped = 0;
             QString errorMessage;
             bool ok = true;
@@ -1903,17 +2451,20 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                        && sessionId == scanExecuteSessionId_.load(std::memory_order_acquire);
             };
 
-            const auto finishWithCapture = [this, &transformsDoc, captureStills, captureDir](
+            const auto finishWithCapture = [this, &transformsDoc, captureStills, captureDir,
+                                            appendTransformsJson, useStage, &sessionActive](
                                                bool finishOk,
                                                const QString &finishError,
                                                int executedCount,
                                                bool stopped,
                                                int capturedCount,
                                                qint64 elapsedMs) {
+                parkStageAtMvsAfterExecuteIfUsed(host_, useStage, sessionActive);
                 if (captureStills && !transformsDoc.frames.empty())
                 {
                     QString writeError;
-                    if (!writeTransformsJson(captureDir, transformsDoc, &writeError))
+                    if (!writeTransformsJson(captureDir, transformsDoc, &writeError,
+                                             appendTransformsJson))
                     {
                         QMetaObject::invokeMethod(
                             this,
@@ -1954,137 +2505,26 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                                                 const int pointIndex) -> bool {
                 if (!captureStills)
                     return true;
-
-                hf::bfs::BfsRgbFrame frame;
-                bool gotFrame = false;
-                QMetaObject::invokeMethod(
+                const bool pinIsApex =
+                    pointIndex >= 0 && pointIndex < static_cast<int>(planCopy.points.size())
+                    && std::abs(planCopy.points[static_cast<std::size_t>(pointIndex)].gridPoint.thetaDeg)
+                           <= 1.0e-9;
+                const OutputPoseShift shiftForPin =
+                    (outputShift.apply && (applyApexShiftAlways || pinIsApex)) ? outputShift
+                                                                               : OutputPoseShift{};
+                return capturePinStillsMaybeFpp(
                     this,
-                    [this, &frame, &gotFrame]() {
-                        if (host_->bfsPanel() != nullptr)
-                            gotFrame = host_->bfsPanel()->tryCopyLastFrame(frame);
-                    },
-                    Qt::BlockingQueuedConnection);
-
-                if (!gotFrame)
-                {
-                    QMetaObject::invokeMethod(
-                        this,
-                        [this, pointIndex]() {
-                            host_->appendLog(
-                                QStringLiteral(
-                                    "UR3e scan capture: no BFS frame at pin %1 — skipping still.")
-                                    .arg(pointIndex));
-                        },
-                        Qt::QueuedConnection);
-                    return true;
-                }
-
-                // Depth JSON: optical TCP in base_link (robot frame + hyperfusion_tcp).
-                // Live TF is authoritative; planned pin stays world-frame audit only.
-                Ur3eScanTcpPose tcpForPose = plannedTcp;
-                QString poseSource = QStringLiteral("planned_world_fallback");
-                const Ur3ePoseResult livePose = ur3eGetTcpPose(serverUrl);
-                if (livePose.ok)
-                {
-                    tcpForPose = scanTcpFromLivePose(livePose.pose, plannedTcp);
-                    poseSource = QStringLiteral("live_tf_base_hyperfusion_tcp");
-                }
-                else
-                {
-                    QMetaObject::invokeMethod(
-                        this,
-                        [this, pointIndex]() {
-                            host_->appendLog(
-                                QStringLiteral(
-                                    "UR3e scan capture: live base_link→hyperfusion_tcp "
-                                    "unavailable at pin %1 — writing planned world pose "
-                                    "(pose_source=planned_world_fallback).")
-                                    .arg(pointIndex));
-                        },
-                        Qt::QueuedConnection);
-                }
-
-                const QString stem =
-                    QStringLiteral("%1").arg(captured, 5, 10, QLatin1Char('0'));
-                const QString tiffPath =
-                    QDir(captureDir).filePath(stem + QStringLiteral(".tif"));
-                const std::string saveError =
-                    hf::bfs::saveRgb8AsTiff(tiffPath,
-                                           frame.width,
-                                           frame.height,
-                                           frame.rgb.data(),
-                                           frame.rgb.size());
-                if (!saveError.empty())
-                {
-                    ok = false;
-                    errorMessage =
-                        QStringLiteral("Failed to save BFS TIFF %1: %2")
-                            .arg(tiffPath, QString::fromStdString(saveError));
-                    return false;
-                }
-
-                const auto &ur3eCfg = hf::hardwareConfig().ur3e;
-                CameraIntrinsics intrinsics;
-                intrinsics.fx = ur3eCfg.bfsCameraFx;
-                intrinsics.fy = ur3eCfg.bfsCameraFy;
-                intrinsics.width = frame.width;
-                intrinsics.height = frame.height;
-                intrinsics.cx = ur3eCfg.bfsCameraCx > 0.0
-                                    ? ur3eCfg.bfsCameraCx
-                                    : (frame.width > 0 ? 0.5 * static_cast<double>(frame.width) : 0.0);
-                intrinsics.cy = ur3eCfg.bfsCameraCy > 0.0
-                                    ? ur3eCfg.bfsCameraCy
-                                    : (frame.height > 0 ? 0.5 * static_cast<double>(frame.height)
-                                                        : 0.0);
-                intrinsics.distortion = ur3eCfg.bfsCameraDistortion;
-
-                const Mat4 c2w = cameraToWorldOpenGlFromTcp(tcpForPose);
-                const CameraExtrinsicsRt extrinsics = cameraExtrinsicsOpenCvFromTcp(tcpForPose);
-                const QString imageName = stem + QStringLiteral(".tif");
-                const QString poseJsonPath =
-                    QDir(captureDir).filePath(stem + QStringLiteral(".json"));
-                QString poseError;
-                const CalibrationCaptureExtras calib = extrasFromLivePose(livePose);
-                if (!calib.haveFlange)
-                {
-                    QMetaObject::invokeMethod(
-                        this,
-                        [this, poseJsonPath]() {
-                            host_->appendLog(
-                                QStringLiteral(
-                                    "UR3e scan capture: no base_T_flange (live tool0 TF "
-                                    "missing) — %1 not usable for hand-eye.")
-                                    .arg(QFileInfo(poseJsonPath).fileName()));
-                        },
-                        Qt::QueuedConnection);
-                }
-                if (!writeCameraPoseJson(poseJsonPath,
-                                         tcpForPose,
-                                         c2w,
-                                         extrinsics,
-                                         intrinsics,
-                                         imageName,
-                                         poseSource,
-                                         &plannedTcp,
-                                         &poseError,
-                                         &calib))
-                {
-                    ok = false;
-                    errorMessage =
-                        QStringLiteral("Failed to save pose JSON %1: %2")
-                            .arg(poseJsonPath, poseError);
-                    return false;
-                }
-
-                if (transformsDoc.intrinsics.width <= 0)
-                    transformsDoc.intrinsics = intrinsics;
-                TransformsJsonFrame entry;
-                entry.filePathStem = stem;
-                entry.transformMatrix = c2w;
-                entry.extrinsics = extrinsics;
-                transformsDoc.frames.push_back(std::move(entry));
-                ++captured;
-                return true;
+                    host_,
+                    serverUrl,
+                    captureDir,
+                    plannedTcp,
+                    &captured,
+                    &transformsDoc,
+                    &ok,
+                    &errorMessage,
+                    QStringLiteral("pin %1").arg(pointIndex),
+                    sessionActive,
+                    shiftForPin);
             };
 
             QMetaObject::invokeMethod(
@@ -2114,6 +2554,39 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
 
             bool returnHomeAfterScan = true;
             const auto scanStartedAt = std::chrono::steady_clock::now();
+            const auto &hw = hf::hardwareConfig();
+            const bool twoStageMove = useStage && hw.sampleMultiviewTwoStage();
+            bool needMvsStageMove = twoStageMove;
+            const auto stageSessionOk = [this, &sessionActive]() {
+                return sessionActive() && !stopRequested_.load(std::memory_order_acquire);
+            };
+            if (useStage)
+            {
+                bool orderHasApex = false;
+                for (const int index : order)
+                {
+                    if (index < 0 || index >= static_cast<int>(planCopy.points.size()))
+                        continue;
+                    if (std::abs(planCopy.points[static_cast<std::size_t>(index)].gridPoint.thetaDeg)
+                        <= 1.0e-9)
+                    {
+                        orderHasApex = true;
+                        break;
+                    }
+                }
+                const double firstStageMm = orderHasApex ? hw.sampleMultiviewApexPositionMm
+                                                         : hw.sampleMultiviewPositionMm;
+                const QString firstLabel =
+                    orderHasApex ? QStringLiteral("apex") : QStringLiteral("MVS rings");
+                QString stageErr;
+                if (!waitMoveStageAbsolute(host_, firstStageMm, firstLabel, stageSessionOk, &stageErr))
+                {
+                    finishWithCapture(false, stageErr, 0, false, captured, 0);
+                    return;
+                }
+                if (!orderHasApex)
+                    needMvsStageMove = false;
+            }
 
             // Clear wrist_3 wind at home when |live−home|≥180°. Used before and after pins
             // so we never approach a pin already multi-turn wound (BFS USB cable risk).
@@ -2173,6 +2646,22 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                 const int pointIndex = order[static_cast<std::size_t>(step)];
                 const Ur3ePlannedScanPoint &point =
                     planCopy.points[static_cast<std::size_t>(pointIndex)];
+                const bool pinIsApex = std::abs(point.gridPoint.thetaDeg) <= 1.0e-9;
+                if (needMvsStageMove && !pinIsApex)
+                {
+                    QString stageErr;
+                    if (!waitMoveStageAbsolute(host_,
+                                               hw.sampleMultiviewPositionMm,
+                                               QStringLiteral("MVS rings"),
+                                               stageSessionOk,
+                                               &stageErr))
+                    {
+                        ok = false;
+                        errorMessage = stageErr;
+                        break;
+                    }
+                    needMvsStageMove = false;
+                }
                 const QString tcpSummary =
                     QStringLiteral("tcp=(%1, %2, %3) m theta=%4° phi=%5°")
                         .arg(point.tcp.xM, 0, 'f', 3)
@@ -2534,6 +3023,23 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
             if (!sessionActive())
                 return;
 
+            // Apex-only / last pin was θ=0: go to the MVS plane, do not home the stage.
+            if (needMvsStageMove && useStage)
+            {
+                QString stageErr;
+                if (!waitMoveStageAbsolute(host_,
+                                           hw.sampleMultiviewPositionMm,
+                                           QStringLiteral("MVS rings"),
+                                           stageSessionOk,
+                                           &stageErr)
+                    && ok)
+                {
+                    ok = false;
+                    errorMessage = stageErr;
+                }
+                needMvsStageMove = false;
+            }
+
             // User Stop must always retreat to home after cancelling the current motion.
             const bool userStopped = stopRequested_.load(std::memory_order_acquire);
             if (userStopped)
@@ -2727,6 +3233,29 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
     refreshSemiFixedPreview();
 
     const QString serverUrl = serverManager_->serverUrl();
+    const bool driveStage = options.pinSet == HemisphereScanPinSet::All;
+    const bool useStage = driveStage && stageConnectedForScan(host_);
+    const auto &hwSemi = hf::hardwareConfig();
+    if (useStage)
+    {
+        if (hwSemi.sampleMultiviewTwoStage())
+        {
+            host_->appendLog(QStringLiteral(
+                                 "UR3e semi-fixed: stage apex %1 mm then MVS %2 mm")
+                                 .arg(hwSemi.sampleMultiviewApexPositionMm, 0, 'f', 0)
+                                 .arg(hwSemi.sampleMultiviewPositionMm, 0, 'f', 0));
+        }
+        else
+        {
+            host_->appendLog(QStringLiteral("UR3e semi-fixed: stage %1 mm")
+                                 .arg(hwSemi.sampleMultiviewPositionMm, 0, 'f', 0));
+        }
+    }
+    else if (driveStage)
+    {
+        host_->appendLog(QStringLiteral(
+            "UR3e semi-fixed: stage not connected (sample_multiview_* ignored)"));
+    }
     stopRequested_.store(false, std::memory_order_release);
     scanExecuting_ = true;
     scanExecuteSuppressUiSummary_ = options.suppressUiSummary;
@@ -2771,9 +3300,21 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
         if (scanExecuteThread_.joinable())
             scanExecuteThread_.join();
 
+        const int startFrameIndex = std::max(0, options.startFrameIndex);
+        const bool appendTransformsJson = options.appendTransformsJson;
+        const bool skipTop = options.pinSet == HemisphereScanPinSet::RingsOnly;
+        const bool skipRings = options.pinSet == HemisphereScanPinSet::ApexOnly;
+        const bool applyApexShiftAlways = options.applyApexStageOutputShift;
+        OutputPoseShift outputShift;
+        if (applyApexShiftAlways || (useStage && hwSemi.sampleMultiviewTwoStage()))
+            outputShift = makeApexStageOutputShift();
+
         scanExecuteThread_ = std::thread([this, serverUrl, route, sessionId, captureDir,
-                                          captureStills, stabilizeMs, wristSweep]() {
-            int captured = 0;
+                                          captureStills, stabilizeMs, wristSweep,
+                                          startFrameIndex, appendTransformsJson, skipTop,
+                                          skipRings, outputShift, applyApexShiftAlways,
+                                          useStage]() {
+            int captured = startFrameIndex;
             TransformsJsonDocument transformsDoc;
 
             const auto sessionActive = [this, sessionId]() {
@@ -2782,14 +3323,18 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
             };
 
             const auto finishWithCapture = [this, &transformsDoc, captureStills, captureDir,
-                                            &captured](bool finishOk, const QString &finishError,
-                                                       int executedCount, bool stopped,
-                                                       int /*capturedFromExec*/,
-                                                       qint64 elapsedMs) {
+                                            &captured, appendTransformsJson, useStage,
+                                            &sessionActive](
+                                               bool finishOk, const QString &finishError,
+                                               int executedCount, bool stopped,
+                                               int /*capturedFromExec*/,
+                                               qint64 elapsedMs) {
+                parkStageAtMvsAfterExecuteIfUsed(host_, useStage, sessionActive);
                 if (captureStills && !transformsDoc.frames.empty())
                 {
                     QString writeError;
-                    if (!writeTransformsJson(captureDir, transformsDoc, &writeError))
+                    if (!writeTransformsJson(captureDir, transformsDoc, &writeError,
+                                             appendTransformsJson))
                     {
                         QMetaObject::invokeMethod(
                             this,
@@ -2813,107 +3358,26 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
                                                 const int sampleIndex) -> bool {
                 if (!captureStills)
                     return true;
-
-                hf::bfs::BfsRgbFrame frame;
-                bool gotFrame = false;
-                QMetaObject::invokeMethod(
-                    this,
-                    [this, &frame, &gotFrame]() {
-                        if (host_->bfsPanel() != nullptr)
-                            gotFrame = host_->bfsPanel()->tryCopyLastFrame(frame);
-                    },
-                    Qt::BlockingQueuedConnection);
-
-                if (!gotFrame)
-                {
-                    QMetaObject::invokeMethod(
-                        this,
-                        [this, ringIndex, sampleIndex]() {
-                            if (ringIndex < 0)
-                            {
-                                host_->appendLog(QStringLiteral(
-                                    "UR3e semi-fixed capture: no BFS frame at top — "
-                                    "skipping still."));
-                            }
-                            else
-                            {
-                                host_->appendLog(
-                                    QStringLiteral(
-                                        "UR3e semi-fixed capture: no BFS frame at ring %1 "
-                                        "sample %2 — skipping still.")
-                                        .arg(ringIndex)
-                                        .arg(sampleIndex));
-                            }
-                        },
-                        Qt::QueuedConnection);
-                    return true;
-                }
-
-                Ur3eScanTcpPose tcpForPose = plannedTcp;
-                QString poseSource = QStringLiteral("planned_world_fallback");
-                const Ur3ePoseResult livePose = ur3eGetTcpPose(serverUrl);
-                if (livePose.ok)
-                {
-                    tcpForPose = scanTcpFromLivePose(livePose.pose, plannedTcp);
-                    poseSource = QStringLiteral("live_tf_base_hyperfusion_tcp");
-                }
-
-                const QString stem =
-                    QStringLiteral("%1").arg(captured, 5, 10, QLatin1Char('0'));
-                const QString tiffPath =
-                    QDir(captureDir).filePath(stem + QStringLiteral(".tif"));
-                const std::string saveError = hf::bfs::saveRgb8AsTiff(
-                    tiffPath, frame.width, frame.height, frame.rgb.data(), frame.rgb.size());
-                if (!saveError.empty())
-                    return false;
-
-                const auto &cfg = hf::hardwareConfig().ur3e;
-                CameraIntrinsics intrinsics;
-                intrinsics.fx = cfg.bfsCameraFx;
-                intrinsics.fy = cfg.bfsCameraFy;
-                intrinsics.width = frame.width;
-                intrinsics.height = frame.height;
-                intrinsics.cx = cfg.bfsCameraCx > 0.0
-                                    ? cfg.bfsCameraCx
-                                    : (frame.width > 0 ? 0.5 * static_cast<double>(frame.width)
-                                                       : 0.0);
-                intrinsics.cy = cfg.bfsCameraCy > 0.0
-                                    ? cfg.bfsCameraCy
-                                    : (frame.height > 0 ? 0.5 * static_cast<double>(frame.height)
-                                                        : 0.0);
-                intrinsics.distortion = cfg.bfsCameraDistortion;
-
-                const Mat4 c2w = cameraToWorldOpenGlFromTcp(tcpForPose);
-                const CameraExtrinsicsRt extrinsics = cameraExtrinsicsOpenCvFromTcp(tcpForPose);
-                const QString imageName = stem + QStringLiteral(".tif");
-                const QString poseJsonPath =
-                    QDir(captureDir).filePath(stem + QStringLiteral(".json"));
-                QString poseError;
-                const CalibrationCaptureExtras calib = extrasFromLivePose(livePose);
-                if (!calib.haveFlange)
-                {
-                    QMetaObject::invokeMethod(
-                        this,
-                        [this]() {
-                            host_->appendLog(QStringLiteral(
-                                "UR3e semi-fixed capture: no base_T_flange (live tool0 TF "
-                                "missing) — still not usable for hand-eye."));
-                        },
-                        Qt::QueuedConnection);
-                }
-                if (!writeCameraPoseJson(poseJsonPath, tcpForPose, c2w, extrinsics, intrinsics,
-                                         imageName, poseSource, &plannedTcp, &poseError, &calib))
-                    return false;
-
-                if (transformsDoc.intrinsics.width <= 0)
-                    transformsDoc.intrinsics = intrinsics;
-                TransformsJsonFrame entry;
-                entry.filePathStem = stem;
-                entry.transformMatrix = c2w;
-                entry.extrinsics = extrinsics;
-                transformsDoc.frames.push_back(std::move(entry));
-                ++captured;
-                return true;
+                const QString skipContext =
+                    ringIndex < 0
+                        ? QStringLiteral("top")
+                        : QStringLiteral("ring %1 sample %2").arg(ringIndex).arg(sampleIndex);
+                const bool pinIsApex = ringIndex < 0;
+                const OutputPoseShift shiftForPin =
+                    (outputShift.apply && (applyApexShiftAlways || pinIsApex)) ? outputShift
+                                                                               : OutputPoseShift{};
+                return capturePinStillsMaybeFpp(this,
+                                                host_,
+                                                serverUrl,
+                                                captureDir,
+                                                plannedTcp,
+                                                &captured,
+                                                &transformsDoc,
+                                                nullptr,
+                                                nullptr,
+                                                skipContext,
+                                                sessionActive,
+                                                shiftForPin);
             };
 
             SemiFixedScanExecuteInput input;
@@ -2923,6 +3387,8 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
             input.stabilizeMs = stabilizeMs;
             input.sessionId = sessionId;
             input.wristSweep = wristSweep;
+            input.skipTop = skipTop;
+            input.skipRings = skipRings;
 
             SemiFixedScanExecuteHost hostHooks;
             hostHooks.sessionActive = sessionActive;
@@ -2982,6 +3448,22 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
                     Qt::QueuedConnection);
             };
             hostHooks.captureStill = captureStillAtPose;
+            if (useStage)
+            {
+                hostHooks.moveStage = [this, &sessionActive](const double targetMm,
+                                                             const QString &label,
+                                                             QString *errorOut) {
+                    return waitMoveStageAbsolute(
+                        host_,
+                        targetMm,
+                        label,
+                        [this, &sessionActive]() {
+                            return sessionActive()
+                                   && !stopRequested_.load(std::memory_order_acquire);
+                        },
+                        errorOut);
+                };
+            }
             hostHooks.finish = finishWithCapture;
 
             runSemiFixedScanExecute(input, hostHooks);

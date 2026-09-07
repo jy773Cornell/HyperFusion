@@ -111,6 +111,7 @@ qt_add_executable(app WIN32
     src/frontend/controllers/Ur3ePanelController.cpp
     src/frontend/controllers/BfsPanelController.cpp
     src/frontend/controllers/DlpPanelController.cpp
+    src/frontend/widgets/DlpHdmiPatternWindow.cpp
     src/frontend/logging/AppLog.cpp
     src/frontend/logging/AppLogSession.cpp
     src/frontend/widgets/MainWindowTabHelpers.cpp
@@ -145,6 +146,7 @@ qt_add_executable(app WIN32
     include/frontend/widgets/Ur3eJointBarWidget.hpp
     include/frontend/widgets/BfsCameraSettingsWidget.hpp
     include/frontend/widgets/DlpProjectorSettingsWidget.hpp
+    include/frontend/widgets/DlpHdmiPatternWindow.hpp
     include/frontend/widgets/LumoCameraUi.hpp
     include/frontend/widgets/WaterfallDisplayWidget.hpp
     include/frontend/widgets/StreamPaneHelpers.hpp
@@ -219,6 +221,7 @@ qt_add_executable(app WIN32
     src/backend/multiview/BfsSpinnakerCamera.cpp
     src/backend/multiview/BfsCameraWorker.cpp
     src/backend/fpp/DlpProjectorWorker.cpp
+    src/backend/fpp/DlpHdmiPatterns.cpp
     src/backend/multiview/BfsTiffIo.cpp
     src/backend/multiview/Ur3eCameraTransforms.cpp
     src/backend/multiview/Ur3eScanPlanCache.cpp
@@ -273,6 +276,7 @@ qt_add_executable(app WIN32
     include/backend/multiview/BfsSpinnakerCamera.hpp
     include/backend/multiview/BfsCameraWorker.hpp
     include/backend/fpp/DlpTypes.hpp
+    include/backend/fpp/DlpHdmiPatterns.hpp
     include/backend/fpp/DlpProjectorWorker.hpp
     include/backend/multiview/BfsTiffIo.hpp
     include/backend/multiview/Ur3eCameraTransforms.hpp

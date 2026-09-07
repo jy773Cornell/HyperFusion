@@ -1,7 +1,7 @@
 """Register the vendored SAM2 package when the repo folder is named `gsam2`.
 
 The Meta SAM2 Python tree uses `import sam2.*` everywhere. HyperFusion keeps that
-tree under `resources/gsam2/` (not `resources/sam2/`). Call `ensure_sam2_package()`
+tree under `app/sidecars/gsam2/` (not `resources/sam2/`). Call `ensure_sam2_package()`
 before any `sam2` imports.
 """
 from __future__ import annotations

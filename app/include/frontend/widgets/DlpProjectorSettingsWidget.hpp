@@ -1,5 +1,5 @@
 // DLP3010EVM-LC projector settings panel (frontend/ui).
-// Connect also arms. Blank is the fail-safe. Pattern show drives DLPC test patterns.
+// Connect also arms. Blank is the fail-safe. FPP test is HDMI sine only (no flash/splash).
 #pragma once
 
 #include "backend/fpp/DlpTypes.hpp"

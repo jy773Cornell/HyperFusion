@@ -29,4 +29,4 @@ echo "Port ${PORT} status:"
 ss -tln 2>/dev/null | grep ":${PORT} " || echo "  free"
 
 echo "Done. Start sidecar from HyperFusion app or:"
-echo "  cd resources/ur3e && ./venv/bin/ur3e_server --port ${PORT} ..."
+echo "  cd app/sidecars/ur3e && ./venv/bin/ur3e_server --port ${PORT} ..."

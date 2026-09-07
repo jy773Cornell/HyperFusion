@@ -184,7 +184,8 @@ Mat4 cameraToWorldOpenGlFromTcp(const Ur3eScanTcpPose &tcp) {
 
 bool writeTransformsJson(const QString &directory,
                          const TransformsJsonDocument &doc,
-                         QString *errorMessage) {
+                         QString *errorMessage,
+                         const bool appendExisting) {
   if (directory.isEmpty()) {
     if (errorMessage != nullptr)
       *errorMessage = QStringLiteral("transforms.json directory is empty.");
@@ -248,6 +249,19 @@ bool writeTransformsJson(const QString &directory,
   }
 
   QJsonArray frames;
+  if (appendExisting) {
+    const QString existingPath = dir.filePath(QStringLiteral("transforms.json"));
+    QFile existing(existingPath);
+    if (existing.exists() && existing.open(QIODevice::ReadOnly | QIODevice::Text)) {
+      const QJsonDocument existingDoc = QJsonDocument::fromJson(existing.readAll());
+      existing.close();
+      if (existingDoc.isObject()) {
+        const QJsonArray prior = existingDoc.object().value(QStringLiteral("frames")).toArray();
+        for (const QJsonValue &value : prior)
+          frames.append(value);
+      }
+    }
+  }
   for (const TransformsJsonFrame &frame : doc.frames) {
     QJsonObject entry;
     entry.insert(QStringLiteral("file_path"), frame.filePathStem);
@@ -263,6 +277,14 @@ bool writeTransformsJson(const QString &directory,
     entry.insert(QStringLiteral("transform_matrix"), matrix);
     entry.insert(QStringLiteral("extrinsics"),
                  extrinsicsToJson(frame.extrinsics));
+    if (frame.fppStepIndex >= 0)
+    {
+      entry.insert(QStringLiteral("fpp_step_index"), frame.fppStepIndex);
+      if (!frame.fppStepLabel.isEmpty())
+        entry.insert(QStringLiteral("fpp_step_label"), frame.fppStepLabel);
+      if (!frame.fppPattern.isEmpty())
+        entry.insert(QStringLiteral("fpp_pattern"), frame.fppPattern);
+    }
     frames.append(entry);
   }
   root.insert(QStringLiteral("frames"), frames);
@@ -378,6 +400,32 @@ bool writeCameraPoseJson(const QString &jsonPath, const Ur3eScanTcpPose &tcp,
     root.insert(QStringLiteral("base_T_flange"), baseTFlangeJson(*calib));
   else
     root.insert(QStringLiteral("base_T_flange"), QJsonValue::Null);
+
+  if (calib != nullptr && calib->fppStepIndex >= 0)
+  {
+    root.insert(QStringLiteral("fpp_step_index"), calib->fppStepIndex);
+    if (!calib->fppStepLabel.isEmpty())
+      root.insert(QStringLiteral("fpp_step_label"), calib->fppStepLabel);
+    if (!calib->fppPattern.isEmpty())
+      root.insert(QStringLiteral("fpp_pattern"), calib->fppPattern);
+  }
+
+  if (calib != nullptr && calib->haveOutputStageShift)
+  {
+    QJsonObject stage;
+    stage.insert(QStringLiteral("capture_position_mm"), calib->stageCapturePositionMm);
+    stage.insert(QStringLiteral("output_position_mm"), calib->stageOutputPositionMm);
+    QJsonObject shift;
+    shift.insert(QStringLiteral("x_m"), calib->outputShiftXM);
+    shift.insert(QStringLiteral("y_m"), calib->outputShiftYM);
+    shift.insert(QStringLiteral("z_m"), calib->outputShiftZM);
+    stage.insert(QStringLiteral("output_translation_m"), shift);
+    stage.insert(QStringLiteral("note"),
+                 QStringLiteral("Camera t / extrinsics translated from apex stage pose "
+                                "to sample_multiview_position_mm (sample-static / MVS frame). "
+                                "FPP undoes output_translation_m to recover room TF."));
+    root.insert(QStringLiteral("stage_output"), stage);
+  }
 
   if (calib != nullptr && !calib->jointsRad.empty()) {
     QJsonArray joints;

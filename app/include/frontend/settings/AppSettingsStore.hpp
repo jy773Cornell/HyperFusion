@@ -102,7 +102,7 @@ struct PersistedUr3eHemisphereScanSettings
 struct PersistedDlpProjectorSettings
 {
     QString deviceId;
-    QString testPattern = QStringLiteral("FPP scanning");
+    QString testPattern = QStringLiteral("FPP HDMI");
     /// Negative = use hyperfusion.cfg defaults.
     int ledRedMa = -1;
     int ledGreenMa = -1;

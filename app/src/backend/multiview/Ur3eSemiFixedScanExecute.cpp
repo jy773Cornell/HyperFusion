@@ -696,11 +696,25 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
                                         : QStringLiteral(", motion-only")));
     }
 
-    // Always: MoveIt → top (θ=0 look-down) → photo, then rings.
+    // Always: MoveIt → top (θ=0 look-down) → photo, then rings (unless a two-stage MVS split).
     // Preview stores rings at [0..N-1] and top at index N (see inferSemiFixedPreviewRings).
+    const auto &hw = hf::hardwareConfig();
+    if (host.moveStage && !input.skipTop)
+    {
+        QString stageErr;
+        if (!host.moveStage(hw.sampleMultiviewApexPositionMm, QStringLiteral("apex"), &stageErr))
+        {
+            ok = false;
+            errorMessage = stageErr.isEmpty() ? QStringLiteral("Stage apex move failed") : stageErr;
+            finishNow(false, stopRequested());
+            return;
+        }
+    }
+
     const int topPreviewIndex = ringCount;
     std::vector<double> lastEntryBranch;
     bool hasLastEntryBranch = false;
+    if (!input.skipTop)
     {
         Ur3eSemiFixedRoute routeCopy = input.route;
         ensureSemiFixedTopPose(routeCopy);
@@ -804,6 +818,19 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
             host.log(QStringLiteral("UR3e semi-fixed: top still done."));
     }
 
+    // After the first (apex) still: MVS ring plane, not home — even on apex-only.
+    if (host.moveStage && hw.sampleMultiviewTwoStage() && !input.skipTop)
+    {
+        QString stageErr;
+        if (!host.moveStage(hw.sampleMultiviewPositionMm, QStringLiteral("MVS rings"), &stageErr))
+        {
+            ok = false;
+            errorMessage = stageErr.isEmpty() ? QStringLiteral("Stage MVS move failed") : stageErr;
+            goto semi_fixed_done;
+        }
+    }
+
+    if (!input.skipRings)
     for (int ringIndex = 0; ringIndex < ringCount; ++ringIndex)
     {
         if (!sessionOk() || stopRequested())

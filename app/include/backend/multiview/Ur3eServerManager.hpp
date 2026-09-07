@@ -44,6 +44,8 @@ private:
     void setState(State state, const QString &detail = QString());
     QString buildLaunchCommand() const;
     void markUnavailable();
+    QString launchFailureDetail(const QString &prefix) const;
+    void ingestProcessOutput(const QByteArray &chunk, const bool emitToUi);
     void beginAsyncCleanup();
     void onCleanupFinished();
     void checkHealthThenLaunch();
@@ -55,6 +57,7 @@ private:
     QProcess cleanupProcess_;
     State state_ = State::Unavailable;
     QString lastDetail_;
+    QString lastLaunchOutput_;
     int healthPollAttempts_ = 0;
     bool silentMode_ = false;
     bool cleanupBeforeLaunch_ = false;

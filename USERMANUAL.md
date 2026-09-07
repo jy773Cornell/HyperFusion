@@ -323,11 +323,11 @@ Idle, reflectance, and transmittance intensity percentages.
 
 ### `[segmentation]` (optional GSAM)
 
-WSL distro, port, and model paths for the GSAM2 sidecar. See `resources/gsam2/envsetup.md`.
+WSL distro, port, and model paths for the GSAM2 sidecar. See `app/sidecars/gsam2/envsetup.md`.
 
 ### `[fusion]` (dual-camera)
 
-Offline **spatial registration** and **spectral fusion** of FX10e + SWIR3 (Python subprocess). See §11 and `resources/hf_fusion/README.md`.
+Offline **spatial registration** and **spectral fusion** of FX10e + SWIR3 (Python subprocess). See §11 and `app/sidecars/hf_fusion/README.md`.
 
 
 | Key | Meaning |
@@ -335,7 +335,7 @@ Offline **spatial registration** and **spectral fusion** of FX10e + SWIR3 (Pytho
 | `fusion_margin_mm` | Crop margin around chip masks when fusing (default **5.0** mm) |
 | `fusion_timeout_ms` | Max wait for one fusion subprocess (default 3600000 ms) |
 
-Pipeline and Python venv are always `resources/hf_fusion/` and `resources/hf_fusion/.venv/` (run `setup_venv.ps1` once there).
+Pipeline and Python venv are always `app/sidecars/hf_fusion/` and `app/sidecars/hf_fusion/.venv/` (run `setup_venv.ps1` once there).
 
 
 Spatial scales for alignment come from `[camera_calibration]` (`fx10e_spatial_mm_per_pixel`, `swir3_spatial_mm_per_pixel`).
@@ -389,7 +389,7 @@ Re-run **Preprocess** on an existing session to apply this to already-captured S
 
 Post-capture object segmentation via a **WSL Python server** (similar pattern to a sidecar service).
 
-1. Set up WSL per `resources/gsam2/envsetup.md`.
+1. Set up WSL per `app/sidecars/gsam2/envsetup.md`.
 2. Configure `[segmentation]` in `hyperfusion.cfg`.
 3. HyperFusion can auto-start the server on launch when `warmup_on_start = true`.
 
@@ -449,12 +449,12 @@ Use **Run fusion on session…** in the Preprocessing group to pick a session fo
 | Symptom | Check |
 | ------- | ----- |
 | Fusion checkbox greyed out | Both cameras connected and selected; preprocessing enabled; staged scan mode. |
-| `fusion_cli.py not found` | Ensure the repo has `resources/hf_fusion/fusion_cli.py` (app resolves that path). |
-| Python / venv missing | Run `resources/hf_fusion/setup_venv.ps1` once. |
+| `fusion_cli.py not found` | Ensure the repo has `app/sidecars/hf_fusion/fusion_cli.py` (app resolves that path). |
+| Python / venv missing | Run `app/sidecars/hf_fusion/setup_venv.ps1` once. |
 | `Object count mismatch` | FX10e and SWIR3 must detect the **same number** of chips (sorted left-to-right pairing). |
 | Prerequisites error in log | Missing RGB, FFC, or segmentation under one or both cameras for that mode. |
 
-Developer setup: **SETUP.md** §5 and `resources/hf_fusion/README.md`.
+Developer setup: **SETUP.md** §5 and `app/sidecars/hf_fusion/README.md`.
 
 ---
 

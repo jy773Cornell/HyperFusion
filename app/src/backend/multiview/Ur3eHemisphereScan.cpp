@@ -96,7 +96,7 @@ generateHemisphereScanPoints(const Ur3eHemisphereScanParams &params)
     std::vector<Ur3eHemisphereScanPoint> points;
     points.reserve(static_cast<std::size_t>(hemisphereScanPointCount(normalized)));
 
-    // Apex over home TCP XY (reachable look-down); rings orbit base XY.
+    // Apex over home camera-TCP XY (reachable look-down); rings orbit base XY.
     points.push_back(makeApexScanPoint(normalized.sphereRadiusM, apexXM, apexYM));
 
     for (const double thetaDeg : thetaSamples)

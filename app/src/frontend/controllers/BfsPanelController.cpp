@@ -26,7 +26,9 @@
 #include <QSizePolicy>
 #include <QTimer>
 
+#include <chrono>
 #include <string>
+#include <thread>
 
 namespace hf::bfs
 {
@@ -224,6 +226,43 @@ bool BfsPanelController::tryCopyLastFrame(BfsRgbFrame &out) const
     }
     out = *lastFrame_;
     return true;
+}
+
+std::uint64_t BfsPanelController::lastFrameIndex() const
+{
+    std::lock_guard<std::mutex> lock(lastFrameMutex_);
+    if (!lastFrame_.has_value())
+        return 0;
+    return lastFrame_->frameIndex;
+}
+
+bool BfsPanelController::waitForNewerFrame(const std::uint64_t afterIndex,
+                                           int minNewFrames,
+                                           int timeoutMs,
+                                           BfsRgbFrame *out) const
+{
+    if (minNewFrames < 1)
+        minNewFrames = 1;
+    if (timeoutMs < 1)
+        timeoutMs = 1;
+    const std::uint64_t need = afterIndex + static_cast<std::uint64_t>(minNewFrames);
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        {
+            std::lock_guard<std::mutex> lock(lastFrameMutex_);
+            if (lastFrame_.has_value() && lastFrame_->frameIndex >= need
+                && lastFrame_->width > 0 && lastFrame_->height > 0)
+            {
+                if (out != nullptr)
+                    *out = *lastFrame_;
+                return true;
+            }
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return false;
 }
 
 void BfsPanelController::onCaptureClicked()

@@ -75,7 +75,12 @@ def wait_connected(base: str, timeout_s: float = 180.0) -> None:
     health = http_json("GET", f"{base}/health", timeout=10.0)
     if health.get("robot_connected"):
         return
-    http_json("POST", f"{base}/connect/start", body={}, timeout=30.0)
+    try:
+        http_json("POST", f"{base}/connect/start", body={}, timeout=30.0)
+    except urllib.error.HTTPError as exc:
+        # Already connecting (or a stale 500) — poll status instead of aborting.
+        if exc.code not in (409, 500):
+            raise
     t0 = time.time()
     while time.time() - t0 < timeout_s:
         st = http_json("GET", f"{base}/connect/status", timeout=10.0)
@@ -243,15 +248,23 @@ def _is_apex_pose(pose: dict[str, Any]) -> bool:
 
 def robot_cfg_fingerprint(cfg: dict[str, Any]) -> str:
     home = cfg.get("home_joints_deg") or [90, -180, 145, -55, 90, -90]
+    tcp = {
+        "x": float(cfg.get("tool_tcp_x_mm", 0.715)),
+        "y": float(cfg.get("tool_tcp_y_mm", -54.197)),
+        "z": float(cfg.get("tool_tcp_z_mm", 73.755)),
+        "roll": float(cfg.get("tool_tcp_roll_deg", -1.9138)),
+        "pitch": float(cfg.get("tool_tcp_pitch_deg", 0.7450)),
+        "yaw": float(cfg.get("tool_tcp_yaw_deg", 0.2868)),
+    }
     fp = {
         "schema": CACHE_SCHEMA,
         "ur_type": str(cfg.get("ur_type", "ur3e")),
-        "tool_tcp_x_mm": float(cfg.get("tool_tcp_x_mm", 0.715)),
-        "tool_tcp_y_mm": float(cfg.get("tool_tcp_y_mm", -54.197)),
-        "tool_tcp_z_mm": float(cfg.get("tool_tcp_z_mm", 73.755)),
-        "tool_tcp_roll_deg": float(cfg.get("tool_tcp_roll_deg", -1.9138)),
-        "tool_tcp_pitch_deg": float(cfg.get("tool_tcp_pitch_deg", 0.7450)),
-        "tool_tcp_yaw_deg": float(cfg.get("tool_tcp_yaw_deg", 0.2868)),
+        "tool_tcp_x_mm": tcp["x"],
+        "tool_tcp_y_mm": tcp["y"],
+        "tool_tcp_z_mm": tcp["z"],
+        "tool_tcp_roll_deg": tcp["roll"],
+        "tool_tcp_pitch_deg": tcp["pitch"],
+        "tool_tcp_yaw_deg": tcp["yaw"],
         "tool_payload_shape": str(cfg.get("tool_payload_shape", "mesh")),
         "tool_payload_mesh": str(cfg.get("tool_payload_mesh", "ur_tool_payload.stl")),
         "tool_payload_radius_mm": float(cfg.get("tool_payload_radius_mm", 80.0)),

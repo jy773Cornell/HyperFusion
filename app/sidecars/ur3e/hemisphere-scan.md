@@ -1,4 +1,4 @@
-﻿#  Hemisphere Scan — Technical Report
+#  Hemisphere Scan — Technical Report
 
 **HyperFusion** | Ceiling-mounted UR3e | MoveIt-backed dome scan over sample tray
 
@@ -482,6 +482,7 @@ Scan complete (summary: executed / skipped)
 - **Settle** at each pose from `scan_capture_stabilize_ms` in `[multiview]` (default **500 ms**), for both motion-only Execute and BFS still capture
 - **Wrist sweep** (Scanning GUI): after the nominal pin, permute selected wrists by ±steps×step → **(2N)^k+1** poses per pin; wrist hops are **hardware** joint moves; failed offsets skipped; return-to-nominal abort on failure
 - **UR3e Execute + BFS connected:** folder dialog → `multiview_yyyyMMdd_HHmmss/` → settle + BFS TIFF + `transforms.json` (same still pipeline as Capture Record Multiview); works motion-only when no capture folder
+- **Stage (if connected):** Execute moves to `sample_multiview_apex_position_mm` for the apex pin, then `sample_multiview_position_mm` for rings. If the stage is not connected, those cfg values are ignored.
 - Joint poll ~**100 ms** during motion (async, non-blocking UI)
 - MoveIt motion timeout up to **120 s** per leg
 
@@ -491,8 +492,8 @@ When **Multiview RGB** is enabled on the Capture tab (BFS + UR3e connected + pla
 
 | Button | Behavior |
 | ------ | -------- |
-| **Preview** | Same as UR3e **Execute** (motion only; no photos; wrist sweep still runs) |
-| **Record** | If HSI modes/cameras selected → existing HSI Record first; then stage → `sample_multiview_position_mm` (default **1600**), hemisphere scan with cfg settle + wrist grid + BFS TIFF per pose |
+| **Preview** | Same as UR3e **Execute** (motion only; no photos; wrist sweep still runs). Stage apex→MVS if connected. |
+| **Record** | If HSI modes/cameras selected → existing HSI Record first; then stage → `sample_multiview_apex_position_mm` (apex stills) → `sample_multiview_position_mm` (rings), with cfg settle + wrist grid + BFS TIFF per pose |
 
 Stills land in `{dataset}/multiview/00000.tif` + matching `00000.json` (per-image optical TCP pose) plus aggregate `transforms.json` (OpenGL `camera_to_world`). Multiview-only Record (no HSI) creates the dataset folder and writes only `multiview/`.
 
@@ -869,7 +870,7 @@ If the pendant shows **External Control speed limit** on **joint 5** (wrist_3) o
 | MoveIt planner | `hyperfusion_ur3e/moveit/scan_planner.py`                                   |
 | URDF / TCP     | `urdf/hyperfusion_ur3e.urdf.xacro`, `urdf/hyperfusion_tool_payload.xacro`           |
 | Tool/TCP env   | `hyperfusion_ur3e/urdf/tool_payload_config.py`, `materialize_robot_description.py`  |
-| This report    | `resources/ur3e/hemisphere-scan.md`                                                 |
+| This report    | `app/sidecars/ur3e/hemisphere-scan.md`                                                 |
 
 
 ---

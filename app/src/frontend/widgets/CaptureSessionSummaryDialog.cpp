@@ -1,5 +1,5 @@
 // Recording-complete summary dialog (frontend/ui): tab per mode/camera.
-// Resizable; click a thumbnail to open a full-size image preview.
+// Each page is a master-detail gallery: clickable thumbs left, large image right.
 #include "frontend/widgets/CaptureSessionSummaryDialog.hpp"
 
 #include <QCursor>
@@ -7,16 +7,18 @@
 #include <QDir>
 #include <QFileInfo>
 #include <QFrame>
-#include <QGridLayout>
+#include <QHBoxLayout>
 #include <QLabel>
 #include <QMouseEvent>
 #include <QPixmap>
+#include <QResizeEvent>
 #include <QScrollArea>
 #include <QSizePolicy>
 #include <QTabWidget>
 #include <QVBoxLayout>
 
 #include <algorithm>
+#include <functional>
 #include <utility>
 #include <vector>
 
@@ -27,17 +29,16 @@ CaptureSessionSummaryDialog::CaptureSessionSummaryDialog(QWidget *parent)
 
 namespace
 {
-constexpr int kCellImageWidth = 320;
-constexpr int kCellImageHeight = 140;
-constexpr int kSpectraImageWidth = 680;
-constexpr int kSpectraImageHeight = 300;
-constexpr int kDialogWidth = 752;
-constexpr int kDialogHeight = 860;
+constexpr int kThumbWidth = 176;
+constexpr int kThumbHeight = 110;
+constexpr int kSidebarWidth = 204;
+constexpr int kDialogWidth = 1080;
+constexpr int kDialogHeight = 720;
 
-struct StreamImageSection
+struct GalleryItem
 {
     QString title;
-    QStringList paths;
+    QString path;
 };
 
 int streamSortRank(const QString &relativeRoot)
@@ -87,31 +88,24 @@ QStringList collectMatching(const QDir &dir, const QStringList &nameFilters)
     return paths;
 }
 
-std::vector<StreamImageSection> collectStreamImageSections(const QString &sessionDirectory,
-                                                           const QString &relativeRoot)
+void appendIfExists(std::vector<GalleryItem> *items, const QString &title, const QString &path)
+{
+    if (items == nullptr || path.isEmpty() || !QFileInfo::exists(path))
+        return;
+    items->push_back(GalleryItem{title, path});
+}
+
+std::vector<GalleryItem> collectStreamGalleryItems(const QString &sessionDirectory,
+                                                   const QString &relativeRoot)
 {
     const QDir preprocessed = resolvePreprocessedDir(sessionDirectory, relativeRoot);
     const QDir segmentation(preprocessed.filePath(QStringLiteral("segmentation")));
     const QDir preview(QDir(sessionDirectory).filePath(QStringLiteral("preview")));
 
-    std::vector<StreamImageSection> sections;
+    std::vector<GalleryItem> items;
+    appendIfExists(&items, QStringLiteral("ROI spectra"),
+                   segmentation.filePath(QStringLiteral("roi_spectra_plot.png")));
 
-    StreamImageSection darkRef;
-    darkRef.title = QStringLiteral("Dark reference");
-    const QString dark = firstExisting(preprocessed, {QStringLiteral("DARKREF_*_ref_plot.png")});
-    if (!dark.isEmpty())
-        darkRef.paths.push_back(dark);
-    sections.push_back(std::move(darkRef));
-
-    StreamImageSection whiteRef;
-    whiteRef.title = QStringLiteral("White reference");
-    const QString white = firstExisting(preprocessed, {QStringLiteral("WHITEREF_*_ref_plot.png")});
-    if (!white.isEmpty())
-        whiteRef.paths.push_back(white);
-    sections.push_back(std::move(whiteRef));
-
-    StreamImageSection rgb;
-    rgb.title = QStringLiteral("Processed RGB");
     QStringList rgbPaths = collectMatching(preprocessed, {QStringLiteral("*_rgb.png")});
     if (rgbPaths.isEmpty() && preview.exists() && !relativeRoot.trimmed().isEmpty())
     {
@@ -123,178 +117,220 @@ std::vector<StreamImageSection> collectStreamImageSections(const QString &sessio
         if (QFileInfo::exists(previewRgb))
             rgbPaths.push_back(previewRgb);
     }
-    rgb.paths = std::move(rgbPaths);
-    sections.push_back(std::move(rgb));
-
-    StreamImageSection overlay;
-    overlay.title = QStringLiteral("Segmentation overview");
-    const QString overlayPath = segmentation.filePath(QStringLiteral("overlay.png"));
-    if (QFileInfo::exists(overlayPath))
-        overlay.paths.push_back(overlayPath);
-    sections.push_back(std::move(overlay));
-
-    StreamImageSection spectra;
-    spectra.title = QStringLiteral("ROI spectra");
-    const QString spectraPath = segmentation.filePath(QStringLiteral("roi_spectra_plot.png"));
-    if (QFileInfo::exists(spectraPath))
-        spectra.paths.push_back(spectraPath);
-    sections.push_back(std::move(spectra));
-
-    return sections;
-}
-
-void showImagePreview(QWidget *parent, const QString &path)
-{
-    QDialog preview(parent);
-    preview.setWindowTitle(QFileInfo(path).fileName());
-    preview.setMinimumSize(480, 360);
-    preview.resize(960, 720);
-    preview.setSizeGripEnabled(true);
-
-    auto *layout = new QVBoxLayout(&preview);
-    layout->setContentsMargins(8, 8, 8, 8);
-    auto *scroll = new QScrollArea(&preview);
-    scroll->setWidgetResizable(true);
-    auto *image = new QLabel(scroll);
-    image->setAlignment(Qt::AlignCenter);
-    const QPixmap pixmap(path);
-    if (pixmap.isNull())
-        image->setText(path);
+    if (rgbPaths.size() == 1)
+        appendIfExists(&items, QStringLiteral("Processed RGB"), rgbPaths.front());
     else
-        image->setPixmap(pixmap);
-    scroll->setWidget(image);
-    layout->addWidget(scroll, 1);
+    {
+        for (const QString &path : rgbPaths)
+            appendIfExists(&items, QFileInfo(path).completeBaseName(), path);
+    }
 
-    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &preview);
-    QObject::connect(buttons, &QDialogButtonBox::rejected, &preview, &QDialog::reject);
-    QObject::connect(buttons, &QDialogButtonBox::accepted, &preview, &QDialog::accept);
-    layout->addWidget(buttons);
-    preview.exec();
+    appendIfExists(&items, QStringLiteral("Segmentation overlay"),
+                   segmentation.filePath(QStringLiteral("overlay.png")));
+    appendIfExists(&items, QStringLiteral("Dark reference"),
+                   firstExisting(preprocessed, {QStringLiteral("DARKREF_*_ref_plot.png")}));
+    appendIfExists(&items, QStringLiteral("White reference"),
+                   firstExisting(preprocessed, {QStringLiteral("WHITEREF_*_ref_plot.png")}));
+    return items;
 }
 
-class ClickableImageLabel final : public QLabel
+class ScaledPixmapLabel final : public QLabel
 {
 public:
-    ClickableImageLabel(QWidget *parent, QString path)
+    explicit ScaledPixmapLabel(QWidget *parent)
         : QLabel(parent)
-        , path_(std::move(path))
     {
-        setCursor(Qt::PointingHandCursor);
+        setAlignment(Qt::AlignCenter);
+        setMinimumSize(240, 180);
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        setStyleSheet(QStringLiteral("background: #111111; color: #aaaaaa;"));
     }
+
+    void setSourcePath(const QString &path)
+    {
+        path_ = path;
+        source_ = path.isEmpty() ? QPixmap() : QPixmap(path);
+        if (source_.isNull())
+        {
+            setPixmap(QPixmap());
+            setText(path.isEmpty() ? QStringLiteral("Not available.") : QFileInfo(path).fileName());
+            setToolTip({});
+            return;
+        }
+        setText({});
+        setToolTip(path);
+        updateScaled();
+    }
+
+protected:
+    void resizeEvent(QResizeEvent *event) override
+    {
+        QLabel::resizeEvent(event);
+        updateScaled();
+    }
+
+private:
+    void updateScaled()
+    {
+        if (source_.isNull())
+            return;
+        const QSize avail = size();
+        if (avail.width() < 8 || avail.height() < 8)
+            return;
+        setPixmap(source_.scaled(avail, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+    }
+
+    QString path_;
+    QPixmap source_;
+};
+
+class ThumbnailCard final : public QFrame
+{
+public:
+    ThumbnailCard(QWidget *parent, const GalleryItem &item)
+        : QFrame(parent)
+        , path_(item.path)
+    {
+        setObjectName(QStringLiteral("SummaryThumb"));
+        setCursor(Qt::PointingHandCursor);
+        setFixedWidth(kSidebarWidth - 20);
+        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+
+        auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(4, 4, 4, 4);
+        layout->setSpacing(2);
+
+        auto *image = new QLabel(this);
+        image->setAlignment(Qt::AlignCenter);
+        image->setFixedSize(kThumbWidth, kThumbHeight);
+        image->setStyleSheet(QStringLiteral("background: #1a1a1a;"));
+        const QPixmap pixmap(item.path);
+        if (pixmap.isNull())
+            image->setText(QStringLiteral("—"));
+        else
+            image->setPixmap(pixmap.scaled(kThumbWidth, kThumbHeight, Qt::KeepAspectRatio,
+                                           Qt::SmoothTransformation));
+        layout->addWidget(image);
+
+        auto *caption = new QLabel(item.title, this);
+        caption->setAlignment(Qt::AlignCenter);
+        caption->setWordWrap(true);
+        QFont captionFont = caption->font();
+        captionFont.setPointSize(qMax(8, captionFont.pointSize() - 1));
+        caption->setFont(captionFont);
+        layout->addWidget(caption);
+
+        setToolTip(item.path);
+        setSelected(false);
+    }
+
+    const QString &path() const { return path_; }
+
+    void setSelected(const bool on)
+    {
+        setStyleSheet(on ? QStringLiteral(
+                               "QFrame#SummaryThumb { border: 2px solid #2b7de9; background: #e8f1fc; }")
+                         : QStringLiteral(
+                               "QFrame#SummaryThumb { border: 1px solid #c8c8c8; background: #f4f4f4; }"));
+    }
+
+    std::function<void()> onClicked;
 
 protected:
     void mouseReleaseEvent(QMouseEvent *event) override
     {
-        if (event->button() == Qt::LeftButton && !path_.isEmpty())
-            showImagePreview(window(), path_);
-        QLabel::mouseReleaseEvent(event);
+        if (event->button() == Qt::LeftButton && onClicked)
+            onClicked();
+        QFrame::mouseReleaseEvent(event);
     }
 
 private:
     QString path_;
 };
 
-QLabel *resizedImageLabel(QWidget *parent, const QString &path, const int maxW, const int maxH)
+class SummaryGalleryPage final : public QWidget
 {
-    auto *label = new ClickableImageLabel(parent, path);
-    label->setAlignment(Qt::AlignCenter);
-    label->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
-    QPixmap pixmap(path);
-    if (pixmap.isNull())
+public:
+    SummaryGalleryPage(QWidget *parent, const QString &detail, const std::vector<GalleryItem> &items)
+        : QWidget(parent)
     {
-        label->setText(QFileInfo(path).fileName());
-        return label;
+        auto *root = new QVBoxLayout(this);
+        root->setContentsMargins(4, 4, 4, 4);
+        root->setSpacing(4);
+
+        if (!detail.trimmed().isEmpty())
+        {
+            auto *detailLabel = new QLabel(detail, this);
+            detailLabel->setWordWrap(true);
+            root->addWidget(detailLabel);
+        }
+
+        setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+
+        auto *row = new QWidget(this);
+        row->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        auto *rowLayout = new QHBoxLayout(row);
+        rowLayout->setContentsMargins(0, 0, 0, 0);
+        rowLayout->setSpacing(8);
+
+        auto *sideScroll = new QScrollArea(row);
+        sideScroll->setWidgetResizable(true);
+        sideScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+        sideScroll->setFixedWidth(kSidebarWidth);
+        sideScroll->setFrameShape(QFrame::NoFrame);
+
+        auto *sideHost = new QWidget(sideScroll);
+        auto *sideLayout = new QVBoxLayout(sideHost);
+        sideLayout->setContentsMargins(2, 2, 2, 2);
+        sideLayout->setSpacing(6);
+
+        thumbs_.reserve(static_cast<int>(items.size()));
+        for (int i = 0; i < static_cast<int>(items.size()); ++i)
+        {
+            auto *thumb = new ThumbnailCard(sideHost, items[i]);
+            const int index = i;
+            thumb->onClicked = [this, index]() { select(index); };
+            sideLayout->addWidget(thumb, 0, Qt::AlignHCenter);
+            thumbs_.push_back(thumb);
+        }
+        sideLayout->addStretch(1);
+        sideScroll->setWidget(sideHost);
+        rowLayout->addWidget(sideScroll, 0);
+
+        auto *mainFrame = new QFrame(row);
+        mainFrame->setFrameShape(QFrame::StyledPanel);
+        mainFrame->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        auto *mainLayout = new QVBoxLayout(mainFrame);
+        mainLayout->setContentsMargins(4, 4, 4, 4);
+        main_ = new ScaledPixmapLabel(mainFrame);
+        mainLayout->addWidget(main_, 1);
+        rowLayout->addWidget(mainFrame, 1);
+
+        root->addWidget(row, 1);
+
+        if (!items.empty())
+            select(0);
+        else
+            main_->setSourcePath({});
     }
-    pixmap = pixmap.scaled(maxW, maxH, Qt::KeepAspectRatio, Qt::SmoothTransformation);
-    label->setPixmap(pixmap);
-    label->setToolTip(QObject::tr("Click to open preview\n%1").arg(path));
-    return label;
-}
 
-QWidget *makeSectionCard(QWidget *parent,
-                         const StreamImageSection &section,
-                         const int maxW,
-                         const int maxH)
-{
-    auto *card = new QFrame(parent);
-    card->setFrameShape(QFrame::StyledPanel);
-    card->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
-    auto *layout = new QVBoxLayout(card);
-    layout->setContentsMargins(4, 4, 4, 4);
-    layout->setSpacing(2);
-
-    auto *title = new QLabel(section.title, card);
-    QFont titleFont = title->font();
-    titleFont.setBold(true);
-    title->setFont(titleFont);
-    layout->addWidget(title);
-
-    if (section.paths.isEmpty())
+private:
+    void select(const int index)
     {
-        auto *missing = new QLabel(QStringLiteral("Not available."), card);
-        missing->setAlignment(Qt::AlignCenter);
-        missing->setStyleSheet(QStringLiteral("color: #777777;"));
-        layout->addWidget(missing, 1);
-        return card;
+        if (index < 0 || index >= thumbs_.size())
+            return;
+        for (int i = 0; i < thumbs_.size(); ++i)
+            thumbs_[i]->setSelected(i == index);
+        main_->setSourcePath(thumbs_[index]->path());
     }
 
-    for (const QString &path : section.paths)
-        layout->addWidget(resizedImageLabel(card, path, maxW, maxH), 1, Qt::AlignCenter);
-    return card;
-}
+    ScaledPixmapLabel *main_ = nullptr;
+    QVector<ThumbnailCard *> thumbs_;
+};
 
-QWidget *makeStreamPage(QWidget *parent,
-                        const QString &detail,
-                        const std::vector<StreamImageSection> &sections)
+QWidget *makeGalleryPage(QWidget *parent, const QString &detail, const std::vector<GalleryItem> &items)
 {
-    auto *page = new QWidget(parent);
-    auto *layout = new QVBoxLayout(page);
-    layout->setContentsMargins(4, 4, 4, 4);
-    layout->setSpacing(4);
-
-    auto *detailLabel = new QLabel(detail, page);
-    detailLabel->setWordWrap(true);
-    layout->addWidget(detailLabel);
-
-    // Expected order: dark, white, rgb, overlay, spectra.
-    StreamImageSection dark;
-    StreamImageSection white;
-    StreamImageSection rgb;
-    StreamImageSection overlay;
-    StreamImageSection spectra;
-    dark.title = QStringLiteral("Dark reference");
-    white.title = QStringLiteral("White reference");
-    rgb.title = QStringLiteral("Processed RGB");
-    overlay.title = QStringLiteral("Segmentation overview");
-    spectra.title = QStringLiteral("ROI spectra");
-    if (sections.size() > 0)
-        dark = sections[0];
-    if (sections.size() > 1)
-        white = sections[1];
-    if (sections.size() > 2)
-        rgb = sections[2];
-    if (sections.size() > 3)
-        overlay = sections[3];
-    if (sections.size() > 4)
-        spectra = sections[4];
-
-    layout->addWidget(makeSectionCard(page, spectra, kSpectraImageWidth, kSpectraImageHeight), 5);
-
-    auto *lowerHost = new QWidget(page);
-    auto *lowerGrid = new QGridLayout(lowerHost);
-    lowerGrid->setContentsMargins(0, 0, 0, 0);
-    lowerGrid->setHorizontalSpacing(4);
-    lowerGrid->setVerticalSpacing(4);
-    lowerGrid->setColumnStretch(0, 1);
-    lowerGrid->setColumnStretch(1, 1);
-    lowerGrid->setRowStretch(0, 1);
-    lowerGrid->setRowStretch(1, 1);
-    lowerGrid->addWidget(makeSectionCard(lowerHost, dark, kCellImageWidth, kCellImageHeight), 0, 0);
-    lowerGrid->addWidget(makeSectionCard(lowerHost, white, kCellImageWidth, kCellImageHeight), 0, 1);
-    lowerGrid->addWidget(makeSectionCard(lowerHost, rgb, kCellImageWidth, kCellImageHeight), 1, 0);
-    lowerGrid->addWidget(makeSectionCard(lowerHost, overlay, kCellImageWidth, kCellImageHeight), 1, 1);
-    layout->addWidget(lowerHost, 4);
-    return page;
+    return new SummaryGalleryPage(parent, detail, items);
 }
 } // namespace
 
@@ -304,9 +340,10 @@ void CaptureSessionSummaryDialog::execForSession(QWidget *parent,
 {
     CaptureSessionSummaryDialog dialog(parent);
     dialog.setWindowTitle(QObject::tr("Recording complete"));
-    dialog.setMinimumSize(640, 560);
-    dialog.resize(kDialogWidth, kDialogHeight);
+    dialog.setWindowFlags(dialog.windowFlags() | Qt::WindowMinMaxButtonsHint);
     dialog.setSizeGripEnabled(true);
+    dialog.setMinimumSize(640, 420);
+    dialog.resize(kDialogWidth, kDialogHeight);
 
     auto *layout = new QVBoxLayout(&dialog);
     layout->setContentsMargins(8, 8, 8, 8);
@@ -332,6 +369,7 @@ void CaptureSessionSummaryDialog::execForSession(QWidget *parent,
     }
 
     auto *tabs = new QTabWidget(&dialog);
+    tabs->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     std::vector<const CaptureWriterStreamSummary *> ordered;
     for (auto it = summary.streams.cbegin(); it != summary.streams.cend(); ++it)
         ordered.push_back(&it.value());
@@ -348,9 +386,8 @@ void CaptureSessionSummaryDialog::execForSession(QWidget *parent,
     {
         const QString title = stream->relativeRoot.isEmpty() ? stream->baseName : stream->relativeRoot;
         const QString detail = QStringLiteral("%1 sample frames").arg(stream->frameCount);
-        const auto sections =
-            collectStreamImageSections(summary.sessionDirectory, stream->relativeRoot);
-        tabs->addTab(makeStreamPage(&dialog, detail, sections), title);
+        const auto items = collectStreamGalleryItems(summary.sessionDirectory, stream->relativeRoot);
+        tabs->addTab(makeGalleryPage(&dialog, detail, items), title);
     }
 
     if (tabs->count() == 0)

@@ -105,8 +105,12 @@ app/calibration/multiview/
     flange_T_camera.yaml
     base_T_board.yaml
     validation.yaml
+  FPP/                   # flat-surface FPP bursts (26 HDMI PSP frames, u+v)
+  patterns/psp/          # 1280×720 HDMI sine frames shown on the EVM
   scripts/
-    calibrate.py
+    calibrate_bfs.py     # checkerboard K/D + hand-eye
+    calibrate_fpp.py     # DLP plane / projector P
+    generate_psp.py      # regenerate HDMI sine PNGs
     requirements.txt
 ```
 
@@ -189,9 +193,19 @@ Targets: **&lt; 2 mm**, **&lt; 0.5°**, **&lt; 0.5 px**. This set: 0.57 mm, 0.15
 cd app\calibration\multiview
 python -m venv .venv
 .\.venv\Scripts\pip install -r scripts\requirements.txt
-.\.venv\Scripts\python scripts\calibrate.py --images checkerboard --board board.yaml --out results --holdout 8
+.\.venv\Scripts\python scripts\calibrate_bfs.py --images checkerboard --board board.yaml --out results --holdout 8
 ```
 
 Results: `camera_intrinsics.yaml`, `undistort_preview/`, `flange_T_camera.yaml`, `base_T_board.yaml`, `validation.yaml`.
+
+### FPP plane (separate from BFS)
+
+One HDMI PSP burst **per robot pose** (same folder). Each pose gets its own `P` / `u` map.
+
+```powershell
+.\.venv\Scripts\python scripts\calibrate_fpp.py --input FPP --out FPP
+```
+
+Writes `{stem}_fpp_calib.npz` and `fpp_calib_index.json`. Tray Z in `base_link` defaults to `ceiling_mount_height_mm` (not world 0). Sample decode: `app/sidecars/fpp/fpp_cli.py --calib FPP`.
 
 No motion on app start. Calibration capture is an explicit, armed sequence like scan Execute.

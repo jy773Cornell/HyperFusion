@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Create resources/gsam2/venv for the HyperFusion GSAM2 WSL sidecar.
+# Create app/sidecars/gsam2/venv for the HyperFusion GSAM2 WSL sidecar.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -25,6 +25,21 @@ python -m pip install torch torchvision --index-url "$TORCH_INDEX"
 
 echo "==> Installing GSAM2 Python dependencies..."
 python -m pip install -r requirements.txt
+
+CKPT_DIR="$SCRIPT_DIR/checkpoints"
+CKPT="$CKPT_DIR/sam2.1_hiera_large.pt"
+CKPT_URL="${SAM2_CHECKPOINT_URL:-https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_large.pt}"
+if [[ ! -f "$CKPT" ]]; then
+    mkdir -p "$CKPT_DIR"
+    echo "==> Downloading SAM2.1 large checkpoint (required; ~900 MB)..."
+    if command -v curl >/dev/null 2>&1; then
+        curl -L --fail --retry 3 -o "$CKPT" "$CKPT_URL"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -O "$CKPT" "$CKPT_URL"
+    else
+        echo "WARNING: curl/wget missing; place sam2.1_hiera_large.pt in $CKPT_DIR" >&2
+    fi
+fi
 
 echo "==> Verifying imports..."
 python - <<'PY'

@@ -17,8 +17,24 @@ struct HardwareConfig
     double brightRefMm[2] = {760.0, 570.0};
     double sampleScanStartMm[2] = {840.0, 650.0};
     double tempStopPositionMm = 500.0;
-    /// Stage absolute pose (mm) for Capture Multiview RGB / hemisphere BFS stills.
+    /// Stage pose (mm) for the apex (θ=0) still. Then the stage moves to
+    /// sampleMultiviewPositionMm.
+    double sampleMultiviewApexPositionMm = 1600.0;
+    /// Stage pose (mm) for MVS ring pins. Apex camera JSON is expressed at this stop.
     double sampleMultiviewPositionMm = 1600.0;
+    /// +stage travel in base_link used to place apex camera t in the MVS / sample-static frame.
+    enum class SampleMultiviewStageAxis
+    {
+        PosX,
+        NegX,
+        PosY,
+        NegY
+    };
+    SampleMultiviewStageAxis sampleMultiviewStageAxis = SampleMultiviewStageAxis::PosX;
+
+    [[nodiscard]] bool sampleMultiviewTwoStage() const;
+    /// World-frame metres to add to apex-stage camera t so outputs sit at the MVS stop.
+    void sampleMultiviewApexOutputShiftM(double &xM, double &yM, double &zM) const;
     /// Legacy UI mirror of whiteRefMm (capture position spin boxes).
     double cameraPositionMm[2] = {735.0, 545.0};
     double sampleWindowMaxLengthMm = 500.0;
@@ -140,13 +156,29 @@ struct HardwareConfig
         double toolPayloadRadiusMm = 77.0;
         QString toolPayloadShape = QStringLiteral("mesh");
         QString toolPayloadMesh = QStringLiteral("ur_tool_payload.stl");
-        /// Optical TCP (BFS optical origin) in tool0: Tsai translation (mm) + URDF rpy (deg).
+        /// Optical TCP (BFS camera lens) in tool0: Tsai translation (mm) + URDF rpy (deg).
         double toolTcpXMm = 0.715;
         double toolTcpYMm = -54.197;
         double toolTcpZMm = 73.755;
         double toolTcpRollDeg = -1.9138;
         double toolTcpPitchDeg = 0.7450;
         double toolTcpYawDeg = 0.2868;
+
+        struct ToolTcpMm
+        {
+            double xMm = 0.0;
+            double yMm = 0.0;
+            double zMm = 0.0;
+            double rollDeg = 0.0;
+            double pitchDeg = 0.0;
+            double yawDeg = 0.0;
+        };
+
+        [[nodiscard]] ToolTcpMm cameraToolTcpMm() const
+        {
+            return {toolTcpXMm, toolTcpYMm, toolTcpZMm, toolTcpRollDeg, toolTcpPitchDeg,
+                    toolTcpYawDeg};
+        }
         /// Robot base mount height in world frame (mm). Z=0 is tray surface; mount plane is at this height.
         double ceilingMountHeightMm = 650.0;
         /// MoveIt workspace collision cube (mm). Extends downward from the mount plane (relative to robot).
@@ -209,6 +241,10 @@ struct HardwareConfig
         int ledRedMa = 2400;
         int ledGreenMa = 2400;
         int ledBlueMa = 2400;
+        /// Qt screen index for the EVM HDMI display. -1 = auto (1280×720, else non-primary).
+        int hdmiScreenIndex = -1;
+        /// Optional override of calibration/multiview/patterns/psp.
+        QString hdmiPatternDir;
     };
 
     DlpConfig dlp;

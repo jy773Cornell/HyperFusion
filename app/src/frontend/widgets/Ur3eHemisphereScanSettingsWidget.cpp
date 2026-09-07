@@ -27,7 +27,14 @@
 #include <QSpinBox>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <cmath>
+
+namespace
+{
+/// GUI Radius spin cap (mm). Workspace half-width is 300 mm; rings at θ≲35° still fit at 400.
+constexpr double kGuiSphereRadiusMaxMm = 400.0;
+} // namespace
 
 namespace ui
 {
@@ -87,7 +94,7 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
     autoForm->addRow(QStringLiteral("Route"), routeRow);
 
     sphereRadiusSpin_ = new QDoubleSpinBox(autoSection_);
-    sphereRadiusSpin_->setRange(10.0, 5000.0);
+    sphereRadiusSpin_->setRange(10.0, kGuiSphereRadiusMaxMm);
     sphereRadiusSpin_->setDecimals(0);
     sphereRadiusSpin_->setSingleStep(10.0);
     sphereRadiusSpin_->setSuffix(QStringLiteral(" mm"));
@@ -774,22 +781,22 @@ void Ur3eHemisphereScanSettingsWidget::applyBoundaryLimits(
     boundaryLimits_ = boundary;
     boundaryLimits_.normalize();
 
-    const double maxRadiusM = hf::ur3e::maxHemisphereRadiusM(boundaryLimits_);
-    const double maxRadiusMm = maxRadiusM * 1000.0;
-    sphereRadiusSpin_->setMaximum(maxRadiusMm);
-    if (sphereRadiusSpin_->value() > maxRadiusMm)
-        sphereRadiusSpin_->setValue(maxRadiusMm);
+    sphereRadiusSpin_->setMaximum(kGuiSphereRadiusMaxMm);
+    if (sphereRadiusSpin_->value() > kGuiSphereRadiusMaxMm)
+        sphereRadiusSpin_->setValue(kGuiSphereRadiusMaxMm);
 
     if (boundaryLimits_.enabled)
     {
+        const double fitMm = hf::ur3e::maxHemisphereRadiusM(boundaryLimits_) * 1000.0;
         double centerXM = 0.0;
         double centerYM = 0.0;
         hf::ur3e::scanCenterOffsetM(centerXM, centerYM);
         sphereRadiusSpin_->setToolTip(
             QStringLiteral(
-                "Max %1 mm so the dome fits in workspace %2×%3 mm with scan center "
-                "(%4, %5) mm from home-TCP tray projection.")
-                .arg(maxRadiusMm, 0, 'f', 0)
+                "Allowed up to %1 mm. Equator-fit workspace limit is %2 mm "
+                "(%3×%4 mm box, scan center %5, %6 mm).")
+                .arg(kGuiSphereRadiusMaxMm, 0, 'f', 0)
+                .arg(fitMm, 0, 'f', 0)
                 .arg(static_cast<int>(boundaryLimits_.lengthMm))
                 .arg(static_cast<int>(boundaryLimits_.widthMm))
                 .arg(centerXM * 1000.0, 0, 'f', 0)
@@ -798,7 +805,8 @@ void Ur3eHemisphereScanSettingsWidget::applyBoundaryLimits(
     else
     {
         sphereRadiusSpin_->setToolTip(
-            QStringLiteral("Workspace limits disabled in hyperfusion.cfg."));
+            QStringLiteral("Workspace limits disabled in hyperfusion.cfg. Max %1 mm.")
+                .arg(kGuiSphereRadiusMaxMm, 0, 'f', 0));
     }
 }
 
@@ -810,7 +818,9 @@ hf::ur3e::Ur3eHemisphereScanParams Ur3eHemisphereScanSettingsWidget::params() co
     scanParams.verticalPoints = verticalPointsSpin_->value();
     scanParams.thetaMinDeg = thetaMinSpin_->value();
     scanParams.thetaMaxDeg = thetaMaxSpin_->value();
-    hf::ur3e::clampHemisphereScanParamsToBoundary(scanParams, boundaryLimits_);
+    hf::ur3e::normalizeHemisphereScanParams(scanParams);
+    scanParams.sphereRadiusM =
+        std::min(scanParams.sphereRadiusM, kGuiSphereRadiusMaxMm * 0.001);
     return scanParams;
 }
 
@@ -822,7 +832,8 @@ hf::ur3e::Ur3eHemisphereScanParams Ur3eHemisphereScanSettingsWidget::semiPlanPar
     scanParams.verticalPoints = std::max(1, horizontalPointsSpin_->value());
     scanParams.horizontalPoints = 12;
     hf::ur3e::normalizeHemisphereScanParams(scanParams);
-    hf::ur3e::clampHemisphereScanParamsToBoundary(scanParams, boundaryLimits_);
+    scanParams.sphereRadiusM =
+        std::min(scanParams.sphereRadiusM, kGuiSphereRadiusMaxMm * 0.001);
     return scanParams;
 }
 
@@ -847,7 +858,8 @@ void Ur3eHemisphereScanSettingsWidget::setParams(const hf::ur3e::Ur3eHemisphereS
 {
     hf::ur3e::Ur3eHemisphereScanParams normalized = params;
     hf::ur3e::normalizeHemisphereScanParams(normalized);
-    hf::ur3e::clampHemisphereScanParamsToBoundary(normalized, boundaryLimits_);
+    normalized.sphereRadiusM =
+        std::min(normalized.sphereRadiusM, kGuiSphereRadiusMaxMm * 0.001);
 
     const QSignalBlocker blockRadius(sphereRadiusSpin_);
     const QSignalBlocker blockHorizontal(horizontalPointsSpin_);
@@ -1126,9 +1138,8 @@ void Ur3eHemisphereScanSettingsWidget::onParameterChanged()
     if (thetaMinSpin_->value() > thetaMaxSpin_->value())
         thetaMaxSpin_->setValue(thetaMinSpin_->value());
 
-    const double maxRadiusMm = hf::ur3e::maxHemisphereRadiusM(boundaryLimits_) * 1000.0;
-    if (sphereRadiusSpin_->value() > maxRadiusMm)
-        sphereRadiusSpin_->setValue(maxRadiusMm);
+    if (sphereRadiusSpin_->value() > kGuiSphereRadiusMaxMm)
+        sphereRadiusSpin_->setValue(kGuiSphereRadiusMaxMm);
 
     plannedReachablePins_ = -1;
     saveToSettings();

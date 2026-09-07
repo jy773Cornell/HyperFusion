@@ -17,7 +17,7 @@ capture -> preprocessing -> GSAM segmentation -> coarse alignment -> phase corre
 The fusion code lives under:
 
 ```text
-resources/hf_fusion/
+app/sidecars/hf_fusion/
 ```
 
 The main entry points are:
@@ -441,7 +441,7 @@ If a selected session is missing `preprocessed/` outputs, the app can run prepro
 The command-line equivalent is:
 
 ```powershell
-cd resources\hf_fusion
+cd app\sidecars\hf_fusion
 .\.venv\Scripts\Activate.ps1
 python fusion_cli.py --session E:\chiptest --mode reflectance
 ```
@@ -449,11 +449,11 @@ python fusion_cli.py --session E:\chiptest --mode reflectance
 For the Python environment:
 
 ```powershell
-cd resources\hf_fusion
+cd app\sidecars\hf_fusion
 .\setup_venv.ps1
 ```
 
-The app always uses `resources/hf_fusion/` (code + `.venv`).
+The app always uses `app/sidecars/hf_fusion/` (code + `.venv`).
 
 ## Current Default Parameters
 

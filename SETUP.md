@@ -31,9 +31,9 @@ This guide covers **developer setup** on a build machine.
 | -------------------- | ---------------------------------------- | -------------------------------------------------- |
 | **1 — Cameras only** | Lumo SDK, Pleora eBUS, NI Vision (SWIR3) | Connect FX10e and/or SWIR3; stream and record      |
 | **2 — Full bench**   | + Zaber Motion Library, MCC UL           | Stage scanning, lighthouse, capture workflows      |
-| **3 — Optional**     | WSL + GSAM (see `resources/gsam2/`)      | Post-capture segmentation                          |
+| **3 — Optional**     | WSL + GSAM (see `app/sidecars/gsam2/`)      | Post-capture segmentation                          |
 | **4 — Optional**     | Python venv + `hf_fusion` (see below)    | Dual-camera spatial registration + spectral fusion |
-| **5 — Optional**     | WSL + ROS 2 + `resources/ur3e/` (see below) | UR3e robot sidecar (`use_mock_hardware` for simulation) |
+| **5 — Optional**     | WSL + ROS 2 + `app/sidecars/ur3e/` (see below) | UR3e robot sidecar (`use_mock_hardware` for simulation) |
 
 
 Install **Stage 1** first and verify cameras in Lumo/NI MAX before adding stage and light hardware.
@@ -130,8 +130,8 @@ At this point you can operate the **full-spectrum module** (FX10e + SWIR3) for s
 
 ## 4. Segmentation — GSAM segmentation
 
-- Requires **WSL2 + Ubuntu** and the Python env under `resources/gsam2/`.
-- See `resources/gsam2/README.md`.
+- Requires **WSL2 + Ubuntu** and the Python env under `app/sidecars/gsam2/`.
+- See `app/sidecars/gsam2/README.md`.
 - Tune `[segmentation]` in `hyperfusion.cfg` (WSL distro, port, model paths).
 - Not required for camera streaming or capture.
 
@@ -141,20 +141,20 @@ At this point you can operate the **full-spectrum module** (FX10e + SWIR3) for s
 
 ## 5. Fusion — Dual-camera fusion
 
-Offline **FX10e + SWIR3** pipeline: spatial registration (centroid match + phase correction) and spectral fusion into unified ENVI cubes per chip ROI. Lives in `resources/hf_fusion/`.
+Offline **FX10e + SWIR3** pipeline: spatial registration (centroid match + phase correction) and spectral fusion into unified ENVI cubes per chip ROI. Lives in `app/sidecars/hf_fusion/`.
 
 ### 5.1 Python environment
 
-The app uses **one venv only**: `resources/hf_fusion/.venv/Scripts/python.exe`.
+The app uses **one venv only**: `app/sidecars/hf_fusion/.venv/Scripts/python.exe`.
 
 **First-time setup:**
 
 ```powershell
-cd resources\hf_fusion
+cd app\sidecars\hf_fusion
 .\setup_venv.ps1
 ```
 
-Verify in the app Log: `Capture fusion: python=…\resources\hf_fusion\.venv\Scripts\python.exe`
+Verify in the app Log: `Capture fusion: python=…\app\sidecars\hf_fusion\.venv\Scripts\python.exe`
 
 Dependencies: `numpy`, `Pillow`, `opencv-python` (see `requirements.txt`).
 
@@ -169,7 +169,7 @@ Add or edit `[fusion]` in `hyperfusion.cfg` beside `app.exe`:
 | `fusion_timeout_ms` | Subprocess timeout (default 3600000 ms)            |
 
 
-Pipeline path and Python venv are fixed at `resources/hf_fusion/` and `resources/hf_fusion/.venv/` (not configurable).
+Pipeline path and Python venv are fixed at `app/sidecars/hf_fusion/` and `app/sidecars/hf_fusion/.venv/` (not configurable).
 
 Alignment uses `fx10e_spatial_mm_per_pixel` and `swir3_spatial_mm_per_pixel` from `[camera_calibration]`.
 
@@ -185,12 +185,12 @@ The app can run fusion automatically after capture (Capture tab → **Run spectr
 ### 5.4 Manual CLI (debugging)
 
 ```powershell
-cd resources\hf_fusion
+cd app\sidecars\hf_fusion
 .\.venv\Scripts\Activate.ps1
 python fusion_cli.py --session E:\path\to\session --mode reflectance
 ```
 
-Full pipeline docs: `resources/hf_fusion/README.md`.
+Full pipeline docs: `app/sidecars/hf_fusion/README.md`.
 
 ---
 
@@ -211,7 +211,7 @@ Universal Robots **UR3e** control runs as a **WSL sidecar** (same pattern as GSA
 If WSL cannot ping the robot, or the teach pendant reports **cannot reach remote PC**, run the one-time network setup (mirrored WSL + inbound firewall for UR reverse ports):
 
 ```powershell
-cd D:\Pototypy\HyperFusion\resources\ur3e
+cd D:\Pototypy\HyperFusion\app\sidecars\ur3e
 .\install_env.ps1 -SetupRobotNetwork -ShutdownWsl
 ```
 
@@ -229,14 +229,14 @@ Firewall rules require **Administrator** PowerShell. The script is idempotent an
 From **PowerShell** (delegates to WSL):
 
 ```powershell
-cd D:\Pototypy\HyperFusion\resources\ur3e   # adjust path
+cd D:\Pototypy\HyperFusion\app\sidecars\ur3e   # adjust path
 .\install_env.ps1
 ```
 
-Or from **WSL**, in `resources/ur3e/`:
+Or from **WSL**, in `app/sidecars/ur3e/`:
 
 ```bash
-cd /mnt/d/Pototypy/HyperFusion/resources/ur3e   # adjust path
+cd /mnt/d/Pototypy/HyperFusion/app/sidecars/ur3e   # adjust path
 chmod +x install_env.sh
 ./install_env.sh
 ```
@@ -245,12 +245,12 @@ Do **not** run `./install_env.sh` directly in PowerShell — it is a bash script
 
 This installs **ROS 2 + `ros-*-ur`** and creates `./venv` for the HTTP sidecar.
 
-Full details: **`resources/ur3e/README.md`**.
+Full details: **`app/sidecars/ur3e/README.md`**.
 
 ### 6.3 Verify sidecar (simulation)
 
 ```bash
-cd /mnt/d/Pototypy/HyperFusion/resources/ur3e
+cd /mnt/d/Pototypy/HyperFusion/app/sidecars/ur3e
 source /opt/ros/jazzy/setup.bash   # or humble on Ubuntu 22.04
 ./venv/bin/ur3e_server --use-mock-hardware --port 8766
 ```
@@ -276,7 +276,7 @@ Robot reachability from WSL:
 | Key | Purpose |
 |-----|---------|
 | `wsl_distro` | WSL distribution name (default `Ubuntu`) |
-| `ur3e_repo_linux` | WSL path to sidecar; empty = auto `resources/ur3e` |
+| `ur3e_repo_linux` | WSL path to sidecar; empty = auto `app/sidecars/ur3e` |
 | `server_port` | HTTP port (default **8766**, GSAM uses 8765) |
 | `robot_ip` | UR controller IP |
 | `dashboard_port` / `rtde_port` | UR dashboard / RTDE ports |
@@ -330,7 +330,7 @@ Common variants:
 .\build_app.ps1 -NoClean                  # reuse existing build directory
 ```
 
-The script configures CMake, builds **Release**, runs `windeployqt`, and copies Lumo / MCC / Zaber runtime DLLs, `app/preset/` (including `hyperfusion.cfg`, GSAM plans, and UR3e semi scan plans), and calibration packs next to the executable. Fusion uses `resources/hf_fusion/` in the repo (not copied beside `app.exe`).
+The script configures CMake, builds **Release**, runs `windeployqt`, and copies Lumo / MCC / Zaber runtime DLLs, `app/preset/` (including `hyperfusion.cfg`, GSAM plans, and UR3e semi scan plans), and calibration packs next to the executable. Fusion uses `app/sidecars/hf_fusion/` in the repo (not copied beside `app.exe`).
 
 **Output folder:** `build\Release\` (under `app\`)
 

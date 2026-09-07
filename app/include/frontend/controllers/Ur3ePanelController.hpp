@@ -26,6 +26,13 @@ namespace hf::ur3e
 class Ur3eMoveItManager;
 class Ur3eRvizManager;
 
+enum class HemisphereScanPinSet
+{
+    All,
+    ApexOnly,
+    RingsOnly,
+};
+
 struct HemisphereScanExecuteOptions
 {
     /// Empty = motion-only (UR3e Execute / Capture Preview). Non-empty = save BFS stills.
@@ -35,6 +42,13 @@ struct HemisphereScanExecuteOptions
     /// When true (Capture-driven Multiview), skip the standalone UR3e summary dialog on success —
     /// Capture merges the scan stats into Recording complete.
     bool suppressUiSummary = false;
+    HemisphereScanPinSet pinSet = HemisphereScanPinSet::All;
+    /// Continue TIFF/JSON numbering after a previous execute leg.
+    int startFrameIndex = 0;
+    /// Load existing transforms.json and append this leg's frames.
+    bool appendTransformsJson = false;
+    /// Translate apex-leg camera outputs to sample_multiview_position_mm (MVS / sample-static).
+    bool applyApexStageOutputShift = false;
 };
 
 class Ur3ePanelController : public QObject

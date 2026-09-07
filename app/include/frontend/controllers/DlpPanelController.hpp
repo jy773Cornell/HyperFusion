@@ -10,6 +10,11 @@
 
 class MainWindow;
 
+namespace ui
+{
+class DlpHdmiPatternWindow;
+}
+
 namespace hf::dlp
 {
 class DlpProjectorWorker;
@@ -26,6 +31,9 @@ public:
     void shutdownSync();
     void wireSettingsTabConnections();
     [[nodiscard]] bool isConnected() const;
+    /// One FPP sequence step on the EVM (blocks). For pin capture, not the GUI loop.
+    [[nodiscard]] bool showFppScanStepSync(int stepIndex, QString *errorOut = nullptr);
+    [[nodiscard]] bool blankSync(QString *errorOut = nullptr);
 
 private:
     void onRefreshClicked();
@@ -40,9 +48,11 @@ private:
     void onDevices(const std::vector<DlpDeviceInfo> &devices);
     void onWorkerLog(const QString &message);
     [[nodiscard]] DlpProjectorSettings settingsFromUi() const;
+    [[nodiscard]] bool showHdmiPngOnGui(int stepIndex, DlpError &error);
 
     MainWindow *host_ = nullptr;
     std::unique_ptr<DlpProjectorWorker> worker_;
+    std::unique_ptr<ui::DlpHdmiPatternWindow> hdmiWindow_;
     QTimer *ledApplyTimer_ = nullptr;
 };
 } // namespace hf::dlp

@@ -1,0 +1,118 @@
+{
+  "schema": 4,
+  "name": "R205_T22",
+  "fingerprint": "{\"kind\":\"ur3e_semi_one_ring\",\"sphere_radius_m\":0.205,\"theta_deg\":22.0,\"horizontal_points\":360,\"vertical_points\":2,\"always_apex_pin\":true,\"apex_radius_m\":0.2}",
+  "robot_cfg_fingerprint": "{\"schema\":4,\"ur_type\":\"ur3e\",\"tool_tcp_x_mm\":0.715,\"tool_tcp_y_mm\":-54.197,\"tool_tcp_z_mm\":73.755,\"tool_tcp_roll_deg\":-1.9138,\"tool_tcp_pitch_deg\":0.745,\"tool_tcp_yaw_deg\":0.2868,\"tool_payload_shape\":\"mesh\",\"tool_payload_mesh\":\"ur_tool_payload.stl\",\"tool_payload_radius_mm\":80.0,\"ceiling_mount_height_mm\":629.0,\"workspace_boundary_enabled\":true,\"workspace_length_mm\":900.0,\"workspace_width_mm\":600.0,\"workspace_height_mm\":529.0,\"workspace_ceiling_clearance_mm\":40.0,\"mount_roll_deg\":180.0,\"mount_pitch_deg\":0.0,\"mount_yaw_deg\":0.0,\"mount_offset_x_mm\":0.0,\"mount_offset_y_mm\":0.0,\"scan_center_from_home_tcp\":false,\"scan_center_base_xy\":true,\"apex_over_home_tcp_xy\":true,\"home_joints_deg\":[90.0,-180.0,145.0,-55.0,90.0,-90.0],\"scan_camera_up_world_z\":true,\"pin_pose_tolerance_deg\":0.0,\"pin_pose_tolerance_vertical_only\":true,\"pin_tcp_tilt_deg\":10.0,\"semi_ring_search_candidates\":360}",
+  "scan_params": {
+    "sphere_radius_m": 0.205,
+    "horizontal_points": 360,
+    "vertical_points": 2,
+    "theta_min_deg": 0.0,
+    "theta_max_deg": 22.0,
+    "apex_radius_m": 0.2
+  },
+  "points": [
+    {
+      "grid": {
+        "phi_deg": 9.0,
+        "theta_deg": 22.0,
+        "x_m": 0.0758488857485267,
+        "y_m": 0.012013283318520099,
+        "z_m": 0.1900726901861914
+      },
+      "tcp": {
+        "x_m": 0.0758488857485267,
+        "y_m": 0.012013283318520099,
+        "z_m": 0.1900726901861914,
+        "rx": -1.7650524289175888,
+        "ry": -2.0666108705640447,
+        "rz": 0.5925911312932326,
+        "tool_z_x": -0.5233950787398906,
+        "tool_z_y": -0.08289763661483417,
+        "tool_z_z": -0.8480480961564261
+      },
+      "reachable": true,
+      "home_path_ok": true,
+      "base_sweep_ok": true,
+      "planning_error": "",
+      "joints_rad": [
+        -0.8230091433615305,
+        -2.0051755428256124,
+        2.398467210381274,
+        -2.457947481176837,
+        1.9118066731436718,
+        -2.571381528071184
+      ]
+    },
+    {
+      "grid": {
+        "phi_deg": 19.0,
+        "theta_deg": 22.0,
+        "x_m": 0.07261048598642873,
+        "y_m": 0.02500179533950969,
+        "z_m": 0.1900726901861914
+      },
+      "tcp": {
+        "x_m": 0.07261048598642873,
+        "y_m": 0.02500179533950969,
+        "z_m": 0.1900726901861914,
+        "rx": -1.5947529914976475,
+        "ry": -2.235761236541161,
+        "rz": 0.6410942182365844,
+        "tool_z_x": -0.5010485079004179,
+        "tool_z_y": -0.17252483686769887,
+        "tool_z_z": -0.848048096156426
+      },
+      "reachable": true,
+      "home_path_ok": true,
+      "base_sweep_ok": true,
+      "planning_error": "",
+      "joints_rad": [
+        -0.9975421551389267,
+        -2.005175687628313,
+        2.398467190932234,
+        -2.4579473470006636,
+        1.9118067168166277,
+        -2.571381480451143
+      ]
+    },
+    {
+      "grid": {
+        "phi_deg": 42.0,
+        "theta_deg": 22.0,
+        "x_m": 0.057069325054783564,
+        "y_m": 0.05138545108467517,
+        "z_m": 0.1900726901861914
+      },
+      "tcp": {
+        "x_m": 0.057069325054783564,
+        "y_m": 0.05138545108467517,
+        "z_m": 0.1900726901861914,
+        "rx": -1.1476847499817635,
+        "ry": -2.577742153308113,
+        "rz": 0.7391556681370745,
+        "tool_z_x": -0.39380675913569424,
+        "tool_z_y": -0.35458519859760446,
+        "tool_z_z": -0.8480480961564261
+      },
+      "reachable": true,
+      "home_path_ok": true,
+      "base_sweep_ok": true,
+      "planning_error": "",
+      "joints_rad": [
+        -1.3989691809683817,
+        -2.005175687628313,
+        2.398467190932234,
+        -2.4579510781877216,
+        1.9118067168166277,
+        -2.571381480451143
+      ]
+    }
+  ],
+  "reachable_count": 3,
+  "unreachable_count": 0,
+  "home_path_ok_count": 3,
+  "chain_only_count": 0,
+  "moveit_used": true,
+  "error_message": ""
+}

@@ -1038,9 +1038,6 @@ class MoveItScanPlanner:
 
         from hyperfusion_ur3e.moveit.ur_pinch_guard import PINCH_GUARD_LINKS, vec3_from_pose
 
-        if self._use_mock_hardware():
-            return None
-
         try:
             self._ensure_fk_client()
         except Exception:
@@ -1071,9 +1068,6 @@ class MoveItScanPlanner:
     def _ur_pinch_guard_ok(self, joints: Sequence[float]) -> tuple[bool, str]:
         from hyperfusion_ur3e.moveit.ur_pinch_guard import ur_pinch_violation
 
-        if self._use_mock_hardware():
-            return True, ""
-
         link_positions = self._fk_link_positions(joints)
         if link_positions is None:
             if not self._pinch_guard_warned:
@@ -1094,9 +1088,6 @@ class MoveItScanPlanner:
     ) -> Optional[tuple[float, float, float]]:
         from moveit_msgs.msg import RobotState
         from sensor_msgs.msg import JointState
-
-        if self._use_mock_hardware():
-            return None
 
         try:
             self._ensure_fk_client()
@@ -3070,15 +3061,13 @@ class MoveItScanPlanner:
 
                 last_pick_error = "IK failed"
                 try:
-                    # Apex: C++ already places TCP over home TCP XY (look-down).
-                    # Snap XY/orientation from MoveIt home FK (Z stays dome radius).
+                    # Apex: C++ authors camera look-down. Do not snap to MoveIt home FK.
                     pin_target = target
                     if target.require_perpendicular:
-                        pin_target = self._apex_target_from_home(target, plan_start_seed)
                         sys.stderr.write(
-                            "UR3e MoveIt: apex pin — home TCP XY/orientation, "
-                            f"Z={pin_target.z_m:.3f} m "
-                            "(exact perpendicular only; no cone, no tilt).\n"
+                            "UR3e MoveIt: apex pin — camera TCP from C++ "
+                            f"(Z={pin_target.z_m:.3f} m; "
+                            "exact perpendicular only; no cone, no tilt).\n"
                         )
                     current_pin_seed = (
                         last_reachable_pin
@@ -3542,7 +3531,7 @@ class MoveItScanPlanner:
             tool_payload_radius_m,
         )
 
-        if self._use_mock_hardware() or not waypoints:
+        if not waypoints:
             return True, float("inf"), ""
 
         count = len(waypoints)

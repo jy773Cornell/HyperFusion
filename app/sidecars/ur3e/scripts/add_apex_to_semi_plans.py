@@ -42,7 +42,7 @@ APEX = {
 
 DIRS = [
     Path(r"d:\Pototypy\HyperFusion\app\build\Release\ur3e_semi_scan_routes"),
-    Path(r"d:\Pototypy\HyperFusion\resources\ur3e\ur3e_semi_scan_routes"),
+    Path(r"d:\Pototypy\HyperFusion\app\sidecars\ur3e\ur3e_semi_scan_routes"),
 ]
 
 

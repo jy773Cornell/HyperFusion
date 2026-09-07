@@ -200,7 +200,7 @@ if (Test-Path -LiteralPath $mccDaqDir) {
 }
 
 if ($SetupUrRobotNetwork) {
-    $networkScript = Join-Path (Split-Path -Parent $AppDir) "resources\ur3e\scripts\setup_wsl_robot_network.ps1"
+    $networkScript = Join-Path $AppDir "sidecars\ur3e\scripts\setup_wsl_robot_network.ps1"
     if (-not (Test-Path -LiteralPath $networkScript)) {
         Write-Error "UR network setup script not found: $networkScript"
     }

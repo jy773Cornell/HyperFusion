@@ -3,11 +3,17 @@
 # Run inside WSL Ubuntu 22.04. Idempotent — safe to re-run.
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+THIS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Live in scripts/; package root is the parent (setup.py, requirements.txt, venv).
+if [[ -f "$THIS_DIR/../setup.py" ]]; then
+    ROOT="$(cd "$THIS_DIR/.." && pwd)"
+else
+    ROOT="$THIS_DIR"
+fi
+cd "$ROOT"
 
 PYTHON="${PYTHON:-python3}"
-VENV_DIR="$SCRIPT_DIR/venv"
+VENV_DIR="$ROOT/venv"
 
 # Pick the ROS 2 distro that matches the Ubuntu release (override with ROS_DISTRO=...).
 detect_ros_distro() {
@@ -162,12 +168,12 @@ fi
 
 echo ""
 echo "Real robot on LAN (one-time, from Windows PowerShell as Administrator):"
-echo "  cd resources/ur3e && .\\install_env.ps1 -SetupRobotNetwork -ShutdownWsl"
+echo "  cd app/sidecars/ur3e && .\\install_env.ps1 -SetupRobotNetwork -ShutdownWsl"
 echo "  # or: .\\scripts\\setup_wsl_robot_network.ps1 -ShutdownWsl"
 echo ""
 echo "==> UR3e environment ready."
 echo "Simulation server:"
-echo "  cd $SCRIPT_DIR && source /opt/ros/\$ROS_DISTRO/setup.bash && ./venv/bin/ur3e_server --use-mock-hardware --port 8766"
+echo "  cd $ROOT && source /opt/ros/\$ROS_DISTRO/setup.bash && ./venv/bin/ur3e_server --use-mock-hardware --port 8766"
 echo "  # or: ./venv/bin/python -m hyperfusion_ur3e.sidecar.server --use-mock-hardware --port 8766"
 echo ""
 echo "ROS launch (after colcon build --symlink-install in this directory):"

@@ -48,6 +48,9 @@ struct TransformsJsonFrame
     QString filePathStem; // e.g. "00000" (no extension)
     Mat4 transformMatrix{};
     CameraExtrinsicsRt extrinsics{};
+    int fppStepIndex = -1;
+    QString fppStepLabel;
+    QString fppPattern;
 };
 
 struct TransformsJsonDocument
@@ -62,7 +65,8 @@ struct TransformsJsonDocument
 /// Write nerfstudio-compatible transforms.json beside the TIFF frames.
 [[nodiscard]] bool writeTransformsJson(const QString &directory,
                                        const TransformsJsonDocument &doc,
-                                       QString *errorMessage = nullptr);
+                                       QString *errorMessage = nullptr,
+                                       bool appendExisting = false);
 
 /// Flange TF + joints for hand–eye (optional; optical TCP JSON still written).
 struct CalibrationCaptureExtras
@@ -76,6 +80,18 @@ struct CalibrationCaptureExtras
     double flangeRz = 0.0;
     QStringList jointNames;
     std::vector<double> jointsRad;
+    /// FPP pin burst: step index in kFppScanningSteps, or -1 if not an FPP still.
+    int fppStepIndex = -1;
+    QString fppStepLabel;
+    /// HDMI PSP pattern name shown on the DLP (empty when DLP was not used).
+    QString fppPattern;
+    /// Apex stills: camera t is expressed at the MVS stage stop (sample treated static).
+    bool haveOutputStageShift = false;
+    double stageCapturePositionMm = 0.0;
+    double stageOutputPositionMm = 0.0;
+    double outputShiftXM = 0.0;
+    double outputShiftYM = 0.0;
+    double outputShiftZM = 0.0;
 };
 
 /// Write one pose JSON next to a still (e.g. 00000.json beside 00000.tif).
