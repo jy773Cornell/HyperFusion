@@ -821,28 +821,82 @@
     "apex_ok": false,
     "seconds": 1531.39
   },
-  "R230_T29": {
+  "R150_T20": {
     "ok": true,
     "sweep_ok": 0,
     "apex_ok": false,
-    "seconds": 1525.06
+    "seconds": 1707.66
   },
-  "R230_T30": {
+  "R150_T21": {
     "ok": true,
     "sweep_ok": 0,
     "apex_ok": false,
-    "seconds": 1528.23
+    "seconds": 685.75
   },
-  "R230_T31": {
-    "ok": false,
-    "error": "HTTP Error 500: Internal Server Error"
+  "R150_T22": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": false,
+    "seconds": 685.93
   },
-  "R230_T32": {
-    "ok": false,
-    "error": "HTTP Error 500: Internal Server Error"
+  "R150_T23": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": false,
+    "seconds": 685.52
   },
-  "R230_T33": {
-    "ok": false,
-    "error": "HTTP Error 500: Internal Server Error"
+  "R150_T24": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": false,
+    "seconds": 685.25
+  },
+  "R150_T25": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": false,
+    "seconds": 685.66
+  },
+  "R150_T26": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": false,
+    "seconds": 686.15
+  },
+  "R150_T27": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": false,
+    "seconds": 685.29
+  },
+  "R150_T28": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": false,
+    "seconds": 685.96
+  },
+  "R150_T29": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": false,
+    "seconds": 685.21
+  },
+  "R150_T30": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": false,
+    "seconds": 685.37
+  },
+  "R150_T31": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": false,
+    "seconds": 685.62
+  },
+  "R150_T32": {
+    "ok": true,
+    "sweep_ok": 0,
+    "apex_ok": false,
+    "seconds": 686.39
   }
 }

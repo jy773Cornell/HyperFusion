@@ -54,6 +54,7 @@ Designed for research and high-throughput phenotyping, HyperFusion integrates li
 | Guide                              | Audience      | Contents                                                                                                        |
 | ---------------------------------- | ------------- | --------------------------------------------------------------------------------------------------------------- |
 | **[SETUP.md](SETUP.md)**           | Developers    | SDK installation, drivers, build environment, `hyperfusion.cfg`, deployment, and application configuration      |
+| **[tools/README.md](tools/README.md)** | Installers | Stage a payload and install the app (`package_release.ps1`, `Install-HyperFusion.ps1`) |
 | **[USERMANUAL.md](USERMANUAL.md)** | Lab operators | User interface, hardware connection, imaging workflow, calibration, capture, configuration, and troubleshooting |
 
 ---

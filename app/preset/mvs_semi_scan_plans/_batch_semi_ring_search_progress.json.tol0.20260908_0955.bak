@@ -1,0 +1,824 @@
+{
+    "R200_T20":  {
+                     "ok":  true,
+                     "sweep_ok":  3,
+                     "apex_ok":  false,
+                     "file":  "app\\preset\\mvs_semi_scan_plans\\R200_T20.json",
+                     "seconds":  216.57
+                 },
+    "R200_T21":  {
+                     "ok":  true,
+                     "sweep_ok":  3,
+                     "apex_ok":  false,
+                     "file":  "app\\preset\\mvs_semi_scan_plans\\R200_T21.json",
+                     "seconds":  138.67
+                 },
+    "R200_T22":  {
+                     "ok":  true,
+                     "sweep_ok":  3,
+                     "apex_ok":  false,
+                     "file":  "app\\preset\\mvs_semi_scan_plans\\R200_T22.json",
+                     "seconds":  186.84
+                 },
+    "R200_T23":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1379.47
+                 },
+    "R200_T24":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1265.5
+                 },
+    "R200_T25":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1272.32
+                 },
+    "R200_T26":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1260.48
+                 },
+    "R200_T27":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1327.47
+                 },
+    "R200_T28":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1320.06
+                 },
+    "R200_T29":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1491.46
+                 },
+    "R200_T30":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1715.26
+                 },
+    "R200_T31":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1817.44
+                 },
+    "R200_T32":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  685.0
+                 },
+    "R200_T33":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  681.46
+                 },
+    "R200_T34":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  683.14
+                 },
+    "R200_T35":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  682.85
+                 },
+    "R200_T36":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  682.16
+                 },
+    "R200_T37":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  684.35
+                 },
+    "R200_T38":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  685.49
+                 },
+    "R200_T39":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  685.13
+                 },
+    "R200_T40":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  685.48
+                 },
+    "R205_T20":  {
+                     "ok":  true,
+                     "sweep_ok":  3,
+                     "apex_ok":  false,
+                     "file":  "D:\\Pototypy\\HyperFusion\\app\\preset\\mvs_semi_scan_plans\\R205_T20.json",
+                     "seconds":  219.95
+                 },
+    "R205_T21":  {
+                     "ok":  true,
+                     "sweep_ok":  3,
+                     "apex_ok":  false,
+                     "file":  "D:\\Pototypy\\HyperFusion\\app\\preset\\mvs_semi_scan_plans\\R205_T21.json",
+                     "seconds":  96.28
+                 },
+    "R205_T22":  {
+                     "ok":  true,
+                     "sweep_ok":  3,
+                     "apex_ok":  false,
+                     "file":  "D:\\Pototypy\\HyperFusion\\app\\preset\\mvs_semi_scan_plans\\R205_T22.json",
+                     "seconds":  221.65
+                 },
+    "R205_T23":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1232.87
+                 },
+    "R205_T24":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1164.3
+                 },
+    "R205_T25":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1207.66
+                 },
+    "R205_T26":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1242.03
+                 },
+    "R205_T27":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1287.54
+                 },
+    "R205_T28":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1348.87
+                 },
+    "R205_T29":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1743.11
+                 },
+    "R205_T30":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1751.1
+                 },
+    "R205_T31":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1789.3
+                 },
+    "R205_T32":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  2007.48
+                 },
+    "R205_T33":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  683.02
+                 },
+    "R205_T34":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  682.74
+                 },
+    "R205_T35":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  682.06
+                 },
+    "R205_T36":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  682.28
+                 },
+    "R205_T37":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  683.0
+                 },
+    "R205_T38":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  683.43
+                 },
+    "R205_T39":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  684.2
+                 },
+    "R205_T40":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  681.82
+                 },
+    "R210_T20":  {
+                     "ok":  true,
+                     "sweep_ok":  3,
+                     "apex_ok":  false,
+                     "file":  "D:\\Pototypy\\HyperFusion\\app\\preset\\mvs_semi_scan_plans\\R210_T20.json",
+                     "seconds":  139.6
+                 },
+    "R210_T21":  {
+                     "ok":  true,
+                     "sweep_ok":  3,
+                     "apex_ok":  false,
+                     "file":  "D:\\Pototypy\\HyperFusion\\app\\preset\\mvs_semi_scan_plans\\R210_T21.json",
+                     "seconds":  173.36
+                 },
+    "R210_T22":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1248.66
+                 },
+    "R210_T23":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1221.94
+                 },
+    "R210_T24":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1111.51
+                 },
+    "R210_T25":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1127.35
+                 },
+    "R210_T26":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1232.84
+                 },
+    "R210_T27":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1236.41
+                 },
+    "R210_T28":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1330.48
+                 },
+    "R210_T29":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1698.52
+                 },
+    "R210_T30":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1954.03
+                 },
+    "R210_T31":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  2280.35
+                 },
+    "R210_T32":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  2017.05
+                 },
+    "R210_T33":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1768.34
+                 },
+    "R210_T34":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  682.37
+                 },
+    "R210_T35":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  681.97
+                 },
+    "R210_T36":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  682.42
+                 },
+    "R210_T37":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  682.96
+                 },
+    "R210_T38":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  683.86
+                 },
+    "R210_T39":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  683.31
+                 },
+    "R210_T40":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  682.1
+                 },
+    "R215_T20":  {
+                     "ok":  true,
+                     "sweep_ok":  3,
+                     "apex_ok":  false,
+                     "file":  "D:\\Pototypy\\HyperFusion\\app\\preset\\mvs_semi_scan_plans\\R215_T20.json",
+                     "seconds":  94.26
+                 },
+    "R215_T21":  {
+                     "ok":  true,
+                     "sweep_ok":  3,
+                     "apex_ok":  false,
+                     "file":  "D:\\Pototypy\\HyperFusion\\app\\preset\\mvs_semi_scan_plans\\R215_T21.json",
+                     "seconds":  101.22
+                 },
+    "R215_T22":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1111.49
+                 },
+    "R215_T23":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1114.76
+                 },
+    "R215_T24":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1199.77
+                 },
+    "R215_T25":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1243.92
+                 },
+    "R215_T26":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1142.7
+                 },
+    "R215_T27":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1248.89
+                 },
+    "R215_T28":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1265.19
+                 },
+    "R215_T29":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1689.45
+                 },
+    "R215_T30":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  2017.05
+                 },
+    "R215_T31":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1764.69
+                 },
+    "R215_T32":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1890.13
+                 },
+    "R215_T33":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1849.39
+                 },
+    "R215_T34":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  2043.65
+                 },
+    "R215_T35":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  681.17
+                 },
+    "R215_T36":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  682.25
+                 },
+    "R215_T37":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  682.18
+                 },
+    "R215_T38":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  683.86
+                 },
+    "R215_T39":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  682.42
+                 },
+    "R215_T40":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  683.09
+                 },
+    "R220_T20":  {
+                     "ok":  true,
+                     "sweep_ok":  3,
+                     "apex_ok":  false,
+                     "file":  "D:\\Pototypy\\HyperFusion\\app\\preset\\mvs_semi_scan_plans\\R220_T20.json",
+                     "seconds":  203.81
+                 },
+    "R220_T21":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1196.23
+                 },
+    "R220_T22":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1091.02
+                 },
+    "R220_T23":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1141.31
+                 },
+    "R220_T24":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1137.52
+                 },
+    "R220_T25":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1204.23
+                 },
+    "R220_T26":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1150.81
+                 },
+    "R220_T27":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1252.72
+                 },
+    "R220_T28":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1782.52
+                 },
+    "R220_T29":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1714.18
+                 },
+    "R220_T30":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1714.71
+                 },
+    "R220_T31":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1777.35
+                 },
+    "R220_T32":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1763.58
+                 },
+    "R220_T33":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1852.39
+                 },
+    "R220_T34":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1986.91
+                 },
+    "R220_T35":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  2026.11
+                 },
+    "R220_T36":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  681.49
+                 },
+    "R220_T37":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  684.15
+                 },
+    "R220_T38":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  685.37
+                 },
+    "R220_T39":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  683.39
+                 },
+    "R220_T40":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  684.93
+                 },
+    "R225_T20":  {
+                     "ok":  true,
+                     "sweep_ok":  3,
+                     "apex_ok":  false,
+                     "file":  "D:\\Pototypy\\HyperFusion\\app\\preset\\mvs_semi_scan_plans\\R225_T20.json",
+                     "seconds":  54.36
+                 },
+    "R225_T21":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1324.42
+                 },
+    "R225_T22":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1178.68
+                 },
+    "R225_T23":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1093.82
+                 },
+    "R225_T24":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1135.77
+                 },
+    "R225_T25":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1172.2
+                 },
+    "R225_T26":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1152.79
+                 },
+    "R225_T27":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1191.24
+                 },
+    "R225_T28":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1561.2
+                 },
+    "R225_T29":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1676.09
+                 },
+    "R225_T30":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1588.11
+                 },
+    "R225_T31":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1661.94
+                 },
+    "R225_T32":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1553.12
+                 },
+    "R225_T33":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1679.37
+                 },
+    "R225_T34":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1823.93
+                 },
+    "R225_T35":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  2093.19
+                 },
+    "R225_T36":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  2092.09
+                 },
+    "R225_T37":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  681.22
+                 },
+    "R225_T38":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  682.33
+                 },
+    "R225_T39":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  681.65
+                 },
+    "R225_T40":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  683.67
+                 },
+    "R230_T20":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1339.76
+                 },
+    "R230_T21":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1141.62
+                 },
+    "R230_T22":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1131.77
+                 },
+    "R230_T23":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1104.77
+                 },
+    "R230_T24":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1102.15
+                 },
+    "R230_T25":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1127.21
+                 },
+    "R230_T26":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1109.58
+                 },
+    "R230_T27":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1218.31
+                 },
+    "R230_T28":  {
+                     "ok":  true,
+                     "sweep_ok":  0,
+                     "apex_ok":  false,
+                     "seconds":  1531.39
+                 }
+}

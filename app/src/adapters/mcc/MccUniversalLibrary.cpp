@@ -1,3 +1,4 @@
+// Adapter: cbw64.dll load/scan/DIO/AO/AI for the USB-1208FS-Plus lighthouse DAQ.
 #include "adapters/mcc/MccUniversalLibrary.hpp"
 
 #include "adapters/mcc/Mcc1208Profile.hpp"
@@ -89,7 +90,6 @@ void MccUniversalLibrary::unload()
     vOut_ = nullptr;
     aIn_ = nullptr;
     toEngUnits_ = nullptr;
-    aInputMode_ = nullptr;
     dBitOut_ = nullptr;
     dConfigPort_ = nullptr;
     loaded_ = false;
@@ -103,13 +103,11 @@ bool MccUniversalLibrary::resolveSymbols(LighthouseError &error)
     vOut_ = reinterpret_cast<VOutFn>(GetProcAddress(module, "cbVOut"));
     aIn_ = reinterpret_cast<AInFn>(GetProcAddress(module, "cbAIn"));
     toEngUnits_ = reinterpret_cast<ToEngUnitsFn>(GetProcAddress(module, "cbToEngUnits"));
-    aInputMode_ = reinterpret_cast<AInputModeFn>(GetProcAddress(module, "cbAInputMode"));
     dBitOut_ = reinterpret_cast<DBitOutFn>(GetProcAddress(module, "cbDBitOut"));
     dConfigPort_ = reinterpret_cast<DConfigPortFn>(GetProcAddress(module, "cbDConfigPort"));
 
     if (getConfig_ == nullptr || getErrMsg_ == nullptr || vOut_ == nullptr || aIn_ == nullptr
-        || toEngUnits_ == nullptr || aInputMode_ == nullptr || dBitOut_ == nullptr
-        || dConfigPort_ == nullptr)
+        || toEngUnits_ == nullptr || dBitOut_ == nullptr || dConfigPort_ == nullptr)
     {
         error.code = LighthouseErrorCode::SdkError;
         error.message = "MCC Universal Library entry points missing in cbw64.dll.";
@@ -176,28 +174,6 @@ bool MccUniversalLibrary::scanFor1208FsPlus(LighthouseDeviceInfo &deviceInfo,
     error.message =
         "USB-1208FS-Plus not found in InstaCal configuration. Open InstaCal and assign the device.";
     return false;
-}
-
-bool MccUniversalLibrary::configureAnalogInputSingleEnded(const int boardNumber,
-                                                          LighthouseError &error) const
-{
-    error = {};
-    if (!loaded_ || aInputMode_ == nullptr)
-    {
-        error.code = LighthouseErrorCode::InvalidState;
-        error.message = "MCC Universal Library is not loaded.";
-        return false;
-    }
-
-    const int result = aInputMode_(boardNumber, kAnalogInputModeSingleEnded);
-    if (result != kNoErrors)
-    {
-        error.code = LighthouseErrorCode::SdkError;
-        error.message = "cbAInputMode(SINGLE_ENDED): " + formatUlError(result);
-        return false;
-    }
-
-    return true;
 }
 
 bool MccUniversalLibrary::configurePortAOutput(const int boardNumber, LighthouseError &error) const

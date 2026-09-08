@@ -1,3 +1,4 @@
+// Adapter: USB-1208FS-Plus lighthouse connect/scan/AO/DIO. No motion; USB DAQ only after Connect.
 #include "adapters/mcc/Mcc1208LighthouseController.hpp"
 
 #include "adapters/mcc/Mcc1208Profile.hpp"
@@ -130,11 +131,8 @@ bool Mcc1208LighthouseController::connect(LighthouseError &error)
     activeBoardNumber_ = detected.boardNumber;
     deviceInfo_ = detected;
 
-    if (!ul_.configureAnalogInputSingleEnded(activeBoardNumber_, error))
-    {
-        state_ = LighthouseState::Fault;
-        return false;
-    }
+    // SE vs DIFF is InstaCal on this board. cbAInputMode() faults (BADFUNCTION) here.
+    logMessage("Light backend: analog input mode from InstaCal (USB-1208FS-Plus has no cbAInputMode)");
 
     if (!ul_.configurePortAOutput(activeBoardNumber_, error))
     {

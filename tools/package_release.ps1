@@ -56,6 +56,8 @@ Get-ChildItem -LiteralPath $payload -Filter "_*.png" -File -ErrorAction Silently
     Remove-Item -Force
 
 $sidecarsSrc = Join-Path $repoRoot "app\sidecars"
+# venv/.venv stay on the build PC (too large). Install-HyperFusion.ps1 junctions
+# a local repo copy when it finds app\sidecars\<name>\venv, else it creates them.
 Copy-Tree $sidecarsSrc (Join-Path $payload "sidecars") @(
     "venv", ".venv", "__pycache__", ".pytest_cache", ".cache", "logs"
 )

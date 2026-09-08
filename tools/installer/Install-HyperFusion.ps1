@@ -3,6 +3,10 @@
 # missing vendor SDKs, Python + fusion venv, WSL/Ubuntu, then GSAM2 and UR3e.
 # Skips anything already present. WSL usually needs a reboot, then re-run this
 # script. Does not change application behavior.
+#
+# Keep this file ASCII-only. Windows PowerShell 5.1 reads UTF-8 as ANSI; a
+# UTF-8 em dash (bytes E2 80 94) becomes a stray quote (CP1252 0x94) and the
+# script fails to parse.
 param(
     [string]$InstallDir = "C:\HyperFusion",
     [string]$PayloadDir = "",
@@ -12,7 +16,8 @@ param(
     [switch]$SkipFusionVenv,
     [switch]$SkipWsl,
     [switch]$SkipGsam,
-    [switch]$SkipUr3e
+    [switch]$SkipUr3e,
+    [switch]$SkipShortcuts
 )
 
 $ErrorActionPreference = "Stop"
@@ -214,7 +219,7 @@ function Refresh-ProcessPath {
 function Install-PythonIfMissing {
     Refresh-ProcessPath
     if (Test-PythonUsable) {
-        Write-Host "==> Skip Python — already on PATH"
+        Write-Host "==> Skip Python - already on PATH"
         return $true
     }
     $winget = Get-Command winget -ErrorAction SilentlyContinue
@@ -245,7 +250,7 @@ function Test-WslUbuntuReady {
 
 function Install-WslUbuntuIfMissing {
     if (Test-WslUbuntuReady) {
-        Write-Host "==> Skip WSL — Ubuntu is already installed"
+        Write-Host "==> Skip WSL - Ubuntu is already installed"
         return "ready"
     }
     if (-not (Test-IsAdmin)) {
@@ -259,7 +264,7 @@ function Install-WslUbuntuIfMissing {
 }
 
 function Invoke-WslBash([string]$LinuxDir, [string]$Command, [string]$User = "") {
-    $cmd = "cd '$LinuxDir' && $Command"
+    $cmd = "cd '$LinuxDir'; $Command"
     Write-Host "==> wsl: $cmd"
     if ([string]::IsNullOrWhiteSpace($User)) {
         & wsl.exe -d Ubuntu -- bash -lc $cmd
@@ -268,6 +273,119 @@ function Invoke-WslBash([string]$LinuxDir, [string]$Command, [string]$User = "")
         & wsl.exe -d Ubuntu -u $User -- bash -lc $cmd
     }
     return $LASTEXITCODE
+}
+
+function Test-DirectoryWritable([string]$Path) {
+    try {
+        New-Item -ItemType Directory -Force -Path $Path -ErrorAction Stop | Out-Null
+        $probe = Join-Path $Path ".hf_write_probe"
+        [IO.File]::WriteAllText($probe, "ok")
+        Remove-Item -LiteralPath $probe -Force
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+function Resolve-WritableInstallDir([string]$Requested) {
+    if (Test-DirectoryWritable $Requested) {
+        return $Requested
+    }
+    $fallbacks = New-Object System.Collections.Generic.List[string]
+    if (Test-Path -LiteralPath "D:\") {
+        [void]$fallbacks.Add("D:\HyperFusion")
+    }
+    [void]$fallbacks.Add((Join-Path $env:LOCALAPPDATA "HyperFusion"))
+    foreach ($alt in $fallbacks) {
+        if ($alt -eq $Requested) { continue }
+        if (Test-DirectoryWritable $alt) {
+            Write-Warning "Cannot write $Requested (C:\ needs Administrator). Installing to $alt"
+            return $alt
+        }
+    }
+    Write-Error "Cannot write $Requested. Re-run elevated or pass -InstallDir to a writable folder."
+}
+
+function Get-DevSidecarRoot {
+    $candidates = New-Object System.Collections.Generic.List[string]
+    if (-not [string]::IsNullOrWhiteSpace($env:HYPERFUSION_DEV_ROOT)) {
+        [void]$candidates.Add((Join-Path $env:HYPERFUSION_DEV_ROOT "app\sidecars"))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) {
+        $here = $PSScriptRoot
+        [void]$candidates.Add((Join-Path (Split-Path (Split-Path $here -Parent) -Parent) "app\sidecars"))
+        [void]$candidates.Add((Join-Path (Split-Path $here -Parent) "app\sidecars"))
+    }
+    if (-not [string]::IsNullOrWhiteSpace($script:PayloadDirResolved)) {
+        $payloadParent = Split-Path $script:PayloadDirResolved -Parent
+        [void]$candidates.Add((Join-Path (Split-Path (Split-Path $payloadParent -Parent) -Parent) "app\sidecars"))
+    }
+    foreach ($root in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($root)) { continue }
+        if (Test-Path -LiteralPath (Join-Path $root "gsam2")) {
+            return $root
+        }
+    }
+    return $null
+}
+
+function Link-SidecarVenv([string]$DestVenv, [string]$SourceVenv, [string]$Label, [string]$MarkerRel) {
+    $destMarker = Join-Path $DestVenv $MarkerRel
+    if (Test-Path -LiteralPath $destMarker) {
+        return $true
+    }
+    $srcMarker = Join-Path $SourceVenv $MarkerRel
+    if (-not (Test-Path -LiteralPath $srcMarker)) {
+        return $false
+    }
+    $destParent = Split-Path $DestVenv -Parent
+    New-Item -ItemType Directory -Force -Path $destParent | Out-Null
+    if (Test-Path -LiteralPath $DestVenv) {
+        try {
+            Remove-Item -LiteralPath $DestVenv -Recurse -Force -ErrorAction Stop
+        }
+        catch {
+            Write-Warning "Could not replace $Label venv folder: $($_.Exception.Message)"
+            return $false
+        }
+    }
+    $null = cmd /c mklink /J "$DestVenv" "$SourceVenv"
+    if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $destMarker)) {
+        Write-Host "==> Reusing $Label venv (junction) $SourceVenv"
+        return $true
+    }
+    return $false
+}
+
+function New-AllUsersShortcut([string]$LinkPath, [string]$TargetPath, [string]$WorkingDir) {
+    $folder = Split-Path $LinkPath -Parent
+    New-Item -ItemType Directory -Force -Path $folder | Out-Null
+    $wsh = New-Object -ComObject WScript.Shell
+    $lnk = $wsh.CreateShortcut($LinkPath)
+    $lnk.TargetPath = $TargetPath
+    $lnk.WorkingDirectory = $WorkingDir
+    $lnk.WindowStyle = 1
+    if (Test-Path -LiteralPath $TargetPath) {
+        $lnk.IconLocation = "$TargetPath,0"
+    }
+    $lnk.Save()
+}
+
+function Install-AllUsersShortcuts([string]$AppDir) {
+    $exe = Join-Path $AppDir "app.exe"
+    if (-not (Test-Path -LiteralPath $exe)) {
+        Write-Warning "Cannot create shortcuts; missing $exe"
+        return
+    }
+    $startDir = Join-Path $env:ProgramData "Microsoft\Windows\Start Menu\Programs\HyperFusion"
+    $startLnk = Join-Path $startDir "HyperFusion.lnk"
+    $desktopLnk = Join-Path $env:PUBLIC "Desktop\HyperFusion.lnk"
+    New-AllUsersShortcut $startLnk $exe $AppDir
+    New-AllUsersShortcut $desktopLnk $exe $AppDir
+    Write-Host "==> All-users shortcuts:"
+    Write-Host "    $startLnk"
+    Write-Host "    $desktopLnk"
 }
 
 $here = $PSScriptRoot
@@ -292,6 +410,9 @@ if ([string]::IsNullOrWhiteSpace($VendorDir)) {
         }
     }
 }
+
+$script:PayloadDirResolved = [IO.Path]::GetFullPath($PayloadDir)
+$InstallDir = Resolve-WritableInstallDir $InstallDir
 
 Write-Host "==> HyperFusion installer"
 Write-Host "    InstallDir  $InstallDir"
@@ -329,10 +450,14 @@ if (-not $SkipVendor) {
     if ($jobs.Count -eq 0) {
         Write-Host "==> No vendor installers in $VendorDir (skipped)."
     }
+    $already = @($jobs | Where-Object { $_.Id -and (Test-ApiInstalled $_.Id) })
+    if ($jobs.Count -gt 0 -and $already.Count -eq $jobs.Count) {
+        Write-Host "==> All listed vendor SDKs already installed (skipped)."
+    }
     foreach ($job in $jobs) {
         $label = if ($job.Id) { $job.Id } else { [IO.Path]::GetFileName($job.Path) }
         if ($job.Id -and (Test-ApiInstalled $job.Id)) {
-            Write-Host "==> Skip $label — already installed"
+            Write-Host "==> Skip $label - already installed"
             continue
         }
         $code = Install-VendorPackage $job.Path $job.Id
@@ -352,7 +477,7 @@ if (-not $SkipFusionVenv) {
     $setup = Join-Path $InstallDir "sidecars\hf_fusion\setup_venv.ps1"
     $venvPy = Join-Path $InstallDir "sidecars\hf_fusion\.venv\Scripts\python.exe"
     if (Test-Path -LiteralPath $venvPy) {
-        Write-Host "==> Skip fusion venv — already present"
+        Write-Host "==> Skip fusion venv - already present"
     }
     elseif (Test-Path -LiteralPath $setup) {
         if (Install-PythonIfMissing) {
@@ -372,16 +497,20 @@ if (-not $SkipWsl) {
 }
 
 $wslReady = (-not $needReboot) -and (Test-WslUbuntuReady)
+$devSidecars = Get-DevSidecarRoot
 if ($wslReady -and -not $SkipGsam) {
     $gsamWin = Join-Path $InstallDir "sidecars\gsam2"
     $gsamVenv = Join-Path $gsamWin "venv\bin\python"
+    if ($devSidecars) {
+        [void](Link-SidecarVenv (Join-Path $gsamWin "venv") (Join-Path $devSidecars "gsam2\venv") "GSAM2" "bin\python")
+    }
     if (Test-Path -LiteralPath $gsamVenv) {
-        Write-Host "==> Skip GSAM2 venv — already present"
+        Write-Host "==> Skip GSAM2 venv - already present"
     }
     elseif (Test-Path -LiteralPath (Join-Path $gsamWin "install_venv.sh")) {
         $gsamWsl = ConvertTo-WslPath $gsamWin
         Write-Host "==> Setting up GSAM2 in WSL (PyTorch download can take a long time)"
-        $code = Invoke-WslBash $gsamWsl "chmod +x install_venv.sh && ./install_venv.sh"
+        $code = Invoke-WslBash $gsamWsl "chmod +x install_venv.sh; ./install_venv.sh"
         if ($code -ne 0) {
             Write-Warning "GSAM2 setup exited $code. Need Ubuntu user, NVIDIA driver, and internet."
         }
@@ -394,13 +523,16 @@ if ($wslReady -and -not $SkipGsam) {
 if ($wslReady -and -not $SkipUr3e) {
     $ur3eWin = Join-Path $InstallDir "sidecars\ur3e"
     $ur3eVenv = Join-Path $ur3eWin "venv\bin\ur3e_server"
+    if ($devSidecars) {
+        [void](Link-SidecarVenv (Join-Path $ur3eWin "venv") (Join-Path $devSidecars "ur3e\venv") "UR3e" "bin\ur3e_server")
+    }
     if (Test-Path -LiteralPath $ur3eVenv) {
-        Write-Host "==> Skip UR3e sidecar venv — already present"
+        Write-Host "==> Skip UR3e sidecar venv - already present"
     }
     elseif (Test-Path -LiteralPath (Join-Path $ur3eWin "scripts\install_env.sh")) {
         $ur3eWsl = ConvertTo-WslPath $ur3eWin
         Write-Host "==> Setting up UR3e ROS 2 sidecar in WSL (apt as root; may take a while)"
-        $code = Invoke-WslBash $ur3eWsl "chmod +x scripts/install_env.sh scripts/*.sh && ./scripts/install_env.sh" "root"
+        $code = Invoke-WslBash $ur3eWsl "chmod +x scripts/install_env.sh scripts/*.sh; ./scripts/install_env.sh" "root"
         if ($code -ne 0) {
             Write-Warning "UR3e setup exited $code."
         }
@@ -417,7 +549,7 @@ if ($wslReady -and -not $SkipUr3e) {
 }
 
 if ($wslReady) {
-    $nv = & wsl.exe -d Ubuntu -- bash -lc "command -v nvidia-smi >/dev/null && nvidia-smi -L || true"
+    $nv = & wsl.exe -d Ubuntu -- bash -lc "if command -v nvidia-smi >/dev/null; then nvidia-smi -L; fi"
     if ([string]::IsNullOrWhiteSpace($nv)) {
         Write-Warning "No NVIDIA GPU visible inside WSL. Install the Windows NVIDIA driver, then re-run GSAM setup if segmentation needs CUDA."
     }
@@ -427,6 +559,14 @@ if ($wslReady) {
 }
 
 $exe = Join-Path $InstallDir "app.exe"
+if (-not $SkipShortcuts) {
+    if (Test-IsAdmin) {
+        Install-AllUsersShortcuts $InstallDir
+    }
+    else {
+        Write-Warning "All-users Start Menu / Public Desktop shortcuts need Administrator. Re-run elevated."
+    }
+}
 Write-Host "==> Finished. App: $exe"
 Write-Host "    Re-run this script anytime (skips what is already installed):"
 Write-Host "      powershell -ExecutionPolicy Bypass -File `"$(Join-Path $InstallDir 'Install-HyperFusion.ps1')`" -InstallDir `"$InstallDir`""
