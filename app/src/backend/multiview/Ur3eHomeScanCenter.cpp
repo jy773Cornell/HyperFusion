@@ -1,10 +1,11 @@
-﻿// Tray scan centers: base XY for ring dome; home camera-TCP XY for apex (backend).
-// FK matches HyperFusion URDF chain (ceiling mount + UR3e + camera tool_tcp_*).
+﻿// Tray scan centers: base XY for ring dome; home active-TCP XY for apex (backend).
+// FK matches HyperFusion URDF chain (ceiling mount + UR3e + hyperfusion_tcp).
 #include "backend/multiview/Ur3eHemisphereScan.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
 #include "backend/multiview/Ur3eMountTransform.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 
@@ -126,8 +127,8 @@ Mat4 ur3eOpticalTcpWorldFromJoints(const std::array<double, 6> &qRad,
     // wrist_3 → flange → tool0 (ROS-Industrial)
     t = t * Mat4::fromRpyXyz(0.0, -kPi * 0.5, -kPi * 0.5, 0.0, 0.0, 0.0);
     t = t * Mat4::fromRpyXyz(kPi * 0.5, 0.0, kPi * 0.5, 0.0, 0.0, 0.0);
-    // tool0 → camera lens (tool_tcp_*)
-    const auto tcp = cfg.cameraToolTcpMm();
+    // tool0 → hyperfusion_tcp (active scan tip: camera or DLP)
+    const auto tcp = cfg.activeToolTcpMm();
     t = t
         * Mat4::fromRpyXyz(tcp.rollDeg * kPi / 180.0,
                            tcp.pitchDeg * kPi / 180.0,
@@ -191,8 +192,93 @@ void scanCenterOffsetM(double &xM, double &yM)
 
 void homeTcpScanCenterOffsetM(double &xM, double &yM)
 {
-    // Apex only: camera TCP XY at home_joints_deg (reachable look-down locus).
+    // Apex only: active scan-tip XY at home_joints_deg (reachable look-down locus).
     homeOpticalTcpTrayXyM(xM, yM);
+}
+
+void homeApexCameraUpWorld(double &x, double &y, double &z)
+{
+    // Keep apex image-up in the same wrist_3 family as home (no 180° camera roll).
+    const double w3 = hf::hardwareConfig().ur3e.homeJointsDeg[5];
+    double wrapped = std::fmod(w3 + 180.0, 360.0);
+    if (wrapped < 0.0)
+        wrapped += 360.0;
+    wrapped -= 180.0;
+    const bool plus90Family = std::abs(wrapped - 90.0) < std::abs(wrapped + 90.0);
+    x = plus90Family ? -1.0 : 1.0;
+    y = 0.0;
+    z = 0.0;
+}
+
+void homeOpticalTcpOrientation(double &rx, double &ry, double &rz,
+                               double &toolZX, double &toolZY, double &toolZZ)
+{
+    const auto &cfg = hf::hardwareConfig().ur3e;
+    std::array<double, 6> qRad{};
+    for (int i = 0; i < 6; ++i)
+        qRad[static_cast<std::size_t>(i)] =
+            cfg.homeJointsDeg[static_cast<std::size_t>(i)] * kPi / 180.0;
+
+    const Mat4 t = ur3eOpticalTcpWorldFromJoints(qRad, cfg);
+    toolZX = t.m[0][2];
+    toolZY = t.m[1][2];
+    toolZZ = t.m[2][2];
+
+    const double m00 = t.m[0][0];
+    const double m01 = t.m[0][1];
+    const double m02 = t.m[0][2];
+    const double m10 = t.m[1][0];
+    const double m11 = t.m[1][1];
+    const double m12 = t.m[1][2];
+    const double m20 = t.m[2][0];
+    const double m21 = t.m[2][1];
+    const double m22 = t.m[2][2];
+    const double trace = m00 + m11 + m22;
+    const double cosAngle = std::clamp((trace - 1.0) * 0.5, -1.0, 1.0);
+    const double angle = std::acos(cosAngle);
+    constexpr double kEps = 1.0e-12;
+    if (angle <= kEps)
+    {
+        rx = ry = rz = 0.0;
+        return;
+    }
+    if (angle > kPi - 1.0e-6 || std::abs(std::sin(angle)) < 1.0e-6)
+    {
+        double ax = std::sqrt(std::max(0.0, (m00 + 1.0) * 0.5));
+        double ay = std::sqrt(std::max(0.0, (m11 + 1.0) * 0.5));
+        double az = std::sqrt(std::max(0.0, (m22 + 1.0) * 0.5));
+        if (ax >= ay && ax >= az)
+        {
+            ay = std::copysign(ay, m10 + m01);
+            az = std::copysign(az, m20 + m02);
+        }
+        else if (ay >= az)
+        {
+            ax = std::copysign(ax, m10 + m01);
+            az = std::copysign(az, m21 + m12);
+        }
+        else
+        {
+            ax = std::copysign(ax, m20 + m02);
+            ay = std::copysign(ay, m21 + m12);
+        }
+        const double len = std::sqrt(ax * ax + ay * ay + az * az);
+        if (len <= kEps)
+        {
+            rx = kPi;
+            ry = 0.0;
+            rz = 0.0;
+            return;
+        }
+        rx = ax / len * kPi;
+        ry = ay / len * kPi;
+        rz = az / len * kPi;
+        return;
+    }
+    const double sinAngle = std::sin(angle);
+    rx = (m21 - m12) / (2.0 * sinAngle) * angle;
+    ry = (m02 - m20) / (2.0 * sinAngle) * angle;
+    rz = (m10 - m01) / (2.0 * sinAngle) * angle;
 }
 
 } // namespace hf::ur3e

@@ -182,6 +182,11 @@ class Ur3eRosBridge:
     """True when a leftover ur_control launch uses the opposite mock/hardware mode."""
     import subprocess
 
+    from hyperfusion_ur3e.ros_isolation import skip_stale_kill
+
+    if skip_stale_kill():
+      return False
+
     proc = subprocess.run(
         ["pgrep", "-af", "ur_control.launch.py"],
         capture_output=True,
@@ -884,6 +889,11 @@ class Ur3eRosBridge:
 
   def _external_driver_running(self) -> bool:
     import subprocess
+
+    from hyperfusion_ur3e.ros_isolation import skip_stale_kill
+
+    if skip_stale_kill():
+      return False
 
     if self._driver is not None and self._driver.running:
       return False
@@ -1705,7 +1715,7 @@ class Ur3eRosBridge:
     tolerance_deg = float(body.get("pin_pose_tolerance_deg", 0.0) or 0.0)
     lock_camera_up = bool(body.get("scan_camera_up_world_z", True))
     semi_ring_sweep = bool(body.get("semi_ring_sweep", False))
-    semi_max_sweep = int(body.get("semi_max_sweep_ok_per_ring", 3) or 3)
+    semi_max_sweep = int(body.get("semi_max_sweep_ok_per_ring", 2) or 2)
     # Candidate count per ring (legacy key was misnamed *_buffer_deg).
     semi_search_candidates = int(
         body.get(
@@ -1714,6 +1724,7 @@ class Ur3eRosBridge:
         )
         or 360
     )
+    semi_backup_coverage_deg = float(body.get("semi_backup_coverage_deg", 300.0) or 0.0)
     results = planner.plan_poses(
       targets,
       workspace,
@@ -1723,6 +1734,7 @@ class Ur3eRosBridge:
       semi_ring_sweep=semi_ring_sweep,
       semi_max_sweep_ok_per_ring=semi_max_sweep,
       semi_ring_search_candidates=semi_search_candidates,
+      semi_backup_coverage_deg=semi_backup_coverage_deg,
     )
 
     payload_results = []
@@ -1752,6 +1764,14 @@ class Ur3eRosBridge:
       }
       if semi_ring_sweep:
         entry["base_sweep_ok"] = bool(item.base_sweep_ok) if item.reachable else False
+        entry["backup_coverage_ok"] = (
+          bool(item.backup_coverage_ok) if item.reachable else False
+        )
+        entry["backup_union_deg"] = (
+          float(item.backup_union_deg) if item.reachable else 0.0
+        )
+        if item.reachable and item.pan_mask:
+          entry["pan_mask"] = [bool(v) for v in item.pan_mask]
       if item.reachable and item.tcp_rx is not None:
         entry["tcp"] = {
           "x": item.tcp_x_m,

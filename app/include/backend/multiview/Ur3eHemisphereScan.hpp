@@ -6,8 +6,7 @@
 namespace hf::ur3e
 {
 
-/// Semi-fixed apex look-down height. Independent of the GUI sphere radius (rings still use that).
-/// Auto hemisphere grids ignore this and keep using sphereRadiusM for the apex pin.
+/// Legacy fallback only. Semi and Auto apex Z = the ring sphere radius.
 constexpr double kSemiFixedApexRadiusM = 0.200;
 
 struct Ur3eHemisphereScanParams
@@ -65,17 +64,22 @@ void normalizeHemisphereScanParams(Ur3eHemisphereScanParams &params);
 /// Ring-dome / look-at center on the tray (metres). Fixed at (0,0) — under base_link
 /// when mount_offset_x/y_mm = 0 (Semi pans about the base).
 void scanCenterOffsetM(double &xM, double &yM);
-/// Apex pin XY only: camera TCP (tool_tcp_*) at home_joints_deg projected onto the tray.
+/// Apex pin XY only: active scan tip at home_joints_deg projected onto the tray.
 void homeTcpScanCenterOffsetM(double &xM, double &yM);
+/// Apex image-up in the tray frame (legacy). Prefer homeOpticalTcpOrientation.
+void homeApexCameraUpWorld(double &x, double &y, double &z);
+/// Home active-TCP orientation in world/base. Apex copies this — no extra turn vs home.
+void homeOpticalTcpOrientation(double &rx, double &ry, double &rz,
+                               double &toolZX, double &toolZY, double &toolZZ);
 /// Grid pin count including the always-present apex (θ=0) pin.
 [[nodiscard]] int hemisphereScanPointCount(const Ur3eHemisphereScanParams &params);
 /// Latitude/longitude grid plus a fixed apex pin first.
-/// Apex sits over home camera-TCP XY (perpendicular look-down); rings use base XY (0,0).
-/// Apex camera-up / TCP upper face → world +X; other pins use scan_camera_up_world_z.
+/// Apex sits over home active-TCP XY (perpendicular look-down); rings use base XY (0,0).
+/// Apex orientation = home TCP (no extra roll). Rings → world −Z.
 [[nodiscard]] std::vector<Ur3eHemisphereScanPoint>
 generateHemisphereScanPoints(const Ur3eHemisphereScanParams &params);
 /// Semi Plan grid: same θ layers + apex, but *searchCandidates* φ samples evenly over 360°.
-/// Apex Z is always kSemiFixedApexRadiusM; ring pins use params.sphereRadiusM.
+/// Apex Z = params.sphereRadiusM (same sphere as the ring).
 [[nodiscard]] std::vector<Ur3eHemisphereScanPoint>
 generateSemiHemisphereScanPoints(const Ur3eHemisphereScanParams &params,
                                  int searchCandidates);

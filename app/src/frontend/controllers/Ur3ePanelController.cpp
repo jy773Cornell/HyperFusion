@@ -85,6 +85,18 @@ std::vector<double> wristSweepOffsetsRad(const int stepsEachWay, const double st
     return offsets;
 }
 
+bool sameElbowFamily(const std::vector<double> &a, const std::vector<double> &b)
+{
+    if (a.size() < 3 || b.size() < 3)
+        return true;
+    const double ea = a[2];
+    const double eb = b[2];
+    constexpr double kNearZeroRad = 5.0 * 3.14159265358979323846 / 180.0;
+    if (std::abs(ea) < kNearZeroRad || std::abs(eb) < kNearZeroRad)
+        return true;
+    return (ea * eb) > 0.0;
+}
+
 Ur3eScanTcpPose scanTcpFromLivePose(const Ur3eTcpPose &live, const Ur3eScanTcpPose &fallback)
 {
     Ur3eScanTcpPose tcp = fallback;
@@ -960,6 +972,16 @@ void Ur3ePanelController::wireSettingsTabConnections()
                 this,
                 &Ur3ePanelController::onLoadPlannedRouteAsSemiFixedRequested);
         connect(host_->ur3eHemisphereScanSettings_,
+                &ui::Ur3eHemisphereScanSettingsWidget::scanTcpChanged,
+                this,
+                [this]() {
+                    const bool dlp = hf::hardwareConfig().ur3e.usesDlpScanTcp();
+                    host_->appendLog(
+                        QStringLiteral("UR3e: scan tip → %1. Disconnect / Connect to rematerialize "
+                                       "hyperfusion_tcp.")
+                            .arg(dlp ? QStringLiteral("DLP lens") : QStringLiteral("Camera lens")));
+                });
+        connect(host_->ur3eHemisphereScanSettings_,
                 &ui::Ur3eHemisphereScanSettingsWidget::paramsChanged,
                 this,
                 [this]() {
@@ -1707,7 +1729,7 @@ void Ur3ePanelController::onPlanHemisphereScanRequested()
     host_->appendLog(
         semiMode
             ? QStringLiteral(
-                  "UR3e semi plan: MoveIt IK + base-sweep (first 3 OK pins / ring, "
+                  "UR3e semi plan: MoveIt IK + base-sweep (first 2 OK pins / ring, "
                   "%1 φ candidates/ring)…")
                   .arg(hf::hardwareConfig().ur3e.semiRingSearchCandidates)
             : QStringLiteral("UR3e scan plan: running MoveIt IK + collision check…"));
@@ -1732,7 +1754,7 @@ void Ur3ePanelController::onPlanHemisphereScanRequested()
                  panDirection]() {
         QString errorMessage;
         const Ur3eHemisphereScanPlan plan =
-            semiMode ? evaluateSemiHemisphereScanPlanMoveIt(serverUrl, scanParams, boundary, 3,
+            semiMode ? evaluateSemiHemisphereScanPlanMoveIt(serverUrl, scanParams, boundary, 2,
                                                             &errorMessage)
                      : evaluateHemisphereScanPlanMoveIt(serverUrl, scanParams, boundary,
                                                         &errorMessage);
@@ -1839,18 +1861,25 @@ void Ur3ePanelController::finishSemiScanPlan(const Ur3eHemisphereScanPlan &plan,
     scanPlanReady_ = false; // Semi execute uses route rings, not Auto pin order.
 
     int sweepOk = 0;
+    int backupOk = 0;
     for (const Ur3ePlannedScanPoint &pt : plan.points)
     {
-        if (pt.reachable && pt.baseSweepOk)
+        if (!pt.reachable)
+            continue;
+        if (pt.baseSweepOk)
             ++sweepOk;
+        else if (pt.backupCoverageOk)
+            ++backupOk;
     }
 
     host_->appendLog(
         QStringLiteral("UR3e semi plan (MoveIt): %1 candidates — %2 reachable, "
-                       "%3 base-sweep OK (pin tip ±%4° vertical).")
+                       "%3 base-sweep OK, %4 backup-coverage "
+                       "(pin tip ±%5° vertical).")
             .arg(plan.points.size())
             .arg(plan.reachableCount)
             .arg(sweepOk)
+            .arg(backupOk)
             .arg(hf::hardwareConfig().ur3e.pinPoseToleranceDeg, 0, 'f', 1));
     if (!plan.errorMessage.isEmpty())
         host_->appendLog(QStringLiteral("UR3e semi plan: %1").arg(plan.errorMessage));
@@ -1863,7 +1892,7 @@ void Ur3ePanelController::finishSemiScanPlan(const Ur3eHemisphereScanPlan &plan,
     if (host_->ur3eHemisphereScanSettings_ != nullptr)
     {
         host_->ur3eHemisphereScanSettings_->setSemiFixedRoute(route);
-        host_->ur3eHemisphereScanSettings_->setPlannedReachablePins(sweepOk);
+        host_->ur3eHemisphereScanSettings_->setPlannedReachablePins(sweepOk + backupOk);
     }
 
     // Persist into Semi-only folder.
@@ -2064,10 +2093,10 @@ void Ur3ePanelController::onLoadPlannedRouteAsSemiFixedRequested(const QString &
     // Layer + θ from plan latitudes (scan_params can be stale / defaults).
     syncHemisphereParamsFromPlanLatitudes(plan, routeParams);
 
-    if (semi.rings.isEmpty())
+    if (semi.rings.isEmpty() && !semi.hasTopPose)
     {
         host_->appendLog(QStringLiteral(
-            "UR3e semi-fixed: Semi plan has no base-sweep OK ring entries."));
+            "UR3e semi-fixed: Semi plan has no sweep-OK or backup-coverage ring entries."));
         // Still show all latitudes (unreachable in blue) when the plan has points.
         if (!plan.points.empty())
         {
@@ -2084,25 +2113,41 @@ void Ur3ePanelController::onLoadPlannedRouteAsSemiFixedRequested(const QString &
     }
 
     plannedScanPlan_ = plan;
-    scanPlanReady_ = false;
+    scanPlanReady_ = plan.reachableCount > 0;
 
     host_->ur3eHemisphereScanSettings_->applyLoadedSemiPlanSettings(routeParams, intervalDeg,
                                                                     panDir);
     host_->ur3eHemisphereScanSettings_->setSemiFixedRoute(semi);
+    host_->ur3eHemisphereScanSettings_->setPlannedReachablePins(
+        std::max(1, plan.reachableCount));
     host_->ur3eHemisphereScanSettings_->rememberSemiFixedPlanPath(routePath);
     if (host_->ur3eScanRoutePlanWidget_ != nullptr)
         host_->ur3eScanRoutePlanWidget_->setScanParams(
             host_->ur3eHemisphereScanSettings_->semiPlanParams());
     refreshSemiFixedPreview();
-    host_->appendLog(
-        QStringLiteral("UR3e semi-fixed: loaded Semi plan \"%1\" → %2 ring(s) "
-                       "(Layer %3, interval %4°, θ %5–%6°).")
-            .arg(displayName)
-            .arg(semi.rings.size())
-            .arg(routeParams.verticalPoints)
-            .arg(intervalDeg, 0, 'f', 1)
-            .arg(routeParams.thetaMinDeg, 0, 'f', 0)
-            .arg(routeParams.thetaMaxDeg, 0, 'f', 0));
+    const bool apexOnly =
+        semi.hasTopPose
+        && (semi.rings.isEmpty()
+            || (semi.rings.size() == 1
+                && (semi.rings[0].noPan || std::abs(semi.rings[0].thetaDeg) < 0.75)));
+    if (apexOnly)
+    {
+        host_->appendLog(
+            QStringLiteral("UR3e semi-fixed: loaded Semi plan \"%1\" → apex only (executable).")
+                .arg(displayName));
+    }
+    else
+    {
+        host_->appendLog(
+            QStringLiteral("UR3e semi-fixed: loaded Semi plan \"%1\" → %2 ring(s) "
+                           "(Layer %3, interval %4°, θ %5–%6°).")
+                .arg(displayName)
+                .arg(semi.rings.size())
+                .arg(routeParams.verticalPoints)
+                .arg(intervalDeg, 0, 'f', 1)
+                .arg(routeParams.thetaMinDeg, 0, 'f', 0)
+                .arg(routeParams.thetaMaxDeg, 0, 'f', 0));
+    }
     updateRobotUi();
     if (host_->capturePanel() != nullptr)
         host_->capturePanel()->syncBfsAndMultiviewRgbCaptureControls();
@@ -2284,6 +2329,33 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
         }
         order = std::move(filtered);
     }
+    // Two full-360° pins on one latitude: keep one (simple path). Backup pairs stay.
+    {
+        QHash<int, bool> sweepTaken;
+        std::vector<int> simple;
+        simple.reserve(order.size());
+        for (const int index : order)
+        {
+            if (index < 0 || index >= static_cast<int>(plannedScanPlan_.points.size()))
+                continue;
+            const Ur3ePlannedScanPoint &pt =
+                plannedScanPlan_.points[static_cast<std::size_t>(index)];
+            if (std::abs(pt.gridPoint.thetaDeg) < 0.75)
+            {
+                simple.push_back(index);
+                continue;
+            }
+            if (pt.baseSweepOk)
+            {
+                const int key = static_cast<int>(std::lround(pt.gridPoint.thetaDeg * 2.0));
+                if (sweepTaken.contains(key))
+                    continue;
+                sweepTaken.insert(key, true);
+            }
+            simple.push_back(index);
+        }
+        order = std::move(simple);
+    }
     if (order.empty())
     {
         host_->appendLog(QStringLiteral("UR3e scan execute rejected: no stored joint solutions."));
@@ -2383,18 +2455,8 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
     scanExecuteSuppressUiSummary_ = options.suppressUiSummary;
     if (host_->ur3eScanRoutePlanWidget_ != nullptr)
     {
-        int basePins = 0;
-        for (const Ur3ePlannedScanPoint &pt : plannedScanPlan_.points)
-        {
-            if (!pt.reachable)
-                continue;
-            const bool apex = std::abs(pt.gridPoint.thetaDeg) <= 1.0e-9;
-            if (options.pinSet == HemisphereScanPinSet::All
-                || (options.pinSet == HemisphereScanPinSet::ApexOnly && apex)
-                || (options.pinSet == HemisphereScanPinSet::RingsOnly && !apex))
-                ++basePins;
-        }
-        const int plannedPins = basePins * std::max(1, wristPosesPerPin);
+        const int plannedPins =
+            static_cast<int>(order.size()) * std::max(1, wristPosesPerPin);
         host_->ur3eScanRoutePlanWidget_->beginScanExecution(plannedPins);
     }
     setBusy(true);
@@ -2699,12 +2761,42 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                     Q_ARG(QString, targetSummary),
                     Q_ARG(QVariantList, targetPositionsVariant));
 
+                bool homeThenPin = false;
+                if (step > 0)
+                {
+                    const int prevIndex = order[static_cast<std::size_t>(step - 1)];
+                    if (prevIndex >= 0
+                        && prevIndex < static_cast<int>(planCopy.points.size()))
+                    {
+                        const Ur3ePlannedScanPoint &prev =
+                            planCopy.points[static_cast<std::size_t>(prevIndex)];
+                        // Via-home for backup 2-pin pairs, and when elbow family
+                        // flips (direct PTP folds the payload through the arm).
+                        const bool backupPair = sameHemisphereScanRing(prev, point)
+                                                && !prev.baseSweepOk && !point.baseSweepOk;
+                        const bool elbowFlip = !sameElbowFamily(
+                            prev.jointPositionsRad, point.jointPositionsRad);
+                        homeThenPin = backupPair || elbowFlip;
+                    }
+                }
+                if (homeThenPin)
+                {
+                    QMetaObject::invokeMethod(
+                        this,
+                        [this, pointIndex]() {
+                            host_->appendLog(
+                                QStringLiteral(
+                                    "UR3e scan execute: via home, then pin %1")
+                                    .arg(pointIndex));
+                        },
+                        Qt::QueuedConnection);
+                }
                 const Ur3eScanWaypointMoveResult moveResult = ur3eExecuteScanWaypoint(
                     serverUrl,
                     point.jointPositionsRad,
                     &point.tcp,
                     nullptr,
-                    false,
+                    homeThenPin,
                     false);
                 if (moveResult.stopped)
                 {
@@ -3141,21 +3233,16 @@ void Ur3ePanelController::refreshSemiFixedPreview()
         return;
 
     QVector<Ur3eSemiFixedPreviewRing> rings;
-    // Prefer full plan preview so unreachable latitudes stay visible (blue).
-    if (!plannedScanPlan_.points.empty())
-    {
+    const Ur3eSemiFixedRoute route = host_->ur3eHemisphereScanSettings_->semiFixedRoute();
+    // Route entries match execute indices (backup 2-pin rings are two hops).
+    if (!route.rings.isEmpty() || route.hasTopPose)
+        rings = inferSemiFixedPreviewRings(route);
+    else if (!plannedScanPlan_.points.empty())
         rings = previewSemiFixedRingsFromHemispherePlan(plannedScanPlan_);
-    }
     else
     {
-        const Ur3eSemiFixedRoute route = host_->ur3eHemisphereScanSettings_->semiFixedRoute();
-        if (!route.rings.isEmpty())
-            rings = inferSemiFixedPreviewRings(route);
-        else
-        {
-            rings = previewSemiFixedRingsFromScanParams(
-                host_->ur3eHemisphereScanSettings_->semiPlanParams());
-        }
+        rings = previewSemiFixedRingsFromScanParams(
+            host_->ur3eHemisphereScanSettings_->semiPlanParams());
     }
     host_->ur3eScanRoutePlanWidget_->setSemiFixedPreviewRings(rings);
 }
@@ -3202,11 +3289,13 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
 
     const Ur3eSemiFixedRoute routeRaw = host_->ur3eHemisphereScanSettings_->semiFixedRoute();
     Ur3eSemiFixedRoute route = routeRaw;
+    pruneSemiFixedRedundantFullSpinPins(route);
     ensureSemiFixedTopPose(route);
-    if (route.rings.isEmpty())
+    host_->ur3eHemisphereScanSettings_->setSemiFixedRoute(route);
+    if (route.rings.isEmpty() && !route.hasTopPose)
     {
         host_->appendLog(
-            QStringLiteral("UR3e semi-fixed execute rejected: add at least one ring entry."));
+            QStringLiteral("UR3e semi-fixed execute rejected: add a ring or load an apex plan."));
         return false;
     }
 
@@ -3264,9 +3353,19 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
         wristSweep = host_->ur3eHemisphereScanSettings_->wristSweepParams();
     if (host_->ur3eScanRoutePlanWidget_ != nullptr)
     {
-        const int samplesPerRing = semiFixedSampleCount(
-            route.intervalDeg > 0.0 ? route.intervalDeg : 10.0);
-        const int basePins = 1 + route.rings.size() * samplesPerRing; // top + pan samples
+        const double intervalDeg =
+            route.intervalDeg > 0.0 ? route.intervalDeg : 10.0;
+        int ringSamples = 0;
+        for (const Ur3eSemiFixedRing &ring : route.rings)
+            ringSamples += semiFixedRingSampleCount(ring, intervalDeg);
+        const bool skipTop = options.pinSet == HemisphereScanPinSet::RingsOnly;
+        const bool skipRings = options.pinSet == HemisphereScanPinSet::ApexOnly;
+        const bool apexRingOnly =
+            route.rings.size() == 1
+            && (route.rings[0].noPan || std::abs(route.rings[0].thetaDeg) < 0.75);
+        const int topSamples =
+            (!skipTop && !(apexRingOnly && !skipRings)) ? 1 : 0;
+        const int basePins = topSamples + (skipRings ? 0 : ringSamples);
         const int plannedPins = basePins * std::max(1, wristSweep.imagesPerPin());
         host_->ur3eScanRoutePlanWidget_->beginScanExecution(plannedPins);
     }

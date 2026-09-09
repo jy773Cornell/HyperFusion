@@ -58,20 +58,27 @@ Ur3eScanTcpPose tcpPoseForHemispherePoint(const Ur3eHemisphereScanPoint &gridPoi
     double centerZM = kSampleTrayHeightM;
     mount.transformPoint(centerXM, centerYM, centerZM);
 
+    if (isApexPin)
+    {
+        // Keep home camera orientation. Only the look-down height changes (Z = R).
+        homeOpticalTcpOrientation(tcp.rxRad, tcp.ryRad, tcp.rzRad, tcp.toolZMx,
+                                  tcp.toolZMy, tcp.toolZMz);
+        return tcp;
+    }
+
     tcp.toolZMx = centerXM - tcp.xM;
     tcp.toolZMy = centerYM - tcp.yM;
     tcp.toolZMz = centerZM - tcp.zM;
 
-    // Apex (θ=0, look-down): image-up / TCP upper face → world +X.
-    // Other pins: image-up ≈ tray/world +Z when scan_camera_up_world_z is enabled.
-    double upX = isApexPin ? 1.0 : 0.0;
+    // Ring pins: image-up → world −Z (camera upside-down, projector on top).
+    double upX = 0.0;
     double upY = 0.0;
-    double upZ = isApexPin ? 0.0 : 1.0;
+    double upZ = -1.0;
     mount.transformVector(upX, upY, upZ);
 
     // Nominal tool +Z = look at scan-center. pin_tcp_tilt_deg is the tip angle of that
     // optical axis away from nominal (TCP pose orientation), not a single-wrist turn.
-    // + tips toward camera-up; − toward tray. Cone search centers on the tilted +Z.
+    // + tips toward camera-up (ring up = world −Z → more look-down). Cone centers on tilted +Z.
     const double tiltDeg = hf::hardwareConfig().ur3e.pinTcpTiltDeg;
     if (!isApexPin && std::abs(tiltDeg) > 1.0e-9)
     {
@@ -197,12 +204,16 @@ Ur3eHemisphereScanPlan evaluateHemisphereScanPlanMoveIt(const QString &serverUrl
 
         pose.insert(QStringLiteral("tool_z_z"), tcp.toolZMz);
 
-        // Camera-up preference for MoveIt cone re-rolls (apex uses world +X).
         const bool isApexPin =
             std::abs(gridPoints[index].thetaDeg) <= 1.0e-9;
-        pose.insert(QStringLiteral("camera_up_x"), isApexPin ? 1.0 : 0.0);
-        pose.insert(QStringLiteral("camera_up_y"), 0.0);
-        pose.insert(QStringLiteral("camera_up_z"), isApexPin ? 0.0 : 1.0);
+        double apexUpX = 1.0;
+        double apexUpY = 0.0;
+        double apexUpZ = 0.0;
+        if (isApexPin)
+            homeApexCameraUpWorld(apexUpX, apexUpY, apexUpZ);
+        pose.insert(QStringLiteral("camera_up_x"), isApexPin ? apexUpX : 0.0);
+        pose.insert(QStringLiteral("camera_up_y"), isApexPin ? apexUpY : 0.0);
+        pose.insert(QStringLiteral("camera_up_z"), isApexPin ? apexUpZ : -1.0);
         pose.insert(QStringLiteral("require_perpendicular"), isApexPin);
 
         poses.append(pose);
@@ -387,9 +398,14 @@ Ur3eHemisphereScanPlan evaluateSemiHemisphereScanPlanMoveIt(
         pose.insert(QStringLiteral("tool_z_y"), tcp.toolZMy);
         pose.insert(QStringLiteral("tool_z_z"), tcp.toolZMz);
         const bool isApexPin = std::abs(gridPoints[index].thetaDeg) <= 1.0e-9;
-        pose.insert(QStringLiteral("camera_up_x"), isApexPin ? 1.0 : 0.0);
-        pose.insert(QStringLiteral("camera_up_y"), 0.0);
-        pose.insert(QStringLiteral("camera_up_z"), isApexPin ? 0.0 : 1.0);
+        double apexUpX = 1.0;
+        double apexUpY = 0.0;
+        double apexUpZ = 0.0;
+        if (isApexPin)
+            homeApexCameraUpWorld(apexUpX, apexUpY, apexUpZ);
+        pose.insert(QStringLiteral("camera_up_x"), isApexPin ? apexUpX : 0.0);
+        pose.insert(QStringLiteral("camera_up_y"), isApexPin ? apexUpY : 0.0);
+        pose.insert(QStringLiteral("camera_up_z"), isApexPin ? apexUpZ : -1.0);
         pose.insert(QStringLiteral("require_perpendicular"), isApexPin);
         pose.insert(QStringLiteral("theta_deg"), gridPoints[index].thetaDeg);
         pose.insert(QStringLiteral("phi_deg"), gridPoints[index].phiDeg);
@@ -454,6 +470,17 @@ Ur3eHemisphereScanPlan evaluateSemiHemisphereScanPlanMoveIt(
             planned.reachable && entry.value(QStringLiteral("home_path_ok")).toBool(true);
         planned.baseSweepOk =
             planned.reachable && entry.value(QStringLiteral("base_sweep_ok")).toBool(false);
+        planned.backupCoverageOk =
+            planned.reachable && entry.value(QStringLiteral("backup_coverage_ok")).toBool(false);
+        planned.backupUnionDeg = entry.value(QStringLiteral("backup_union_deg")).toDouble(0.0);
+        planned.panMask.clear();
+        if (entry.contains(QStringLiteral("pan_mask")) && entry.value(QStringLiteral("pan_mask")).isArray())
+        {
+            const QJsonArray mask = entry.value(QStringLiteral("pan_mask")).toArray();
+            planned.panMask.reserve(mask.size());
+            for (const QJsonValue &bit : mask)
+                planned.panMask.push_back(bit.toBool(false) || bit.toInt(0) != 0 ? 1 : 0);
+        }
         planned.planningError = entry.value(QStringLiteral("error")).toString();
 
         const QJsonArray joints = entry.value(QStringLiteral("joints")).toArray();
@@ -684,6 +711,29 @@ std::vector<int> buildHemisphereScanExecutionOrder(const Ur3eHemisphereScanPlan 
     if (order.empty())
         order = indices;
     return order;
+}
+
+bool sameHemisphereScanRing(const Ur3ePlannedScanPoint &a, const Ur3ePlannedScanPoint &b)
+{
+    if (std::abs(a.gridPoint.thetaDeg) < 0.75 || std::abs(b.gridPoint.thetaDeg) < 0.75)
+        return false;
+    return std::lround(a.gridPoint.thetaDeg * 2.0) == std::lround(b.gridPoint.thetaDeg * 2.0);
+}
+
+int reachablePinsOnSameRing(const Ur3eHemisphereScanPlan &plan,
+                            const Ur3ePlannedScanPoint &ref)
+{
+    if (std::abs(ref.gridPoint.thetaDeg) < 0.75)
+        return 0;
+    int n = 0;
+    for (const Ur3ePlannedScanPoint &pt : plan.points)
+    {
+        if (!pt.reachable || pt.jointPositionsRad.size() != 6)
+            continue;
+        if (sameHemisphereScanRing(ref, pt))
+            ++n;
+    }
+    return n;
 }
 
 } // namespace hf::ur3e

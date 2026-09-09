@@ -44,6 +44,7 @@ public:
                                      double intervalDeg,
                                      int panDirection);
     void applyBoundaryLimits(const hf::ur3e::Ur3eWorkspaceBoundary &boundary);
+    void applyScanTcpFromConfig();
     void setPlanEnabled(bool enabled);
     void setExecuteEnabled(bool enabled);
     void setParamsEnabled(bool enabled);
@@ -73,11 +74,13 @@ signals:
     /// Load an Auto planned hemisphere route and convert latitudes → semi-fixed rings.
     void loadPlannedRouteAsSemiFixedRequested(const QString &routePath);
     void paramsChanged();
+    void scanTcpChanged();
     void scanModeChanged();
     void semiFixedRouteChanged();
     void addSemiFixedRingRequested();
 
 private:
+    void onScanTcpChanged();
     void onParameterChanged();
     void onWristSweepChanged();
     void updateImageEstimateLabel();
@@ -102,6 +105,7 @@ private:
     int plannedReachablePins_ = -1;
 
     QComboBox *modeCombo_ = nullptr;
+    QComboBox *scanTcpCombo_ = nullptr;
     QWidget *autoSection_ = nullptr;
     QWidget *semiFixedSection_ = nullptr;
 

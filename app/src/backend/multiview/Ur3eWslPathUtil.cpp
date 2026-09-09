@@ -67,7 +67,7 @@ QString buildToolPayloadEnvExports(const hf::HardwareConfig::Ur3eConfig &cfg)
     const QString mesh =
         cfg.toolPayloadMesh.trimmed().isEmpty() ? QStringLiteral("ur_tool_payload.stl")
                                                 : cfg.toolPayloadMesh.trimmed();
-    const auto tcp = cfg.cameraToolTcpMm();
+    const auto tcp = cfg.activeToolTcpMm();
     return QStringLiteral("export HYPERFUSION_TOOL_PAYLOAD_ENABLED='true' && "
                           "export HYPERFUSION_TOOL_PAYLOAD_SHAPE='%1' && "
                           "export HYPERFUSION_TOOL_PAYLOAD_MESH_FILE='%2' && "

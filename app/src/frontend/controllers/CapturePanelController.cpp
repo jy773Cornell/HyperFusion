@@ -4722,7 +4722,24 @@ void hf::capture::CapturePanelController::onMultiviewCaptureFinished(
   captureMultiviewElapsedMsSoFar_ += elapsedMs;
 
   const auto &hw = hf::hardwareConfig();
-  if (ok && hw.sampleMultiviewTwoStage() && !captureMultiviewNeedRingsLeg_) {
+  bool haveSpinRings = true;
+  if (host_->ur3eHemisphereScanSettings_ != nullptr
+      && host_->ur3eHemisphereScanSettings_->scanExecuteMode()
+             == hf::ur3e::Ur3eScanExecuteMode::SemiFixed)
+  {
+    const auto semi = host_->ur3eHemisphereScanSettings_->semiFixedRoute();
+    haveSpinRings = false;
+    for (const auto &ring : semi.rings)
+    {
+      if (!ring.noPan && std::abs(ring.thetaDeg) >= 0.75)
+      {
+        haveSpinRings = true;
+        break;
+      }
+    }
+  }
+  if (ok && hw.sampleMultiviewTwoStage() && !captureMultiviewNeedRingsLeg_
+      && haveSpinRings) {
     captureMultiviewInProgress_ = false;
     captureMultiviewNeedRingsLeg_ = true;
     captureScanPhase_ = CaptureScanPhase::MoveToMultiviewPosition;

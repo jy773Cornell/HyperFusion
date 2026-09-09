@@ -3,6 +3,7 @@
 
 #include "backend/HyperFusionConfig.hpp"
 #include "backend/camera/processing/GsamWslPathUtil.hpp"
+#include "backend/multiview/Ur3eHemisphereScan.hpp"
 #include "backend/multiview/Ur3eHemisphereScanReachability.hpp"
 #include "backend/multiview/Ur3eWorkspaceBoundary.hpp"
 
@@ -684,7 +685,7 @@ Ur3eScanWaypointMoveResult ur3eExecuteScanWaypoint(const QString &serverUrl,
         tcp.insert(QStringLiteral("tool_z_x"), tcpPose->toolZMx);
         tcp.insert(QStringLiteral("tool_z_y"), tcpPose->toolZMy);
         tcp.insert(QStringLiteral("tool_z_z"), tcpPose->toolZMz);
-        // Apex look-down: keep exact perpendicular (no pin-pose cone) + camera-up +X.
+        // Apex look-down: exact perpendicular, camera-up = home facing (no 180° roll).
         // Semi-fixed ring entries force cone (require_perpendicular=false).
         const bool apexLookDown = tcpPose->toolZMz < -0.98
                                   && std::abs(tcpPose->toolZMx) < 0.15
@@ -694,14 +695,18 @@ Ur3eScanWaypointMoveResult ur3eExecuteScanWaypoint(const QString &serverUrl,
             tcp.insert(QStringLiteral("require_perpendicular"), false);
             tcp.insert(QStringLiteral("camera_up_x"), 0.0);
             tcp.insert(QStringLiteral("camera_up_y"), 0.0);
-            tcp.insert(QStringLiteral("camera_up_z"), 1.0);
+            tcp.insert(QStringLiteral("camera_up_z"), -1.0);
         }
         else if (apexLookDown)
         {
+            double upX = 1.0;
+            double upY = 0.0;
+            double upZ = 0.0;
+            homeApexCameraUpWorld(upX, upY, upZ);
             tcp.insert(QStringLiteral("require_perpendicular"), true);
-            tcp.insert(QStringLiteral("camera_up_x"), 1.0);
-            tcp.insert(QStringLiteral("camera_up_y"), 0.0);
-            tcp.insert(QStringLiteral("camera_up_z"), 0.0);
+            tcp.insert(QStringLiteral("camera_up_x"), upX);
+            tcp.insert(QStringLiteral("camera_up_y"), upY);
+            tcp.insert(QStringLiteral("camera_up_z"), upZ);
         }
         body.insert(QStringLiteral("tcp"), tcp);
     }

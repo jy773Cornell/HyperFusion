@@ -203,7 +203,7 @@
   </link>
   <!-- base_joint fixes base_link to the environment -->
   <joint name="base_joint" type="fixed">
-    <origin rpy="3.141593 0.000000 0.000000" xyz="0.000000 0.000000 0.629000"/>
+    <origin rpy="3.141593 0.000000 0.000000" xyz="0.000000 0.000000 0.870000"/>
     <parent link="world"/>
     <child link="base_link"/>
   </joint>
@@ -419,7 +419,7 @@
       <command_interface name="effort"/>
       <state_interface name="position">
         <!-- initial position for the mock system and simulation -->
-        <param name="initial_value">-1.570796</param>
+        <param name="initial_value">1.570796</param>
       </state_interface>
       <state_interface name="velocity">
         <param name="initial_value">0.0</param>
@@ -664,7 +664,7 @@
       <!-- CAD was pan-180° off in tool0 XY → rotate about Z by π. -->
       <origin rpy="0 0 3.141592653589793" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="file:///mnt/d/Pototypy/HyperFusion/app/sidecars/ur3e/urdf/meshes/ur_tool_payload.stl" scale="1 1 1"/>
+        <mesh filename="file:///mnt/d/Pototypy/HyperFusion/app/sidecars/ur3e/urdf/meshes/bfs_dlp_payload.stl" scale="1 1 1"/>
       </geometry>
       <material name="hyperfusion_tool_payload_visual">
         <color rgba="0.15 0.85 1.0 0.55"/>
@@ -674,7 +674,7 @@
       <!-- CAD was pan-180° off in tool0 XY → rotate about Z by π. -->
       <origin rpy="0 0 3.141592653589793" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="file:///mnt/d/Pototypy/HyperFusion/app/sidecars/ur3e/urdf/meshes/ur_tool_payload.stl" scale="1 1 1"/>
+        <mesh filename="file:///mnt/d/Pototypy/HyperFusion/app/sidecars/ur3e/urdf/meshes/bfs_dlp_payload.stl" scale="1 1 1"/>
       </geometry>
     </collision>
     <inertial>

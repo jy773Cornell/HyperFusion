@@ -18,12 +18,31 @@ from pathlib import Path
 from typing import Any
 
 CACHE_SCHEMA = 4
-# Semi-fixed apex look-down height. Independent of the ring sphere radius.
-APEX_RADIUS_M = 0.200
 
 
 def _repo_root() -> Path:
     return Path(__file__).resolve().parents[3]
+
+
+def load_hub_joints_deg(path: Path) -> tuple[list[float], str]:
+    """First base-sweep-OK pin in a saved plan → joints deg + label."""
+    root = json.loads(path.read_text(encoding="utf-8"))
+    for pt in root.get("points") or []:
+        if not isinstance(pt, dict):
+            continue
+        if not pt.get("base_sweep_ok"):
+            continue
+        joints = pt.get("joints_rad") or []
+        if len(joints) != 6:
+            continue
+        deg = [math.degrees(float(v)) for v in joints]
+        grid = pt.get("grid") if isinstance(pt.get("grid"), dict) else {}
+        label = (
+            f"{path.name} φ={float(grid.get('phi_deg', 0.0)):g}° "
+            f"θ={float(grid.get('theta_deg', 0.0)):g}°"
+        )
+        return deg, label
+    raise RuntimeError(f"No base_sweep_ok pin with joints in {path}")
 
 
 def parse_cfg(path: Path) -> dict[str, Any]:
@@ -174,14 +193,49 @@ def apply_pin_tilt(
     )
 
 
-def build_apex_pose(apex_radius_m: float = APEX_RADIUS_M) -> dict[str, Any]:
-    """θ=0 look-down pin. MoveIt snaps XY/orientation from home TCP FK; Z stays apex_radius_m."""
-    zx, zy, zz = 0.0, 0.0, -1.0
-    rx, ry, rz = tool_z_to_rotation_vector(zx, zy, zz, up=(1.0, 0.0, 0.0))
+def rotvec_to_tool_z(rx: float, ry: float, rz: float) -> tuple[float, float, float]:
+    """Tool +Z from UR rotation vector."""
+    ang = math.sqrt(rx * rx + ry * ry + rz * rz)
+    if ang < 1.0e-12:
+        return 0.0, 0.0, 1.0
+    ax, ay, az = rx / ang, ry / ang, rz / ang
+    c = math.cos(ang)
+    s = math.sin(ang)
+    t = 1.0 - c
+    # R * (0,0,1)
+    return (
+        ax * az * t + ay * s,
+        ay * az * t - ax * s,
+        az * az * t + c,
+    )
+
+
+def fetch_home_tcp(base: str) -> dict[str, float]:
+    """Live home TCP [x,y,z,rx,ry,rz] from the sidecar (same orientation as homing)."""
+    data = http_json("GET", f"{base}/pose", timeout=10.0)
+    pose = data.get("pose") if isinstance(data, dict) else None
+    if not isinstance(pose, list) or len(pose) != 6:
+        raise RuntimeError("GET /pose did not return home TCP [x,y,z,rx,ry,rz].")
+    return {
+        "x": float(pose[0]),
+        "y": float(pose[1]),
+        "z": float(pose[2]),
+        "rx": float(pose[3]),
+        "ry": float(pose[4]),
+        "rz": float(pose[5]),
+    }
+
+
+def build_apex_pose(apex_radius_m: float, home_tcp: dict[str, float]) -> dict[str, Any]:
+    """θ=0 pin: home camera orientation, XY at home TCP, Z = this ring's R."""
+    rx = float(home_tcp["rx"])
+    ry = float(home_tcp["ry"])
+    rz = float(home_tcp["rz"])
+    zx, zy, zz = rotvec_to_tool_z(rx, ry, rz)
     return {
         "index": 0,
-        "x": 0.0,
-        "y": 0.0,
+        "x": float(home_tcp["x"]),
+        "y": float(home_tcp["y"]),
         "z": float(apex_radius_m),
         "rx": rx,
         "ry": ry,
@@ -189,7 +243,7 @@ def build_apex_pose(apex_radius_m: float = APEX_RADIUS_M) -> dict[str, Any]:
         "tool_z_x": zx,
         "tool_z_y": zy,
         "tool_z_z": zz,
-        "camera_up_x": 1.0,
+        "camera_up_x": 0.0,
         "camera_up_y": 0.0,
         "camera_up_z": 0.0,
         "require_perpendicular": True,
@@ -206,11 +260,11 @@ def build_ring_poses(
     *,
     start_index: int = 0,
 ) -> list[dict[str, Any]]:
-    """One latitude ring. Look-at tray XY (0,0)."""
+    """One latitude ring. Look-at tray XY (0,0). Camera upside-down (up = world −Z)."""
     poses: list[dict[str, Any]] = []
     theta = math.radians(theta_deg)
     sin_t, cos_t = math.sin(theta), math.cos(theta)
-    up = (0.0, 0.0, 1.0)
+    up = (0.0, 0.0, -1.0)
     for i in range(max(1, n_phi)):
         phi_deg = 360.0 * i / float(n_phi)
         phi = math.radians(phi_deg)
@@ -233,9 +287,52 @@ def build_ring_poses(
                 "tool_z_z": zz,
                 "camera_up_x": 0.0,
                 "camera_up_y": 0.0,
-                "camera_up_z": 1.0,
+                "camera_up_z": -1.0,
                 "require_perpendicular": False,
                 "theta_deg": float(theta_deg),
+                "phi_deg": float(phi_deg),
+            }
+        )
+    return poses
+
+
+def build_cylinder_poses(
+    rho_m: float,
+    z_m: float,
+    n_phi: int,
+    tilt_deg: float,
+    *,
+    start_index: int = 0,
+) -> list[dict[str, Any]]:
+    """Vertical cylinder: fixed XY radius, look-at tray origin (0,0,0). Camera up = world −Z."""
+    look_deg = math.degrees(math.atan2(max(0.0, rho_m), max(1.0e-9, z_m)))
+    up = (0.0, 0.0, -1.0)
+    poses: list[dict[str, Any]] = []
+    for i in range(max(1, n_phi)):
+        phi_deg = 360.0 * i / float(n_phi)
+        phi = math.radians(phi_deg)
+        x = rho_m * math.cos(phi)
+        y = rho_m * math.sin(phi)
+        z = z_m
+        zx, zy, zz = apply_pin_tilt(-x, -y, -z, up, tilt_deg)
+        rx, ry, rz = tool_z_to_rotation_vector(zx, zy, zz, up=up)
+        poses.append(
+            {
+                "index": start_index + i,
+                "x": x,
+                "y": y,
+                "z": z,
+                "rx": rx,
+                "ry": ry,
+                "rz": rz,
+                "tool_z_x": zx,
+                "tool_z_y": zy,
+                "tool_z_z": zz,
+                "camera_up_x": 0.0,
+                "camera_up_y": 0.0,
+                "camera_up_z": -1.0,
+                "require_perpendicular": False,
+                "theta_deg": float(look_deg),
                 "phi_deg": float(phi_deg),
             }
         )
@@ -246,9 +343,18 @@ def _is_apex_pose(pose: dict[str, Any]) -> bool:
     return bool(pose.get("require_perpendicular")) or abs(float(pose.get("theta_deg", 99.0))) < 0.75
 
 
-def robot_cfg_fingerprint(cfg: dict[str, Any]) -> str:
-    home = cfg.get("home_joints_deg") or [90, -180, 145, -55, 90, -90]
-    tcp = {
+def _active_tool_tcp(cfg: dict[str, Any]) -> dict[str, float]:
+    scan = str(cfg.get("scan_tcp", "camera")).strip().lower()
+    if scan in ("dlp", "projector"):
+        return {
+            "x": float(cfg.get("dlp_tcp_x_mm", 0.372)),
+            "y": float(cfg.get("dlp_tcp_y_mm", 57.104)),
+            "z": float(cfg.get("dlp_tcp_z_mm", 27.4994)),
+            "roll": float(cfg.get("dlp_tcp_roll_deg", 0.0)),
+            "pitch": float(cfg.get("dlp_tcp_pitch_deg", 0.0)),
+            "yaw": float(cfg.get("dlp_tcp_yaw_deg", 0.0)),
+        }
+    return {
         "x": float(cfg.get("tool_tcp_x_mm", 0.715)),
         "y": float(cfg.get("tool_tcp_y_mm", -54.197)),
         "z": float(cfg.get("tool_tcp_z_mm", 73.755)),
@@ -256,9 +362,20 @@ def robot_cfg_fingerprint(cfg: dict[str, Any]) -> str:
         "pitch": float(cfg.get("tool_tcp_pitch_deg", 0.7450)),
         "yaw": float(cfg.get("tool_tcp_yaw_deg", 0.2868)),
     }
+
+
+def robot_cfg_fingerprint(cfg: dict[str, Any]) -> str:
+    home = cfg.get("home_joints_deg") or [90, -180, 145, -55, 90, -90]
+    scan = str(cfg.get("scan_tcp", "camera")).strip().lower()
+    if scan not in ("dlp", "projector"):
+        scan = "camera"
+    else:
+        scan = "dlp"
+    tcp = _active_tool_tcp(cfg)
     fp = {
         "schema": CACHE_SCHEMA,
         "ur_type": str(cfg.get("ur_type", "ur3e")),
+        "scan_tcp": scan,
         "tool_tcp_x_mm": tcp["x"],
         "tool_tcp_y_mm": tcp["y"],
         "tool_tcp_z_mm": tcp["z"],
@@ -303,7 +420,19 @@ def plan_fingerprint(radius_m: float, theta_deg: float, n_phi: int) -> str:
             "horizontal_points": n_phi,
             "vertical_points": 2,
             "always_apex_pin": True,
-            "apex_radius_m": APEX_RADIUS_M,
+            "apex_radius_m": radius_m,
+        },
+        separators=(",", ":"),
+    )
+
+
+def cylinder_fingerprint(rho_m: float, z_m: float, n_phi: int) -> str:
+    return json.dumps(
+        {
+            "kind": "ur3e_semi_cylinder_ring",
+            "cyl_radius_m": rho_m,
+            "z_m": z_m,
+            "horizontal_points": n_phi,
         },
         separators=(",", ":"),
     )
@@ -313,7 +442,7 @@ def _point_from_result(pose: dict[str, Any], res: dict[str, Any]) -> dict[str, A
     tcp_obj = res.get("tcp") if isinstance(res.get("tcp"), dict) else {}
     joints = res.get("joints") or []
     is_apex = _is_apex_pose(pose)
-    return {
+    point = {
         "grid": {
             "phi_deg": float(pose["phi_deg"]),
             "theta_deg": float(pose["theta_deg"]),
@@ -334,10 +463,16 @@ def _point_from_result(pose: dict[str, Any], res: dict[str, Any]) -> dict[str, A
         },
         "reachable": True,
         "home_path_ok": True,
-        "base_sweep_ok": not is_apex,
+        "base_sweep_ok": bool(res.get("base_sweep_ok", not is_apex)),
+        "backup_coverage_ok": bool(res.get("backup_coverage_ok", False)),
+        "backup_union_deg": float(res.get("backup_union_deg", 0.0) or 0.0),
         "planning_error": "",
         "joints_rad": [float(v) for v in joints],
     }
+    mask = res.get("pan_mask")
+    if isinstance(mask, list) and mask:
+        point["pan_mask"] = [bool(v) for v in mask]
+    return point
 
 
 def save_one_ring_plan(
@@ -350,6 +485,9 @@ def save_one_ring_plan(
     poses: list[dict[str, Any]],
     results: list[dict[str, Any]],
     cached_apex: dict[str, Any] | None = None,
+    plan_name: str | None = None,
+    fingerprint: str | None = None,
+    scan_params: dict[str, Any] | None = None,
 ) -> tuple[int, dict[str, Any] | None, int]:
     """Write schema-4 plan: apex (home_path_ok) + base_sweep_ok ring pins.
 
@@ -367,7 +505,9 @@ def save_one_ring_plan(
             if res.get("home_path_ok", True):
                 apex_point = _point_from_result(pose, res)
             continue
-        if not res.get("base_sweep_ok") or not res.get("home_path_ok", True):
+        if not res.get("home_path_ok", True):
+            continue
+        if not (res.get("base_sweep_ok") or res.get("backup_coverage_ok")):
             continue
         ring_points.append(_point_from_result(pose, res))
 
@@ -381,16 +521,17 @@ def save_one_ring_plan(
 
     root = {
         "schema": CACHE_SCHEMA,
-        "name": f"R{int(round(radius_m * 1000))}_T{theta_deg:g}",
-        "fingerprint": plan_fingerprint(radius_m, theta_deg, n_phi),
+        "name": plan_name or f"R{int(round(radius_m * 1000))}_T{theta_deg:g}",
+        "fingerprint": fingerprint or plan_fingerprint(radius_m, theta_deg, n_phi),
         "robot_cfg_fingerprint": robot_cfg_fingerprint(cfg),
-        "scan_params": {
+        "scan_params": scan_params
+        or {
             "sphere_radius_m": radius_m,
             "horizontal_points": n_phi,
             "vertical_points": 2,
             "theta_min_deg": 0.0,
             "theta_max_deg": theta_deg,
-            "apex_radius_m": APEX_RADIUS_M,
+            "apex_radius_m": radius_m,
         },
         "points": points,
         "reachable_count": len(points),
@@ -427,14 +568,25 @@ def main() -> int:
     parser.add_argument(
         "--max-sweep-ok",
         type=int,
-        default=3,
-        help="Stop after this many base-sweep OK pins per ring (app default 3).",
+        default=2,
+        help="Stop after this many base-sweep OK pins per ring (app default 2).",
     )
     parser.add_argument(
         "--plan-timeout-s",
         type=float,
         default=7200.0,
         help="HTTP timeout per ring plan call.",
+    )
+    parser.add_argument(
+        "--progress-name",
+        default="_batch_semi_ring_search_progress.json",
+        help="Progress JSON filename inside --out-dir (unique per parallel worker).",
+    )
+    parser.add_argument(
+        "--connect-timeout-s",
+        type=float,
+        default=360.0,
+        help="Wait this long for sidecar /connect before aborting the worker.",
     )
     parser.add_argument(
         "--resume",
@@ -446,6 +598,32 @@ def main() -> int:
         action="store_true",
         help="Sweep largest radius and theta first.",
     )
+    parser.add_argument(
+        "--skip-apex",
+        action="store_true",
+        help="Do not plan or save the θ=0 apex pin.",
+    )
+    parser.add_argument(
+        "--home-joints-deg",
+        default=None,
+        help="Override cfg home (comma-separated deg). Example: 90,-180,145,-55,90,90",
+    )
+    parser.add_argument(
+        "--hub-plan",
+        type=Path,
+        default=None,
+        help="Use this saved plan's first base-sweep-OK pin as the path hub "
+        "(T20↔pin instead of scan-home↔pin). Skips apex.",
+    )
+    parser.add_argument(
+        "--cylinder",
+        action="store_true",
+        help="Sweep a vertical cylinder (fixed XY radius, vary height). Look-at tray origin.",
+    )
+    parser.add_argument("--cyl-radius-mm", type=float, default=70.0)
+    parser.add_argument("--height-min-mm", type=float, default=160.0)
+    parser.add_argument("--height-max-mm", type=float, default=200.0)
+    parser.add_argument("--height-step-mm", type=float, default=5.0)
     args = parser.parse_args()
 
     cfg = parse_cfg(args.cfg)
@@ -453,8 +631,19 @@ def main() -> int:
     n_phi = max(1, min(720, n_phi))
     tilt_deg = float(cfg.get("pin_tcp_tilt_deg", 0.0))
     tol_deg = float(cfg.get("pin_pose_tolerance_deg", 0.0))
+    backup_deg = float(cfg.get("semi_backup_coverage_deg", 300.0))
     lock_up = bool(cfg.get("scan_camera_up_world_z", True))
     home = cfg.get("home_joints_deg") or [90.0, -180.0, 145.0, -55.0, 90.0, -90.0]
+    if args.home_joints_deg:
+        home = [float(p.strip()) for p in str(args.home_joints_deg).split(",") if p.strip()]
+        if len(home) != 6:
+            raise SystemExit("--home-joints-deg needs 6 values")
+        cfg["home_joints_deg"] = home
+    hub_label = "cfg home"
+    skip_apex = bool(args.skip_apex)
+    if args.hub_plan is not None:
+        home, hub_label = load_hub_joints_deg(args.hub_plan)
+        skip_apex = True
 
     workspace = {
         "enabled": bool(cfg.get("workspace_boundary_enabled", True)),
@@ -466,61 +655,110 @@ def main() -> int:
         / 1000.0,
     }
 
-    thetas: list[float] = []
-    t = float(args.theta_min)
-    while t <= args.theta_max + 1.0e-9:
-        thetas.append(round(t, 6))
-        t += args.theta_step
+    cylinder = bool(args.cylinder)
+    if cylinder:
+        skip_apex = True
+        heights_mm: list[float] = []
+        h = float(args.height_min_mm)
+        while h <= args.height_max_mm + 1.0e-9:
+            heights_mm.append(round(h, 6))
+            h += args.height_step_mm
+        if args.reverse:
+            heights_mm.reverse()
+        rho_mm = float(args.cyl_radius_mm)
+        combos = [(rho_mm, zmm) for zmm in heights_mm]
+        print(
+            f"Combos={len(combos)} cylinder ρ={rho_mm:g} mm "
+            f"z={heights_mm[0]:g}..{heights_mm[-1]:g} mm "
+            f"n_phi={n_phi} tip_tol={tol_deg} tilt={tilt_deg} backup_union>{backup_deg:g}° "
+            f"hub={hub_label} skip_apex={skip_apex} out={args.out_dir}",
+            flush=True,
+        )
+    else:
+        thetas: list[float] = []
+        t = float(args.theta_min)
+        while t <= args.theta_max + 1.0e-9:
+            thetas.append(round(t, 6))
+            t += args.theta_step
 
-    radii_mm: list[float] = []
-    r = float(args.radius_min_mm)
-    while r <= args.radius_max_mm + 1.0e-9:
-        radii_mm.append(round(r, 6))
-        r += args.radius_step_mm
+        radii_mm: list[float] = []
+        r = float(args.radius_min_mm)
+        while r <= args.radius_max_mm + 1.0e-9:
+            radii_mm.append(round(r, 6))
+            r += args.radius_step_mm
 
-    if args.reverse:
-        thetas.reverse()
-        radii_mm.reverse()
+        if args.reverse:
+            thetas.reverse()
+            radii_mm.reverse()
 
-    combos = [(rm, th) for rm in radii_mm for th in thetas]
-    progress_path = args.out_dir / "_batch_semi_ring_search_progress.json"
+        combos = [(rm, th) for rm in radii_mm for th in thetas]
+        print(
+            f"Combos={len(combos)} theta={thetas[0]}..{thetas[-1]} R={radii_mm[0]}..{radii_mm[-1]} mm "
+            f"n_phi={n_phi} tip_tol={tol_deg} tilt={tilt_deg} backup_union>{backup_deg:g}° "
+            f"hub={hub_label} skip_apex={skip_apex} "
+            f"apex_z=same as R out={args.out_dir}",
+            flush=True,
+        )
+
+    progress_path = args.out_dir / str(args.progress_name)
     done: dict[str, Any] = {}
     if args.resume and progress_path.is_file():
         done = json.loads(progress_path.read_text(encoding="utf-8"))
 
+    wait_connected(args.base_url, timeout_s=float(args.connect_timeout_s))
+    home_tcp = fetch_home_tcp(args.base_url)
     print(
-        f"Combos={len(combos)} theta={thetas[0]}..{thetas[-1]} R={radii_mm[0]}..{radii_mm[-1]} mm "
-        f"n_phi={n_phi} tip_tol={tol_deg} tilt={tilt_deg} "
-        f"apex_z={APEX_RADIUS_M * 1000.0:.0f}mm out={args.out_dir}",
+        "Connected. Apex keeps home TCP orientation "
+        f"rx={home_tcp['rx']:.4f} ry={home_tcp['ry']:.4f} rz={home_tcp['rz']:.4f} "
+        f"xy=({home_tcp['x']:.4f},{home_tcp['y']:.4f}).",
         flush=True,
     )
-
-    wait_connected(args.base_url, timeout_s=360.0)
-    print("Connected.", flush=True)
 
     saved = 0
     failed = 0
     skipped = 0
     missing_apex = 0
     t_batch = time.time()
-    # Apex Z is always 200 mm; reuse one proven apex across all (R, θ).
+    # Reuse a proven apex only for the same sphere radius (apex Z = R).
     cached_apex: dict[str, Any] | None = None
+    cached_apex_radius_m: float | None = None
 
-    for i, (radius_mm, theta_deg) in enumerate(combos, start=1):
-        key = f"R{int(round(radius_mm))}_T{theta_deg:g}"
+    for i, (a_mm, b_mm) in enumerate(combos, start=1):
+        if cylinder:
+            rho_mm, z_mm = a_mm, b_mm
+            key = f"C{int(round(rho_mm))}_Z{int(round(z_mm))}"
+            radius_m = rho_mm / 1000.0
+            z_m = z_mm / 1000.0
+            look_deg = math.degrees(math.atan2(radius_m, max(1.0e-9, z_m)))
+        else:
+            radius_mm, theta_deg = a_mm, b_mm
+            key = f"R{int(round(radius_mm))}_T{theta_deg:g}"
+            radius_m = radius_mm / 1000.0
+            look_deg = float(theta_deg)
+            z_m = 0.0
         if args.resume and key in done:
             skipped += 1
             continue
 
-        radius_m = radius_mm / 1000.0
         poses: list[dict[str, Any]] = []
-        if cached_apex is None:
-            poses.append(build_apex_pose(APEX_RADIUS_M))
-        poses.extend(
-            build_ring_poses(
-                radius_m, theta_deg, n_phi, tilt_deg, start_index=len(poses)
+        if not skip_apex and (
+            cached_apex is None
+            or cached_apex_radius_m is None
+            or abs(cached_apex_radius_m - radius_m) > 1.0e-9
+        ):
+            poses.append(build_apex_pose(radius_m, home_tcp))
+        if cylinder:
+            poses.extend(
+                build_cylinder_poses(
+                    radius_m, z_m, n_phi, tilt_deg, start_index=len(poses)
+                )
             )
-        )
+        else:
+            poses.extend(
+                build_ring_poses(
+                    radius_m, look_deg, n_phi, tilt_deg, start_index=len(poses)
+                )
+            )
         body = {
             "poses": poses,
             "workspace": workspace,
@@ -529,6 +767,7 @@ def main() -> int:
             "semi_ring_sweep": True,
             "semi_max_sweep_ok_per_ring": max(1, int(args.max_sweep_ok)),
             "semi_ring_search_candidates": n_phi,
+            "semi_backup_coverage_deg": backup_deg,
             "home_joints_deg": [float(v) for v in home],
         }
 
@@ -558,18 +797,32 @@ def main() -> int:
             continue
 
         out_file = args.out_dir / f"{key}.json"
+        save_kw: dict[str, Any] = {}
+        if cylinder:
+            save_kw = {
+                "plan_name": key,
+                "fingerprint": cylinder_fingerprint(radius_m, z_m, n_phi),
+                "scan_params": {
+                    "cyl_radius_m": radius_m,
+                    "z_m": z_m,
+                    "horizontal_points": n_phi,
+                    "look_from_vertical_deg": look_deg,
+                },
+            }
         n_ok, apex_pt, n_ring = save_one_ring_plan(
             out_file,
             cfg=cfg,
             radius_m=radius_m,
-            theta_deg=theta_deg,
+            theta_deg=look_deg,
             n_phi=n_phi,
             poses=poses,
             results=results,
             cached_apex=cached_apex,
+            **save_kw,
         )
         if apex_pt is not None:
             cached_apex = apex_pt
+            cached_apex_radius_m = radius_m
         dt = time.time() - t0
         if n_ok > 0:
             saved += 1
@@ -584,22 +837,37 @@ def main() -> int:
                 "seconds": round(dt, 2),
             }
             apex_tag = "apex+" if has_apex else "NO-APEX "
+            backup_n = sum(
+                1
+                for r in results
+                if isinstance(r, dict)
+                and r.get("reachable")
+                and r.get("backup_coverage_ok")
+            )
+            kind = "BACKUP " if backup_n else apex_tag
             print(
-                f"[{i}/{len(combos)}] {key} {apex_tag}{n_ring} ({dt:.1f}s)",
+                f"[{i}/{len(combos)}] {key} {kind}{n_ring} ({dt:.1f}s)",
                 flush=True,
             )
-            release_copy = (
-                _repo_root()
-                / "app"
-                / "build"
-                / "Release"
-                / "mvs_semi_scan_plans"
-                / out_file.name
-            )
-            if release_copy.parent.is_dir() and out_file.resolve() != release_copy.resolve():
-                release_copy.write_text(
-                    out_file.read_text(encoding="utf-8"), encoding="utf-8"
+            done[key]["backup"] = backup_n > 0
+            # Only mirror top-level library writes. Subdir tests must not
+            # overwrite Release/R250_T*.json with a different home fingerprint.
+            if out_file.parent.name == "mvs_semi_scan_plans":
+                release_copy = (
+                    _repo_root()
+                    / "app"
+                    / "build"
+                    / "Release"
+                    / "mvs_semi_scan_plans"
+                    / out_file.name
                 )
+                if (
+                    release_copy.parent.is_dir()
+                    and out_file.resolve() != release_copy.resolve()
+                ):
+                    release_copy.write_text(
+                        out_file.read_text(encoding="utf-8"), encoding="utf-8"
+                    )
         else:
             done[key] = {
                 "ok": True,

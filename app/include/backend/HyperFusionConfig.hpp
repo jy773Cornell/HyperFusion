@@ -155,7 +155,7 @@ struct HardwareConfig
         /// Pinch-guard bounding sphere at tool0 (mm). MoveIt collision uses toolPayloadMesh.
         double toolPayloadRadiusMm = 77.0;
         QString toolPayloadShape = QStringLiteral("mesh");
-        QString toolPayloadMesh = QStringLiteral("ur_tool_payload.stl");
+        QString toolPayloadMesh = QStringLiteral("bfs_dlp_payload.stl");
         /// Optical TCP (BFS camera lens) in tool0: Tsai translation (mm) + URDF rpy (deg).
         double toolTcpXMm = 0.715;
         double toolTcpYMm = -54.197;
@@ -163,6 +163,21 @@ struct HardwareConfig
         double toolTcpRollDeg = -1.9138;
         double toolTcpPitchDeg = 0.7450;
         double toolTcpYawDeg = 0.2868;
+        /// MoveIt tip `hyperfusion_tcp`. Reconnect sidecar after changing so the URDF rematerializes.
+        enum class ScanTcpKind
+        {
+            Camera,
+            Dlp
+        };
+        ScanTcpKind scanTcp = ScanTcpKind::Camera;
+        /// DLP projector lens in tool0 (mm + URDF rpy deg). Same convention as tool_tcp_*.
+        /// Fusion CAD face (−x, −y, +z) → tool0 (−x, −y, z) after mesh pan-180.
+        double dlpTcpXMm = 0.372;
+        double dlpTcpYMm = 57.104;
+        double dlpTcpZMm = 27.4994;
+        double dlpTcpRollDeg = 0.0;
+        double dlpTcpPitchDeg = 0.0;
+        double dlpTcpYawDeg = 0.0;
 
         struct ToolTcpMm
         {
@@ -178,6 +193,16 @@ struct HardwareConfig
         {
             return {toolTcpXMm, toolTcpYMm, toolTcpZMm, toolTcpRollDeg, toolTcpPitchDeg,
                     toolTcpYawDeg};
+        }
+        [[nodiscard]] ToolTcpMm dlpToolTcpMm() const
+        {
+            return {dlpTcpXMm, dlpTcpYMm, dlpTcpZMm, dlpTcpRollDeg, dlpTcpPitchDeg, dlpTcpYawDeg};
+        }
+        [[nodiscard]] bool usesDlpScanTcp() const { return scanTcp == ScanTcpKind::Dlp; }
+        /// MoveIt / plan fingerprint tip. BFS capture still uses cameraToolTcpMm().
+        [[nodiscard]] ToolTcpMm activeToolTcpMm() const
+        {
+            return usesDlpScanTcp() ? dlpToolTcpMm() : cameraToolTcpMm();
         }
         /// Robot base mount height in world frame (mm). Z=0 is tray surface; mount plane is at this height.
         double ceilingMountHeightMm = 650.0;
@@ -219,6 +244,8 @@ struct HardwareConfig
         /// Semi Plan: number of φ candidates per θ ring when hunting base-sweep OK entries.
         /// Spaced evenly over 360° (e.g. 260 → every ~1.4°).
         int semiRingSearchCandidates = 360;
+        /// Optional subfolder under mvs_semi_scan_plans (Semi Route combo). Empty = top-level.
+        QString semiScanPlansSubdir;
         /// Persist last MoveIt plan beside app.exe; reload on start if cfg fingerprint matches.
         bool rememberLastScanPlan = true;
         /// BFS OpenCV intrinsics for multiview pose JSON / transforms.json (pixels).

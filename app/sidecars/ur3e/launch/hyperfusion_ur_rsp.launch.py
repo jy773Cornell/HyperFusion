@@ -110,7 +110,7 @@ def generate_launch_description():
     _tool_payload_collision_gap_m = os.environ.get("HYPERFUSION_TOOL_PAYLOAD_COLLISION_GAP_M", "0.0")
     _tool_payload_mesh_dir = str(_pkg_root / "urdf" / "meshes").replace("\\", "/") + "/"
     _tool_payload_mesh_file = os.environ.get(
-        "HYPERFUSION_TOOL_PAYLOAD_MESH_FILE", "ur_tool_payload.stl"
+        "HYPERFUSION_TOOL_PAYLOAD_MESH_FILE", "bfs_dlp_payload.stl"
     )
     _tool_tcp_x_m = os.environ.get("HYPERFUSION_TOOL_TCP_X_M", "0.000715")
     _tool_tcp_y_m = os.environ.get("HYPERFUSION_TOOL_TCP_Y_M", "-0.054197")

@@ -131,8 +131,8 @@ TOOL_Z_ALIGNMENT_MIN_DOT = 0.95
 
 # Trajectory scoring: sample pinch guard along planned paths before execute.
 TRAJECTORY_PINCH_MIN_GAP_M = 0.028
-TRAJECTORY_MAX_PINCH_SAMPLES = 48
-TRAJECTORY_MAX_COLLISION_SAMPLES = 48
+TRAJECTORY_MAX_PINCH_SAMPLES = 96
+TRAJECTORY_MAX_COLLISION_SAMPLES = 96
 # Reject OMPL "snake" paths: travel may not exceed max(floor, ratio * start→goal).
 TRAJECTORY_MAX_TRAVEL_FLOOR_RAD = math.radians(150.0)
 TRAJECTORY_MAX_TRAVEL_RATIO = 2.5
@@ -220,6 +220,65 @@ def workspace_vertical_bounds(workspace: WorkspaceBox) -> tuple[float, float]:
     return z_bottom, z_top
 
 
+# UR3e wrist reach ~0.50 m; TCP offset ~0.09 m. Slack so we never drop a pose
+# MoveIt might still accept (known R250 T20–T30 hits sit ~0.64–0.67 m).
+UR3E_MAX_BASE_TO_TCP_M = 0.85
+
+
+def tcp_impossible_reason(
+    x_m: float,
+    y_m: float,
+    z_m: float,
+    workspace: WorkspaceBox,
+) -> str:
+    """Cheap reject before IK. Empty string = maybe possible (run MoveIt).
+
+    Conservative: only TCP clearly outside the enclosure, or farther from the
+    ceiling-mount origin than UR3e can stretch. Does not model the tool mesh.
+    """
+    bx = float(x_m)
+    by = float(y_m)
+    bz = float(z_m)
+    mount_z = float(workspace.mount_height_m)
+    reach = math.sqrt(bx * bx + by * by + (bz - mount_z) * (bz - mount_z))
+    if reach > UR3E_MAX_BASE_TO_TCP_M + 1.0e-9:
+        return (
+            f"prefilter reach {reach:.3f} m > {UR3E_MAX_BASE_TO_TCP_M:.2f} m "
+            f"(base→TCP)"
+        )
+    if not workspace.enabled:
+        return ""
+    z_bottom, z_top = workspace_vertical_bounds(workspace)
+    half_l = float(workspace.length_m) * 0.5
+    half_w = float(workspace.width_m) * 0.5
+    # Outside by more than 0.5 mm — on-face TCP still goes to IK.
+    slop = 0.0005
+    if bz < z_bottom - slop:
+        return f"prefilter TCP z={bz:.3f} m below box floor {z_bottom:.3f} m"
+    if bz > z_top + slop:
+        return f"prefilter TCP z={bz:.3f} m above box top {z_top:.3f} m"
+    if abs(bx) > half_l + slop:
+        return f"prefilter TCP |x|={abs(bx):.3f} m outside box ±{half_l:.3f} m"
+    if abs(by) > half_w + slop:
+        return f"prefilter TCP |y|={abs(by):.3f} m outside box ±{half_w:.3f} m"
+    return ""
+
+
+def pan_mask_coverage_deg(mask: Sequence[bool]) -> float:
+    if not mask:
+        return 0.0
+    return 360.0 * float(sum(1 for bit in mask if bit)) / float(len(mask))
+
+
+def pan_union_coverage_deg(mask_a: Sequence[bool], mask_b: Sequence[bool]) -> float:
+    """Union of two absolute pan masks (same sample grid), in degrees."""
+    n = min(len(mask_a), len(mask_b))
+    if n <= 0:
+        return 0.0
+    covered = sum(1 for i in range(n) if mask_a[i] or mask_b[i])
+    return 360.0 * float(covered) / float(n)
+
+
 def home_joints_rad_from_body(body: Optional[Dict[str, Any]]) -> List[float]:
     """Read scan home pose from HyperFusion cfg payload (degrees → radians)."""
     if not isinstance(body, dict):
@@ -274,6 +333,11 @@ class ScanPoseResult:
     home_path_ok: bool = False
     # Semi: full shoulder_pan circle at fixed other joints is collision-free.
     base_sweep_ok: bool = False
+    # Semi backup: no full-spin pin on the ring; this pin is one of the max-union pair.
+    backup_coverage_ok: bool = False
+    backup_union_deg: float = 0.0
+    # Abs 0..360° validity bins (shared grid). Empty = not a backup pair.
+    pan_mask: List[bool] = field(default_factory=list)
 
 
 def _normalize(x: float, y: float, z: float) -> tuple[float, float, float]:
@@ -385,6 +449,50 @@ def scan_pose_target_with_tool_z(
         camera_up_z=target.camera_up_z,
         require_perpendicular=target.require_perpendicular,
     )
+
+
+def search_params_log(targets: Sequence[ScanPoseTarget]) -> str:
+    """R / θ / ring ρ / z for plan start and complete logs (leading space, or empty)."""
+    if not targets:
+        return ""
+    apex_z_mm: Optional[float] = None
+    rings: List[str] = []
+    seen: set[tuple[int, int, int]] = set()
+    for t in targets:
+        if bool(t.require_perpendicular) or abs(float(t.theta_deg)) < 0.75:
+            if apex_z_mm is None:
+                apex_z_mm = 1000.0 * float(t.z_m)
+            continue
+        r_mm = int(
+            round(
+                1000.0
+                * math.sqrt(float(t.x_m) ** 2 + float(t.y_m) ** 2 + float(t.z_m) ** 2)
+            )
+        )
+        rho_mm = 1000.0 * math.sqrt(float(t.x_m) ** 2 + float(t.y_m) ** 2)
+        z_mm = 1000.0 * float(t.z_m)
+        th = float(t.theta_deg)
+        key = (r_mm, int(round(th)), int(round(z_mm)))
+        if key in seen:
+            continue
+        seen.add(key)
+        rings.append(f"R={r_mm}mm θ={th:g}° ρ={rho_mm:.1f}mm z={z_mm:.1f}mm")
+        if len(rings) >= 6:
+            break
+    bits: List[str] = []
+    if apex_z_mm is not None:
+        bits.append(f"apex Z={apex_z_mm:.0f}mm")
+    bits.extend(rings)
+    if not bits:
+        t0 = targets[0]
+        r_mm = int(
+            round(
+                1000.0
+                * math.sqrt(float(t0.x_m) ** 2 + float(t0.y_m) ** 2 + float(t0.z_m) ** 2)
+            )
+        )
+        bits.append(f"R={r_mm}mm z={1000.0 * float(t0.z_m):.1f}mm")
+    return " " + " | ".join(bits)
 
 
 def tool_z_to_rotation_vector(
@@ -511,30 +619,16 @@ class MoveItProcessManager:
 
     @staticmethod
     def _move_group_running() -> bool:
-        proc = subprocess.run(
-            ["pgrep", "-f", "move_group"],
-            capture_output=True,
-            text=True,
-        )
-        return proc.returncode == 0
+        from hyperfusion_ur3e.ros_isolation import pids_in_current_domain
+
+        return bool(pids_in_current_domain("move_group"))
 
     @staticmethod
     def current_move_group_pids() -> tuple[int, ...]:
-        """Sorted PIDs of running move_group processes (empty when none)."""
-        proc = subprocess.run(
-            ["pgrep", "-f", "move_group"],
-            capture_output=True,
-            text=True,
-        )
-        if proc.returncode != 0:
-            return ()
-        pids = []
-        for line in (proc.stdout or "").split():
-            try:
-                pids.append(int(line.strip()))
-            except ValueError:
-                continue
-        return tuple(sorted(pids))
+        """Sorted PIDs of move_group on this ROS_DOMAIN_ID (empty when none)."""
+        from hyperfusion_ur3e.ros_isolation import pids_in_current_domain
+
+        return tuple(sorted(pids_in_current_domain("move_group")))
 
     @staticmethod
     def _use_mock_hardware() -> bool:
@@ -591,7 +685,10 @@ class MoveItProcessManager:
 
     @staticmethod
     def _stop_move_group() -> None:
-        subprocess.run(["pkill", "-f", "moveit_ros_move_group/[m]ove_group"], check=False)
+        from hyperfusion_ur3e.ros_isolation import kill_pids, pids_in_current_domain
+
+        kill_pids(pids_in_current_domain("moveit_ros_move_group"))
+        kill_pids(pids_in_current_domain("move_group"))
         time.sleep(0.5)
 
     def _start_headless_stderr_forwarder(self) -> None:
@@ -679,8 +776,10 @@ class MoveItProcessManager:
                     "UR3e MoveIt: WARNING — could not materialize robot_description "
                     f"before move_group start: {exc}\n"
                 )
+            from hyperfusion_ur3e.ros_isolation import bash_domain_exports
+
             cmd = (
-                f"export ROS_LOCALHOST_ONLY=1 && "
+                f"{bash_domain_exports()}"
                 f"export HYPERFUSION_UR3E_REPO='{pkg_root}' && "
                 f"export HYPERFUSION_UR3E_SERVER_PORT='{server_port}' && "
                 f"export HYPERFUSION_USE_MOCK_HARDWARE='{mock_flag}' && "
@@ -2593,8 +2692,11 @@ class MoveItScanPlanner:
         start = [float(v) for v in start_joints]
         goal = coalesce_joints_for_moveit(start, goal_joints)
         last_error = f"no collision-free path from {label}"
+        planners = self._planners_without_ptp_if_elbow_flip(
+            start, goal, PLAN_PATH_CHECK_PLANNERS
+        )
 
-        for pipeline_id, planner_id in PLAN_PATH_CHECK_PLANNERS:
+        for pipeline_id, planner_id in planners:
             try:
                 error_code, planned = self._plan_move_group_joint_goal(
                     goal,
@@ -2633,6 +2735,14 @@ class MoveItScanPlanner:
                 last_error = (
                     f"no collision-free path from {label} ({soft_reason})"
                 )
+                continue
+            mesh_ok, mesh_reason = self._trajectory_mesh_collision_ok(waypoints)
+            if not mesh_ok:
+                last_error = f"no collision-free path from {label} ({mesh_reason})"
+                continue
+            pinch_ok, _gap_m, pinch_reason = self._trajectory_pinch_ok(waypoints)
+            if not pinch_ok:
+                last_error = f"no collision-free path from {label} ({pinch_reason})"
                 continue
             return True, ""
 
@@ -2809,14 +2919,21 @@ class MoveItScanPlanner:
         desired_tool_z: Optional[Sequence[float]] = None,
         prefer_collision_free_ik: bool = True,
         allow_previous_pin_path: bool = True,
-    ) -> tuple[Optional[List[float]], str, bool, bool]:
+        require_base_sweep: bool = False,
+        base_sweep_samples: int = 36,
+    ) -> tuple[Optional[List[float]], str, bool, bool, Optional[List[bool]]]:
         """Collect IK candidates; prefer any home→pin path before previous→pin.
 
-        Returns (joints, error, recovered, home_path_ok).
+        Returns (joints, error, recovered, home_path_ok, partial_abs_pan_mask).
 
         Two-pass pick (critical for hemisphere rings):
         1) Scan *all* IK candidates for a home→pin path+unwrap.
         2) Only if none work, accept previous→pin (plan-order chain).
+
+        When ``require_base_sweep`` (semi rings): 360° pan at frozen joints
+        runs before any path plan. Candidates that fail pan never pay OMPL.
+        Best partial-pan IK is returned with ``home_path_ok=False`` and an
+        absolute pan mask for backup pair search.
 
         Prefers the home elbow sign so mirror azimuths keep the same arm family
         instead of an elbow-flip branch. Soft joint-limit clearance still ranks
@@ -2831,7 +2948,7 @@ class MoveItScanPlanner:
             prefer_collision_free_ik=prefer_collision_free_ik,
         )
         if not solutions:
-            return None, ik_error or "no IK solution", False, False
+            return None, ik_error or "no IK solution", False, False, None
 
         home_elbow = float(home_joints[2])
 
@@ -2866,13 +2983,35 @@ class MoveItScanPlanner:
             return normalized
 
         last_path_error = "no collision-free path from home or previous pin"
+        last_sweep_error = ""
+        any_sweep_ok = False
+        best_partial_joints: Optional[List[float]] = None
+        best_partial_mask: Optional[List[bool]] = None
+        best_partial_bits = -1
 
-        # Pass 1: home→pin for every candidate (do not early-accept previous→pin).
+        # Pass 1: optional 360° pan, then home→pin (do not early-accept previous→pin).
         for rank_index, joints in enumerate(ordered):
             normalized = normalize_candidate(joints)
             if normalized is None:
                 last_path_error = "invalid IK joint angles"
                 continue
+
+            if require_base_sweep:
+                sweep_ok, sweep_err = self._base_sweep_ok(
+                    normalized, samples=base_sweep_samples
+                )
+                if not sweep_ok:
+                    last_sweep_error = sweep_err or "base_sweep failed"
+                    abs_mask = self._base_sweep_abs_mask(
+                        normalized, samples=base_sweep_samples
+                    )
+                    bits = sum(1 for bit in abs_mask if bit)
+                    if bits > best_partial_bits:
+                        best_partial_bits = bits
+                        best_partial_joints = list(normalized)
+                        best_partial_mask = abs_mask
+                    continue
+                any_sweep_ok = True
 
             home_ok, home_error = self._start_to_goal_path_ok(
                 home_joints, normalized, move_client, label="home"
@@ -2889,14 +3028,34 @@ class MoveItScanPlanner:
                     f"{math.degrees(SOFT_JOINT_LIMIT_MARGIN_RAD):.0f}° alternative "
                     "with a clear home→pin path.\n"
                 )
-            return normalized, "", rank_index > 0, True
+            return normalized, "", rank_index > 0, True, None
+
+        if require_base_sweep and last_sweep_error and not any_sweep_ok:
+            if best_partial_joints is not None and best_partial_mask:
+                return (
+                    best_partial_joints,
+                    last_sweep_error,
+                    False,
+                    False,
+                    best_partial_mask,
+                )
+            return None, last_sweep_error, False, False, None
 
         if (
-            not allow_previous_pin_path
+            require_base_sweep
+            or not allow_previous_pin_path
             or last_pin_joints is None
             or len(last_pin_joints) != 6
         ):
-            return None, last_path_error, False, False
+            if require_base_sweep and best_partial_joints is not None and best_partial_mask:
+                return (
+                    best_partial_joints,
+                    last_path_error or last_sweep_error or "base_sweep failed",
+                    False,
+                    False,
+                    best_partial_mask,
+                )
+            return None, last_path_error, False, False, None
 
         # Pass 2: previous→pin only after no home→pin candidate existed.
         prev_start = self._normalize_joint_solution_to_reference(
@@ -2928,9 +3087,10 @@ class MoveItScanPlanner:
                     "via previous-pin path — no ≥"
                     f"{math.degrees(SOFT_JOINT_LIMIT_MARGIN_RAD):.0f}° alternative.\n"
                 )
-            return normalized, "", True, False
+            return normalized, "", True, False, None
 
-        return None, last_path_error, False, False
+        return None, last_path_error, False, False, None
+
     def _state_is_valid(
         self,
         joints: Sequence[float],
@@ -2980,6 +3140,109 @@ class MoveItScanPlanner:
                 return False, reason or f"base_sweep collision at sample {i}/{n}"
         return True, ""
 
+    def _base_sweep_abs_mask(
+        self,
+        joints: Sequence[float],
+        *,
+        samples: int = 36,
+    ) -> List[bool]:
+        """Validity on a shared 0..360° pan grid (other joints frozen)."""
+        if joints is None or len(joints) != 6:
+            return []
+        n = max(8, int(samples))
+        base = [float(v) for v in joints]
+        mask: List[bool] = []
+        for i in range(n):
+            sample = list(base)
+            sample[0] = wrap_to_pi((2.0 * math.pi) * (float(i) / float(n)))
+            ok, _reason = self._state_is_valid(sample, check_pinch=True)
+            mask.append(bool(ok))
+        return mask
+
+    def _accept_max_union_backup_pairs(
+        self,
+        results: List[ScanPoseResult],
+        partial_by_index: Dict[int, Dict[str, Any]],
+        sweep_ok_by_ring: Dict[int, int],
+        home_joints: Sequence[float],
+        move_client: Any,
+        *,
+        min_union_deg: float,
+    ) -> int:
+        """If a ring has zero full-spin pins, keep the max pan-union pair > min_union_deg."""
+        by_ring: Dict[int, List[Dict[str, Any]]] = {}
+        for target_index, item in partial_by_index.items():
+            ring_key = int(item["ring_key"])
+            if sweep_ok_by_ring.get(ring_key, 0) > 0:
+                continue
+            row = dict(item)
+            row["target_index"] = int(target_index)
+            by_ring.setdefault(ring_key, []).append(row)
+
+        result_by_index = {int(item.index): item for item in results}
+        accepted = 0
+        for ring_key, cands in by_ring.items():
+            if len(cands) < 2:
+                continue
+            ranked: List[tuple[float, Dict[str, Any], Dict[str, Any]]] = []
+            for i in range(len(cands)):
+                for j in range(i + 1, len(cands)):
+                    union_deg = pan_union_coverage_deg(cands[i]["mask"], cands[j]["mask"])
+                    ranked.append((union_deg, cands[i], cands[j]))
+            ranked.sort(key=lambda row: row[0], reverse=True)
+            for union_deg, left, right in ranked:
+                if union_deg <= min_union_deg + 1.0e-9:
+                    break
+                pair_ok = True
+                for cand in (left, right):
+                    joints = [float(v) for v in cand["joints"]]
+                    home_ok, _err = self._start_to_goal_path_ok(
+                        home_joints, joints, move_client, label="home"
+                    )
+                    if not home_ok:
+                        pair_ok = False
+                        break
+                    back_ok, _err = self._start_to_goal_path_ok(
+                        joints, home_joints, move_client, label="pin→home"
+                    )
+                    if not back_ok:
+                        pair_ok = False
+                        break
+                if not pair_ok:
+                    continue
+                for cand in (left, right):
+                    result = result_by_index.get(int(cand["target_index"]))
+                    sample = cand["sample"]
+                    if result is None:
+                        continue
+                    result.reachable = True
+                    result.home_path_ok = True
+                    result.base_sweep_ok = False
+                    result.backup_coverage_ok = True
+                    result.backup_union_deg = float(union_deg)
+                    result.pan_mask = [bool(v) for v in cand.get("mask") or []]
+                    result.joint_positions = [float(v) for v in cand["joints"]]
+                    result.cone_tip_deg = float(cand["tip_deg"])
+                    result.error = ""
+                    result.tcp_x_m = float(sample.x_m)
+                    result.tcp_y_m = float(sample.y_m)
+                    result.tcp_z_m = float(sample.z_m)
+                    result.tcp_rx = float(sample.rx)
+                    result.tcp_ry = float(sample.ry)
+                    result.tcp_rz = float(sample.rz)
+                    result.tool_z_x = float(sample.tool_z_x)
+                    result.tool_z_y = float(sample.tool_z_y)
+                    result.tool_z_z = float(sample.tool_z_z)
+                    accepted += 1
+                sys.stderr.write(
+                    "UR3e MoveIt: ring backup pair "
+                    f"φ={float(left['sample'].phi_deg):g}°+"
+                    f"{float(right['sample'].phi_deg):g}° "
+                    f"union={union_deg:.1f}°.\n"
+                )
+                break
+        return accepted
+
     def plan_poses(
         self,
         targets: Sequence[ScanPoseTarget],
@@ -2989,8 +3252,9 @@ class MoveItScanPlanner:
         pin_pose_tolerance_deg: float = 0.0,
         lock_camera_up: bool = True,
         semi_ring_sweep: bool = False,
-        semi_max_sweep_ok_per_ring: int = 3,
+        semi_max_sweep_ok_per_ring: int = 2,
         semi_ring_search_candidates: int = 360,
+        semi_backup_coverage_deg: float = 300.0,
     ) -> List[ScanPoseResult]:
         with self._lock:
             self._process_manager.ensure_running()
@@ -3013,27 +3277,38 @@ class MoveItScanPlanner:
             path_rejected = 0
             cone_recoveries = 0
             chain_only_count = 0
+            prefilter_rejected = 0
             total = len(targets)
             move_client = self._ensure_move_client()
             tolerance_deg = max(0.0, float(pin_pose_tolerance_deg))
             max_per_ring = max(1, int(semi_max_sweep_ok_per_ring))
             sweep_ok_by_ring: Dict[int, int] = {}
+            partial_by_index: Dict[int, Dict[str, Any]] = {}
             n_phi = max(1, min(720, int(semi_ring_search_candidates)))
+            backup_min_deg = max(0.0, float(semi_backup_coverage_deg))
             # Full-turn base-sweep samples (~every 10° of pan).
             base_sweep_samples = max(8, min(72, max(36, n_phi // 7)))
             sys.stderr.write(
                 "UR3e MoveIt: planning "
-                f"{total} scan pose(s) (multi-IK; home→pin preferred, "
+                f"{total} scan pose(s){search_params_log(targets)}"
+                " (multi-IK; home→pin preferred, "
                 "previous→pin fallback"
                 + (
                     f"; pin tip ±{tolerance_deg:.1f}° (vertical plane)"
                     if tolerance_deg > 1.0e-6
                     else ""
                 )
+                + f"; cam-up={str(bool(lock_camera_up)).lower()}"
                 + (
                     f"; semi base-sweep first {max_per_ring}/ring"
                     f", {n_phi} φ candidates/ring"
+                    "; pan before paths; box/reach prefilter"
                     "; require home↔pin"
+                    + (
+                        f"; backup 2-pin union>{float(semi_backup_coverage_deg):g}°"
+                        if float(semi_backup_coverage_deg) > 1.0e-6
+                        else ""
+                    )
                     if semi_ring_sweep
                     else ""
                 )
@@ -3059,15 +3334,24 @@ class MoveItScanPlanner:
                     results.append(result)
                     continue
 
+                if not target.require_perpendicular:
+                    pre_err = tcp_impossible_reason(
+                        target.x_m, target.y_m, target.z_m, workspace
+                    )
+                    if pre_err:
+                        prefilter_rejected += 1
+                        result.error = pre_err
+                        results.append(result)
+                        continue
+
                 last_pick_error = "IK failed"
                 try:
-                    # Apex: C++ authors camera look-down. Do not snap to MoveIt home FK.
+                    # Apex: keep the requested TCP orientation (home camera). No cone/tilt.
                     pin_target = target
                     if target.require_perpendicular:
                         sys.stderr.write(
-                            "UR3e MoveIt: apex pin — camera TCP from C++ "
-                            f"(Z={pin_target.z_m:.3f} m; "
-                            "exact perpendicular only; no cone, no tilt).\n"
+                            "UR3e MoveIt: apex pin — home camera orientation "
+                            f"(Z={pin_target.z_m:.3f} m; no extra roll, no cone, no tilt).\n"
                         )
                     current_pin_seed = (
                         last_reachable_pin
@@ -3087,36 +3371,8 @@ class MoveItScanPlanner:
                         0.0 if pin_target.require_perpendicular else float(tolerance_deg)
                     )
 
+                    # Apex: keep the requested camera-up (home facing). No 180° re-roll.
                     roll_targets: List[ScanPoseTarget] = [pin_target]
-                    if pin_target.require_perpendicular:
-                        for alt in (
-                            (-1.0, 0.0, 0.0),
-                            (0.0, 1.0, 0.0),
-                            (0.0, -1.0, 0.0),
-                        ):
-                            if (
-                                abs(alt[0] - pin_target.camera_up_x) < 1.0e-9
-                                and abs(alt[1] - pin_target.camera_up_y) < 1.0e-9
-                                and abs(alt[2] - pin_target.camera_up_z) < 1.0e-9
-                            ):
-                                continue
-                            alt_t = replace(
-                                pin_target,
-                                camera_up_x=alt[0],
-                                camera_up_y=alt[1],
-                                camera_up_z=alt[2],
-                            )
-                            roll_targets.append(
-                                scan_pose_target_with_tool_z(
-                                    alt_t,
-                                    (
-                                        alt_t.tool_z_x,
-                                        alt_t.tool_z_y,
-                                        alt_t.tool_z_z,
-                                    ),
-                                    lock_camera_up=True,
-                                )
-                            )
 
                     picked = False
                     for roll_i, roll_target in enumerate(roll_targets):
@@ -3142,7 +3398,7 @@ class MoveItScanPlanner:
                                     lock_camera_up=lock_camera_up,
                                 )
                             pose = pose_target_to_ur_pose(sample_target)
-                            joints, pick_error, recovered, home_path_ok = (
+                            joints, pick_error, recovered, home_path_ok, pan_mask = (
                                 self._pick_ik_closest_to_home_with_path(
                                     pose,
                                     plan_start_seed,
@@ -3155,6 +3411,12 @@ class MoveItScanPlanner:
                                         sample_target.tool_z_z,
                                     ),
                                     prefer_collision_free_ik=not pin_target.require_perpendicular,
+                                    allow_previous_pin_path=not semi_ring_sweep,
+                                    require_base_sweep=(
+                                        semi_ring_sweep
+                                        and not pin_target.require_perpendicular
+                                    ),
+                                    base_sweep_samples=base_sweep_samples,
                                 )
                             )
                             if joints is None:
@@ -3166,6 +3428,27 @@ class MoveItScanPlanner:
                                 ):
                                     if abs(tip_deg) <= 1.0e-9 and roll_i == 0:
                                         path_rejected += 1
+                                continue
+
+                            if (
+                                semi_ring_sweep
+                                and not pin_target.require_perpendicular
+                                and not home_path_ok
+                                and pan_mask
+                                and backup_min_deg > 1.0e-6
+                            ):
+                                bits = sum(1 for bit in pan_mask if bit)
+                                prev = partial_by_index.get(int(target.index))
+                                if prev is None or bits > int(prev.get("bits", -1)):
+                                    partial_by_index[int(target.index)] = {
+                                        "ring_key": ring_key,
+                                        "joints": list(joints),
+                                        "mask": list(pan_mask),
+                                        "bits": bits,
+                                        "sample": sample_target,
+                                        "tip_deg": float(tip_deg),
+                                    }
+                                last_pick_error = pick_error or last_pick_error
                                 continue
 
                             if recovered:
@@ -3197,14 +3480,8 @@ class MoveItScanPlanner:
                                         path_rejected += 1
                                     continue
 
+                            # Semi: 360° pan already required inside the IK pick.
                             base_sweep_ok = True
-                            if semi_ring_sweep and not pin_target.require_perpendicular:
-                                base_sweep_ok, sweep_err = self._base_sweep_ok(
-                                    joints, samples=base_sweep_samples
-                                )
-                                if not base_sweep_ok:
-                                    last_pick_error = sweep_err or "base_sweep failed"
-                                    continue
 
                             if pin_target.require_perpendicular and roll_i > 0:
                                 sys.stderr.write(
@@ -3248,6 +3525,26 @@ class MoveItScanPlanner:
                     result.error = str(exc)
                 results.append(result)
 
+            if (
+                semi_ring_sweep
+                and backup_min_deg > 1.0e-6
+                and partial_by_index
+            ):
+                backup_kept = self._accept_max_union_backup_pairs(
+                    results,
+                    partial_by_index,
+                    sweep_ok_by_ring,
+                    plan_start_seed,
+                    move_client,
+                    min_union_deg=backup_min_deg,
+                )
+                if backup_kept > 0:
+                    sys.stderr.write(
+                        "UR3e MoveIt: backup 2-pin pan-union accepted "
+                        f"{backup_kept} pin(s) (no full-spin on those rings, "
+                        f"union>{backup_min_deg:g}°).\n"
+                    )
+
             if multi_seed_recoveries > 0:
                 sys.stderr.write(
                     "UR3e MoveIt: multi-IK / path pick recovered "
@@ -3257,6 +3554,11 @@ class MoveItScanPlanner:
                 sys.stderr.write(
                     "UR3e MoveIt: pin-pose vertical tip recovered "
                     f"{cone_recoveries} pose(s) (tolerance ±{tolerance_deg:.1f}°).\n"
+                )
+            if prefilter_rejected > 0:
+                sys.stderr.write(
+                    "UR3e MoveIt: box/reach prefilter skipped "
+                    f"{prefilter_rejected} pose(s) before IK.\n"
                 )
             if path_rejected > 0:
                 sys.stderr.write(
@@ -3276,10 +3578,15 @@ class MoveItScanPlanner:
             sweep_ok_count = sum(
                 1 for item in results if item.reachable and item.base_sweep_ok
             )
+            backup_ok_count = sum(
+                1 for item in results if item.reachable and item.backup_coverage_ok
+            )
             sys.stderr.write(
-                f"UR3e MoveIt: plan complete — {reachable}/{total} reachable "
+                f"UR3e MoveIt: plan complete{search_params_log(targets)} — "
+                f"{reachable}/{total} reachable "
                 f"({home_ok_count} home→pin, {chain_only_count} chain-only"
                 + (f", {sweep_ok_count} base-sweep OK" if semi_ring_sweep else "")
+                + (f", {backup_ok_count} backup-union" if backup_ok_count else "")
                 + ").\n"
             )
 
@@ -3522,6 +3829,63 @@ class MoveItScanPlanner:
                 )
         return True, ""
 
+    @staticmethod
+    def _elbow_family_differs(
+        start_joints: Sequence[float],
+        goal_joints: Sequence[float],
+    ) -> bool:
+        """True when elbow signs disagree (joint-space PTP folds the payload through the arm)."""
+        if len(start_joints) < 3 or len(goal_joints) < 3:
+            return False
+        start_elbow = float(start_joints[2])
+        goal_elbow = float(goal_joints[2])
+        near_zero = math.radians(5.0)
+        if abs(start_elbow) < near_zero or abs(goal_elbow) < near_zero:
+            return False
+        return start_elbow * goal_elbow < 0.0
+
+    def _planners_without_ptp_if_elbow_flip(
+        self,
+        start_joints: Sequence[float],
+        goal_joints: Sequence[float],
+        attempts: Sequence[tuple[str, str]],
+    ) -> List[tuple[str, str]]:
+        """Drop Pilz PTP on elbow-family flips — linear interpolate hits the payload."""
+        planners = list(attempts)
+        if not self._elbow_family_differs(start_joints, goal_joints):
+            return planners
+        filtered = [
+            (pipeline, planner)
+            for pipeline, planner in planners
+            if pipeline != "pilz_industrial_motion_planner"
+        ]
+        if filtered:
+            sys.stderr.write(
+                "UR3e MoveIt: elbow-family flip — skipping PTP "
+                "(joint interpolate folds payload through the arm).\n"
+            )
+            sys.stderr.flush()
+            return filtered
+        return planners
+
+    def _densify_trajectory_waypoints(
+        self,
+        waypoints: Sequence[Sequence[float]],
+        *,
+        max_step_rad: float = HARDWARE_SPIN_MAX_STEP_RAD,
+    ) -> List[List[float]]:
+        """Fill gaps between MoveIt waypoints so mid-path folds are sampled."""
+        if not waypoints:
+            return []
+        dense: List[List[float]] = [list(map(float, waypoints[0]))]
+        for nxt in waypoints[1:]:
+            segment = self._interpolate_joint_waypoints(
+                dense[-1], nxt, max_step_rad=max_step_rad
+            )
+            if len(segment) >= 2:
+                dense.extend(segment[1:])
+        return dense
+
     def _trajectory_pinch_ok(
         self,
         waypoints: Sequence[Sequence[float]],
@@ -3534,7 +3898,8 @@ class MoveItScanPlanner:
         if not waypoints:
             return True, float("inf"), ""
 
-        count = len(waypoints)
+        samples = self._densify_trajectory_waypoints(waypoints)
+        count = len(samples)
         if count <= TRAJECTORY_MAX_PINCH_SAMPLES:
             sample_indices = list(range(count))
         else:
@@ -3546,7 +3911,7 @@ class MoveItScanPlanner:
         payload_radius_m = tool_payload_radius_m()
         min_gap_m = float("inf")
         for index in sample_indices:
-            joints = waypoints[index]
+            joints = samples[index]
             link_positions = self._fk_link_positions(joints)
             if link_positions is None:
                 return True, float("inf"), ""
@@ -3569,11 +3934,12 @@ class MoveItScanPlanner:
         self,
         waypoints: Sequence[Sequence[float]],
     ) -> tuple[bool, str]:
-        """Re-check MoveIt mesh collisions on sampled waypoints after RTDE unwrap."""
-        if self._use_mock_hardware() or len(waypoints) < 2:
+        """Re-check MoveIt collisions on densified waypoints (mock and hardware)."""
+        if len(waypoints) < 2:
             return True, ""
 
-        count = len(waypoints)
+        samples = self._densify_trajectory_waypoints(waypoints)
+        count = len(samples)
         if count <= TRAJECTORY_MAX_COLLISION_SAMPLES:
             sample_indices = list(range(count))
         else:
@@ -3586,7 +3952,7 @@ class MoveItScanPlanner:
             # Skip index 0: live start may already be slightly in collision after a stop.
             if index == 0:
                 continue
-            ok, reason = self._state_is_valid(waypoints[index], check_pinch=False)
+            ok, reason = self._state_is_valid(samples[index], check_pinch=False)
             if not ok:
                 return False, f"trajectory mesh collision at sample {index}: {reason}"
         return True, ""
@@ -3902,6 +4268,10 @@ class MoveItScanPlanner:
             if planner_attempts is not None
             else list(EXECUTE_PLANNER_ATTEMPTS)
         )
+        if moveit_start is not None:
+            attempts = self._planners_without_ptp_if_elbow_flip(
+                moveit_start, plan_goal, attempts
+            )
 
         last_code = MoveItErrorCodes.FAILURE
         last_name = "failure"
@@ -4303,7 +4673,7 @@ class MoveItScanPlanner:
                     base, tool_z, lock_camera_up=lock_camera_up
                 )
             pose = pose_target_to_ur_pose(sample)
-            joints, _err, _rec, home_ok = self._pick_ik_closest_to_home_with_path(
+            joints, _err, _rec, home_ok, _mask = self._pick_ik_closest_to_home_with_path(
                 pose,
                 home,
                 ik_seeds,

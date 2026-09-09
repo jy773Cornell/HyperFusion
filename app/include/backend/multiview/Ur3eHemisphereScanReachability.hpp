@@ -12,6 +12,7 @@
 
 #include <QJsonObject>
 #include <QString>
+#include <cstdint>
 #include <vector>
 
 
@@ -70,6 +71,14 @@ struct Ur3ePlannedScanPoint
     /// Semi plan: full shoulder_pan circle at this pin is collision-free (plan-time).
     bool baseSweepOk = false;
 
+    /// Semi backup: one of a 2-pin pair whose pan union covers the backup threshold.
+    bool backupCoverageOk = false;
+
+    double backupUnionDeg = 0.0;
+
+    /// Abs 0..360° validity bins (1 = collision-free). Empty = unknown / full sweep.
+    std::vector<std::uint8_t> panMask;
+
     std::vector<double> jointPositionsRad;
 
     QString planningError;
@@ -127,12 +136,12 @@ struct Ur3eHemisphereScanPlan
     QString *errorMessage = nullptr);
 
 /// Semi plan: same MoveIt pin IK as Auto, plus base-link pan-circle check.
-/// Keeps at most *maxSweepOkPerRing* sweep-OK pins per latitude (default 3).
+/// Keeps at most *maxSweepOkPerRing* sweep-OK pins per latitude (default 2).
 [[nodiscard]] Ur3eHemisphereScanPlan evaluateSemiHemisphereScanPlanMoveIt(
     const QString &serverUrl,
     const Ur3eHemisphereScanParams &params,
     const Ur3eWorkspaceBoundary &boundary,
-    int maxSweepOkPerRing = 3,
+    int maxSweepOkPerRing = 2,
     QString *errorMessage = nullptr);
 
 /// Reachable plan indices: top θ ring first (home-nearest entry), then downward ring-by-ring φ sweep.
@@ -140,6 +149,14 @@ struct Ur3eHemisphereScanPlan
 [[nodiscard]] std::vector<int> buildHemisphereScanExecutionOrder(
 
     const Ur3eHemisphereScanPlan &plan);
+
+/// Same latitude (not apex). Used so a 2-pin ring visits pin1 → home → pin2.
+[[nodiscard]] bool sameHemisphereScanRing(const Ur3ePlannedScanPoint &a,
+                                          const Ur3ePlannedScanPoint &b);
+
+/// Reachable pins on the same latitude as *ref* (0 if *ref* is apex).
+[[nodiscard]] int reachablePinsOnSameRing(const Ur3eHemisphereScanPlan &plan,
+                                          const Ur3ePlannedScanPoint &ref);
 
 
 

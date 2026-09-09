@@ -12,7 +12,7 @@ from pathlib import Path
 TOOL_PAYLOAD_LINK = "hyperfusion_tool_payload"
 TOOL_TCP_LINK = "hyperfusion_tcp"
 TOOL_PAYLOAD_HEMISPHERE_MESH = "tool_payload_hemisphere.stl"
-DEFAULT_MESH_FILE = "ur_tool_payload.stl"
+DEFAULT_MESH_FILE = "bfs_dlp_payload.stl"
 # Pinch sphere is the C403A0 flange↔forearm guard, not mesh size.
 # ur_tool_payload.stl max vertex distance from flange origin is ~133 mm.
 DEFAULT_MESH_PINCH_RADIUS_M = 0.077

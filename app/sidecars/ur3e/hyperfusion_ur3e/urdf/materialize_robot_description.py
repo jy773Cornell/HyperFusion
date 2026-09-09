@@ -24,6 +24,11 @@ def resolve_runtime_robot_description_path(pkg_root: Path) -> Path:
         candidate = Path(env_path)
         if candidate.is_file():
             return candidate.resolve()
+    from hyperfusion_ur3e.runtime_paths import runtime_urdf_path
+
+    runtime = runtime_urdf_path()
+    if runtime.is_file():
+        return runtime
     return (pkg_root / "config" / RUNTIME_URDF_NAME).resolve()
 
 
@@ -85,7 +90,9 @@ def materialize_runtime_robot_description(
     tcp = ToolTcpConfig.from_env()
 
     pkg_root = pkg_root.resolve()
-    out_path = pkg_root / "config" / RUNTIME_URDF_NAME
+    from hyperfusion_ur3e.runtime_paths import initial_positions_path, runtime_urdf_path
+
+    out_path = runtime_urdf_path()
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     ur_description = _ros_pkg_prefix(ros_distro, "ur_description")
@@ -94,13 +101,18 @@ def materialize_runtime_robot_description(
 
     xacro_file = pkg_root / "urdf" / "hyperfusion_ur3e.urdf.xacro"
     if initial_positions_file is None:
-        initial_positions_file = pkg_root / "config" / "initial_positions.yaml"
+        initial_positions_file = initial_positions_path()
+        if not initial_positions_file.is_file():
+            initial_positions_file = pkg_root / "config" / "initial_positions.yaml"
     mesh_dir = (pkg_root / "urdf" / "meshes").as_posix().rstrip("/") + "/"
     mount = MountConfig.from_env()
     payload_enabled = "true" if cfg.enabled else "false"
     mock_flag = "true" if use_mock_hardware else "false"
     mock_sensor = mock_flag if use_mock_hardware else "false"
     headless_flag = "true" if headless_mode else "false"
+    from hyperfusion_ur3e.ros_isolation import ur_driver_ports
+
+    ports = ur_driver_ports()
 
     cmd = (
         f"source /opt/ros/{ros_distro}/setup.bash && "
@@ -121,7 +133,10 @@ def materialize_runtime_robot_description(
         f"headless_mode:={headless_flag} use_tool_communication:=false "
         f"tool_parity:=0 tool_baud_rate:=115200 tool_stop_bits:=1 tool_rx_idle_chars:=1.5 "
         f"tool_tx_idle_chars:=3.5 tool_device_name:=/tmp/ttyUR tool_tcp_port:=54321 tool_voltage:=0 "
-        f"script_command_port:=50004 reverse_port:=50001 script_sender_port:=50002 trajectory_port:=50003 "
+        f"script_command_port:={ports['script_command_port']} "
+        f"reverse_port:={ports['reverse_port']} "
+        f"script_sender_port:={ports['script_sender_port']} "
+        f"trajectory_port:={ports['trajectory_port']} "
         f"ceiling_mount:=true "
         f"ceiling_mount_height_m:={mount.height_m:.6f} "
         f"mount_roll_rad:={mount.roll_rad:.6f} "

@@ -972,13 +972,6 @@ void Ur3eHemisphereScanPreviewWidget::drawSemiFixedRings(QPainter &painter,
         painter.setPen(QPen(color, lineWidth));
         painter.setBrush(Qt::NoBrush);
         painter.drawPath(path);
-
-        // Entry marker at +X on the ring.
-        const Vec3 entryPt{ring.centerXM + ring.radiusM, ring.centerYM, ring.centerZM};
-        const QPointF entryScreen = projectPoint(entryPt, bounds, scale).screen;
-        painter.setBrush(color);
-        painter.setPen(Qt::NoPen);
-        painter.drawEllipse(entryScreen, isActive ? 5.0 : 4.0, isActive ? 5.0 : 4.0);
     }
 }
 

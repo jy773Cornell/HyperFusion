@@ -1159,6 +1159,56 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 else
                     config.ur3e.toolTcpYawDeg = numericValue;
             }
+            else if (key == QStringLiteral("scan_tcp"))
+            {
+                const QString lower = value.trimmed().toLower();
+                if (lower == QStringLiteral("dlp") || lower == QStringLiteral("projector"))
+                    config.ur3e.scanTcp = hf::HardwareConfig::Ur3eConfig::ScanTcpKind::Dlp;
+                else
+                    config.ur3e.scanTcp = hf::HardwareConfig::Ur3eConfig::ScanTcpKind::Camera;
+            }
+            else if (key == QStringLiteral("dlp_tcp_x_mm"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid ur3e dlp_tcp_x_mm: %1").arg(value));
+                else
+                    config.ur3e.dlpTcpXMm = numericValue;
+            }
+            else if (key == QStringLiteral("dlp_tcp_y_mm"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid ur3e dlp_tcp_y_mm: %1").arg(value));
+                else
+                    config.ur3e.dlpTcpYMm = numericValue;
+            }
+            else if (key == QStringLiteral("dlp_tcp_z_mm"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid ur3e dlp_tcp_z_mm: %1").arg(value));
+                else
+                    config.ur3e.dlpTcpZMm = numericValue;
+            }
+            else if (key == QStringLiteral("dlp_tcp_roll_deg"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid ur3e dlp_tcp_roll_deg: %1").arg(value));
+                else
+                    config.ur3e.dlpTcpRollDeg = numericValue;
+            }
+            else if (key == QStringLiteral("dlp_tcp_pitch_deg"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid ur3e dlp_tcp_pitch_deg: %1").arg(value));
+                else
+                    config.ur3e.dlpTcpPitchDeg = numericValue;
+            }
+            else if (key == QStringLiteral("dlp_tcp_yaw_deg"))
+            {
+                if (!hasNumber)
+                    warnings.push_back(QStringLiteral("Invalid ur3e dlp_tcp_yaw_deg: %1").arg(value));
+                else
+                    config.ur3e.dlpTcpYawDeg = numericValue;
+            }
             else if (key == QStringLiteral("workspace_boundary_enabled"))
             {
                 const QString lower = value.trimmed().toLower();
@@ -1362,6 +1412,10 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                         "Invalid ur3e semi_ring_search_candidates: %1 (use 1…720)").arg(value));
                 else
                     config.ur3e.semiRingSearchCandidates = static_cast<int>(std::lround(numericValue));
+            }
+            else if (key == QStringLiteral("semi_scan_plans_subdir"))
+            {
+                config.ur3e.semiScanPlansSubdir = value.trimmed();
             }
             else if (key == QStringLiteral("remember_last_scan_plan"))
             {
@@ -1688,7 +1742,7 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "max_joint_velocity_deg_s = 60\n"
         << "# Real BFS tool collision mesh on tool0 (urdf/meshes/). Pinch uses flange-flat hemisphere of this radius.\n"
         << "tool_payload_shape = mesh\n"
-        << "tool_payload_mesh = ur_tool_payload.stl\n"
+        << "tool_payload_mesh = bfs_dlp_payload.stl\n"
         << "tool_payload_radius_mm = 77\n"
         << "# Optical TCP in tool0 (mm + URDF rpy deg). Tsai hand-eye (BFS camera).\n"
         << "tool_tcp_x_mm = 0.715\n"
@@ -1697,6 +1751,14 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "tool_tcp_roll_deg = -1.9138\n"
         << "tool_tcp_pitch_deg = 0.7450\n"
         << "tool_tcp_yaw_deg = 0.2868\n"
+        << "scan_tcp = camera\n"
+        << "# DLP lens in tool0. Fusion face (−x, −y, +z) → (−x, −y, z) after mesh pan-180.\n"
+        << "dlp_tcp_x_mm = 0.372\n"
+        << "dlp_tcp_y_mm = 57.104\n"
+        << "dlp_tcp_z_mm = 27.4994\n"
+        << "dlp_tcp_roll_deg = 0\n"
+        << "dlp_tcp_pitch_deg = 0\n"
+        << "dlp_tcp_yaw_deg = 0\n"
         << "# Robot mount height (mm): world Z of base_link / ceiling plane. Tray/sample stage stays at Z=0.\n"
         << "ceiling_mount_height_mm = 650\n"
         << "# Workspace collision box (mm): X/Y centered on tray; Z depth extends downward from mount.\n"

@@ -9,6 +9,7 @@
 #include <QString>
 #include <QVector>
 
+#include <cstdint>
 #include <vector>
 
 namespace hf::ur3e
@@ -27,6 +28,18 @@ struct Ur3eSemiFixedRing
     bool reachabilityKnown = false;
     bool reachable = false;
     bool homePathOk = true;
+    /// Full 360° shoulder_pan at this entry is plan-proven.
+    bool baseSweepOk = true;
+    /// 2-pin backup pair (union coverage, not a full spin).
+    bool backupCoverageOk = false;
+    double backupUnionDeg = 0.0;
+    /// Abs 0..360° validity bins for backup spins. Empty = unknown.
+    std::vector<std::uint8_t> panMask;
+    /// Grid φ of the source plan pin (display + pin1/pin2 order).
+    double phiDeg = 0.0;
+    double thetaDeg = 0.0;
+    /// One still at entry (apex). No shoulder_pan spin.
+    bool noPan = false;
 };
 
 struct Ur3eSemiFixedRoute
@@ -77,15 +90,19 @@ void ensureSemiFixedTopPose(Ur3eSemiFixedRoute &route);
 listUr3eSemiFixedRoutesMatchingCfg(const QString &dir,
                                    const QString &expectedRobotCfgFingerprint);
 
-/// Build semi-fixed rings from a Semi (or Auto) hemisphere plan: one entry per
-/// latitude from sweep-OK pins when present (else reachable); prefer home→pin /
-/// nearest-to-home among candidates.
+/// Build semi-fixed rings from a Semi (or Auto) hemisphere plan.
+/// One pin per latitude when any pin can spin a full 360°. Two pins only for
+/// backup-union pairs (neither pin is sweep-OK); execute is pin1 → home → pin2.
 [[nodiscard]] Ur3eSemiFixedRoute
 semiFixedRouteFromHemispherePlan(const Ur3eHemisphereScanPlan &plan,
                                  const QString &robotCfgFingerprint,
                                  const QString &displayName = QString(),
                                  double intervalDeg = 10.0,
                                  int panDirection = 1);
+
+/// Drop extra same-latitude pins once a full-360° (`baseSweepOk`) pin exists.
+/// Backup-only pairs are left as two entries.
+void pruneSemiFixedRedundantFullSpinPins(Ur3eSemiFixedRoute &route);
 
 /// Infer a horizontal preview ring from entry TCP and tray scan center.
 struct Ur3eSemiFixedPreviewRing
@@ -97,6 +114,7 @@ struct Ur3eSemiFixedPreviewRing
     QString displayName;
     /// Apex / top still (θ≈0) — drawn as a pin instead of a spin ring.
     bool isTopPose = false;
+    bool noPan = false;
     bool reachabilityKnown = false;
     bool reachable = false;
     bool homePathOk = true;
@@ -121,5 +139,8 @@ void syncHemisphereParamsFromPlanLatitudes(const Ur3eHemisphereScanPlan &plan,
                                            Ur3eHemisphereScanParams &paramsInOut);
 
 [[nodiscard]] int semiFixedSampleCount(double intervalDeg);
+
+/// Imaging samples for one ring entry (full 360°, backup mask run, or pin-only).
+[[nodiscard]] int semiFixedRingSampleCount(const Ur3eSemiFixedRing &ring, double intervalDeg);
 
 } // namespace hf::ur3e

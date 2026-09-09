@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <thread>
 #include <vector>
 
@@ -19,6 +20,19 @@ namespace
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kDegToRad = kPi / 180.0;
+
+/// Joint-space PTP through an elbow sign change folds the payload through the arm.
+bool sameElbowFamily(const std::vector<double> &a, const std::vector<double> &b)
+{
+    if (a.size() < 3 || b.size() < 3)
+        return true;
+    const double ea = a[2];
+    const double eb = b[2];
+    constexpr double kNearZeroRad = 5.0 * kDegToRad;
+    if (std::abs(ea) < kNearZeroRad || std::abs(eb) < kNearZeroRad)
+        return true;
+    return (ea * eb) > 0.0;
+}
 
 bool hardwareMoveExact(const QString &serverUrl,
                        const std::vector<double> &joints,
@@ -284,6 +298,138 @@ bool pickPanSweepBranch(const double principalPanRad,
     *entryOut = bestEntry;
     *edgeOut = bestEdge;
     return true;
+}
+
+int nearestPanMaskBin(const std::vector<std::uint8_t> &mask, const double panRad)
+{
+    const int n = static_cast<int>(mask.size());
+    if (n <= 0)
+        return -1;
+    const double wrapped = std::atan2(std::sin(panRad), std::cos(panRad));
+    int best = 0;
+    double bestAbs = 1.0e99;
+    for (int i = 0; i < n; ++i)
+    {
+        const double binPan = 2.0 * kPi * static_cast<double>(i) / static_cast<double>(n);
+        const double binW = std::atan2(std::sin(binPan), std::cos(binPan));
+        const double d = std::abs(std::atan2(std::sin(binW - wrapped),
+                                             std::cos(binW - wrapped)));
+        if (d < bestAbs)
+        {
+            bestAbs = d;
+            best = i;
+        }
+    }
+    return best;
+}
+
+/// Contiguous valid abs-pan run containing the entry, as continuous radians.
+std::vector<double> backupContiguousPans(const double entryPan,
+                                         const std::vector<std::uint8_t> &mask,
+                                         const int panDir)
+{
+    std::vector<double> pans;
+    const int n = static_cast<int>(mask.size());
+    if (n <= 0)
+    {
+        pans.push_back(entryPan);
+        return pans;
+    }
+    int entryBin = nearestPanMaskBin(mask, entryPan);
+    if (entryBin < 0)
+    {
+        pans.push_back(entryPan);
+        return pans;
+    }
+    if (mask[static_cast<std::size_t>(entryBin)] == 0)
+    {
+        int found = -1;
+        for (int d = 1; d < n; ++d)
+        {
+            const int a = (entryBin + d) % n;
+            const int b = (entryBin - d + n) % n;
+            if (mask[static_cast<std::size_t>(a)] != 0)
+            {
+                found = a;
+                break;
+            }
+            if (mask[static_cast<std::size_t>(b)] != 0)
+            {
+                found = b;
+                break;
+            }
+        }
+        if (found < 0)
+        {
+            pans.push_back(entryPan);
+            return pans;
+        }
+        entryBin = found;
+    }
+
+    int start = entryBin;
+    for (int k = 0; k < n - 1; ++k)
+    {
+        const int prev = (start - 1 + n) % n;
+        if (mask[static_cast<std::size_t>(prev)] == 0)
+            break;
+        if (prev == entryBin)
+            break;
+        start = prev;
+    }
+
+    std::vector<int> bins;
+    int i = start;
+    for (int k = 0; k < n; ++k)
+    {
+        if (mask[static_cast<std::size_t>(i)] == 0)
+            break;
+        bins.push_back(i);
+        i = (i + 1) % n;
+        if (i == start)
+            break;
+    }
+    if (bins.empty())
+    {
+        pans.push_back(entryPan);
+        return pans;
+    }
+    if (panDir < 0)
+        std::reverse(bins.begin(), bins.end());
+
+    auto wrapAbs = [n](const int bin) {
+        const double raw = 2.0 * kPi * static_cast<double>(bin) / static_cast<double>(n);
+        return std::atan2(std::sin(raw), std::cos(raw));
+    };
+
+    double prev = unwrapContinuous(entryPan, wrapAbs(bins.front()));
+    const double loLimit = -kShoulderPanLimitRad + kShoulderPanLimitMarginRad;
+    const double hiLimit = kShoulderPanLimitRad - kShoulderPanLimitMarginRad;
+    for (const int shift : {0, 1, -1})
+    {
+        const double trial = prev + static_cast<double>(shift) * 2.0 * kPi;
+        if (trial >= loLimit - 1.0e-9 && trial <= hiLimit + 1.0e-9)
+        {
+            prev = trial;
+            break;
+        }
+    }
+
+    pans.reserve(bins.size());
+    for (std::size_t k = 0; k < bins.size(); ++k)
+    {
+        const double absPan = wrapAbs(bins[k]);
+        const double cont = unwrapContinuous(k == 0 ? prev : pans.back(), absPan);
+        pans.push_back(cont);
+    }
+    return pans;
+}
+
+bool sameRouteRingTheta(const Ur3eSemiFixedRing &a, const Ur3eSemiFixedRing &b)
+{
+    if (std::abs(a.thetaDeg) < 0.75 || std::abs(b.thetaDeg) < 0.75)
+        return false;
+    return std::lround(a.thetaDeg * 2.0) == std::lround(b.thetaDeg * 2.0);
 }
 
 std::vector<double> configuredHomeJointsRad()
@@ -662,16 +808,23 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
         }
     }
 
-    const int ringCount = input.route.rings.size();
+    Ur3eSemiFixedRoute route = input.route;
+    pruneSemiFixedRedundantFullSpinPins(route);
+
+    const int ringCount = route.rings.size();
+    const bool apexRingOnly =
+        ringCount == 1
+        && (route.rings[0].noPan || std::abs(route.rings[0].thetaDeg) < 0.75);
+    const bool doTop = !input.skipTop && !(apexRingOnly && !input.skipRings);
     const double intervalDeg =
-        input.route.intervalDeg > 0.0 ? input.route.intervalDeg : 10.0;
+        route.intervalDeg > 0.0 ? route.intervalDeg : 10.0;
     const int samplesPerRing = semiFixedSampleCount(intervalDeg);
     const double intervalRad = intervalDeg * kDegToRad;
-    const int panDir = input.route.panDirection >= 0 ? 1 : -1;
+    const int panDir = route.panDirection >= 0 ? 1 : -1;
     const int stabilizeMs =
         input.stabilizeMs > 0
             ? input.stabilizeMs
-            : (input.route.stabilizeMs > 0 ? input.route.stabilizeMs : 500);
+            : (route.stabilizeMs > 0 ? route.stabilizeMs : 500);
     const bool captureStills = !input.captureDir.trimmed().isEmpty();
 
     const auto markPinDone = [&host]() {
@@ -686,8 +839,10 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
     if (host.log)
     {
         host.log(QStringLiteral(
-                     "UR3e semi-fixed execute: top still + %1 ring(s), pan %2° every %3° "
-                     "(%4 samples/ring%5)…")
+                     "UR3e semi-fixed execute: top still + %1 ring entry(ies), "
+                     "full-spin latitudes use one pin, backup pairs go "
+                     "pin1 → home → pin2, pan %2° every %3° "
+                     "(%4 samples/full-spin%5)…")
                      .arg(ringCount)
                      .arg(panDir > 0 ? QStringLiteral("+360") : QStringLiteral("−360"))
                      .arg(intervalDeg, 0, 'f', 1)
@@ -699,7 +854,7 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
     // Always: MoveIt → top (θ=0 look-down) → photo, then rings (unless a two-stage MVS split).
     // Preview stores rings at [0..N-1] and top at index N (see inferSemiFixedPreviewRings).
     const auto &hw = hf::hardwareConfig();
-    if (host.moveStage && !input.skipTop)
+    if (host.moveStage && doTop)
     {
         QString stageErr;
         if (!host.moveStage(hw.sampleMultiviewApexPositionMm, QStringLiteral("apex"), &stageErr))
@@ -714,9 +869,9 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
     const int topPreviewIndex = ringCount;
     std::vector<double> lastEntryBranch;
     bool hasLastEntryBranch = false;
-    if (!input.skipTop)
+    if (doTop)
     {
-        Ur3eSemiFixedRoute routeCopy = input.route;
+        Ur3eSemiFixedRoute routeCopy = route;
         ensureSemiFixedTopPose(routeCopy);
         const Ur3eSemiFixedRing &top = routeCopy.topPose;
 
@@ -819,7 +974,7 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
     }
 
     // After the first (apex) still: MVS ring plane, not home — even on apex-only.
-    if (host.moveStage && hw.sampleMultiviewTwoStage() && !input.skipTop)
+    if (host.moveStage && hw.sampleMultiviewTwoStage() && doTop && !apexRingOnly)
     {
         QString stageErr;
         if (!host.moveStage(hw.sampleMultiviewPositionMm, QStringLiteral("MVS rings"), &stageErr))
@@ -839,7 +994,7 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
             break;
         }
 
-        const Ur3eSemiFixedRing &ring = input.route.rings[ringIndex];
+        const Ur3eSemiFixedRing &ring = route.rings[ringIndex];
         if (ring.entryJointsRad.size() != 6)
         {
             ok = false;
@@ -854,25 +1009,54 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
             host.setActiveRing(ringIndex);
         if (host.log)
         {
-            host.log(QStringLiteral("UR3e semi-fixed [%1/%2] MoveIt → ring “%3”…")
+            const bool prevSame =
+                ringIndex > 0
+                && sameRouteRingTheta(route.rings[ringIndex - 1], ring);
+            const bool nextSame =
+                ringIndex + 1 < ringCount
+                && sameRouteRingTheta(ring, route.rings[ringIndex + 1]);
+            QString hopNote;
+            const bool elbowFlipVsHome =
+                !sameElbowFamily(configuredHomeJointsRad(), ring.entryJointsRad);
+            if (prevSame)
+                hopNote = QStringLiteral(" (backup 2-pin: home → pin2)");
+            else if (nextSame)
+                hopNote = QStringLiteral(" (backup 2-pin: pin1, then home → pin2)");
+            else if (elbowFlipVsHome)
+                hopNote = QStringLiteral(" (via-home: elbow family ≠ home)");
+            else if (ring.baseSweepOk && !hasLastEntryBranch)
+                hopNote = QStringLiteral(" (simple path)");
+            host.log(QStringLiteral("UR3e semi-fixed [%1/%2] MoveIt → ring “%3”%4…")
                          .arg(ringIndex + 1)
                          .arg(ringCount)
-                         .arg(ring.displayName));
+                         .arg(ring.displayName)
+                         .arg(hopNote));
         }
 
         QString moveErr;
         bool stopped = false;
         const Ur3eScanTcpPose *tcpPtr = ring.hasEntryTcp ? &ring.entryTcp : nullptr;
-        // Always home first, then plan entry joints (no live IK / cone).
+        const bool backupHop =
+            ringIndex > 0 && sameRouteRingTheta(route.rings[ringIndex - 1], ring);
+        const bool elbowFlipVsHome =
+            !sameElbowFamily(configuredHomeJointsRad(), ring.entryJointsRad);
+        const bool simple360 =
+            ring.baseSweepOk && !ring.noPan && !backupHop && !hasLastEntryBranch
+            && !elbowFlipVsHome;
         const std::vector<double> *unwindPtr =
             hasLastEntryBranch ? &lastEntryBranch : nullptr;
-        if (!moveItToRingEntryViaHome(input.serverUrl,
-                                      ring.entryJointsRad,
-                                      tcpPtr,
-                                      host,
-                                      unwindPtr,
-                                      &moveErr,
-                                      &stopped))
+        const bool hopOk =
+            simple360
+                ? moveItToJoints(input.serverUrl, ring.entryJointsRad, tcpPtr, &moveErr,
+                                 &stopped, false)
+                : moveItToRingEntryViaHome(input.serverUrl,
+                                           ring.entryJointsRad,
+                                           tcpPtr,
+                                           host,
+                                           unwindPtr,
+                                           &moveErr,
+                                           &stopped);
+        if (!hopOk)
         {
             if (stopped)
             {
@@ -951,76 +1135,125 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
                          .arg(entryBranch[5] * 180.0 / kPi, 0, 'f', 1));
         }
 
-        // Imaging start edge: opposite the scan direction so interval steps only
-        // advance in panDir (avoids mid-ring reverse when RTDE wraps) and the last
-        // sample lands on entry. +dir → edge ≈ entry−(N−1)Δ; −dir → entry+(N−1)Δ.
-        // Choose continuous entry±2π so the whole sweep stays inside MoveIt
-        // shoulder_pan ±360° (principal entry alone can put edge past −360°).
-        double sweepEntryPan = entryBranch[0];
-        double edgePan = entryBranch[0];
-        if (!pickPanSweepBranch(entryBranch[0],
-                                panDir,
-                                samplesPerRing,
-                                intervalRad,
-                                &sweepEntryPan,
-                                &edgePan))
+        // Imaging pans: full 360° when the pin is sweep-OK; backup 2-pin rings
+        // only visit the contiguous valid run (or the pin itself if no mask).
+        std::vector<double> samplePans;
+        const bool pinOnly = ring.noPan || std::abs(ring.thetaDeg) < 0.75;
+        const bool backupPartial = !pinOnly && ring.backupCoverageOk && !ring.baseSweepOk;
+        if (pinOnly)
         {
-            ok = false;
-            errorMessage = QStringLiteral(
-                "Ring %1: pan sweep would exceed shoulder_pan ±360° "
-                "(entry %2°)")
-                               .arg(ringIndex)
-                               .arg(entryBranch[0] * 180.0 / kPi, 0, 'f', 1);
-            if (host.markRingFailed)
-                host.markRingFailed(ringIndex);
-            markPinFail();
-            break;
-        }
-        if (std::abs(sweepEntryPan - entryBranch[0]) >= (0.5 * kDegToRad))
-        {
+            samplePans.push_back(entryBranch[0]);
             if (host.log)
             {
                 host.log(QStringLiteral(
-                             "UR3e semi-fixed ring %1: shift entry pan %2° → %3° "
-                             "so init sweep stays within ±360°…")
-                             .arg(ringIndex)
-                             .arg(entryBranch[0] * 180.0 / kPi, 0, 'f', 1)
-                             .arg(sweepEntryPan * 180.0 / kPi, 0, 'f', 1));
+                             "UR3e semi-fixed ring %1: apex pin — one still, no pan")
+                             .arg(ringIndex));
             }
-            std::vector<double> shifted = entryBranch;
-            shifted[0] = sweepEntryPan;
-            QString shiftErr;
-            bool shiftStopped = false;
-            if (!hardwareMoveExact(input.serverUrl,
-                                   shifted,
-                                   QStringLiteral("semi-fixed shift pan for ±360° sweep"),
-                                   &shiftErr,
-                                   &shiftStopped))
+        }
+        else if (backupPartial)
+        {
+            samplePans = backupContiguousPans(entryBranch[0], ring.panMask, panDir);
+            if (samplePans.empty())
+                samplePans.push_back(entryBranch[0]);
+            if (host.log)
             {
-                if (shiftStopped)
+                if (ring.panMask.empty())
                 {
-                    if (stopRequested())
-                        ur3eStopMotion(input.serverUrl);
-                    else
-                    {
-                        ok = false;
-                        errorMessage = shiftErr;
-                    }
-                    goto semi_fixed_done;
+                    host.log(QStringLiteral(
+                                 "UR3e semi-fixed ring %1: backup pin — no pan_mask, "
+                                 "still at entry only (union %2°)")
+                                 .arg(ringIndex)
+                                 .arg(ring.backupUnionDeg, 0, 'f', 1));
                 }
+                else
+                {
+                    host.log(QStringLiteral(
+                                 "UR3e semi-fixed ring %1: backup pan %2 sample(s) "
+                                 "(union %3°, not a full 360°)")
+                                 .arg(ringIndex)
+                                 .arg(samplePans.size())
+                                 .arg(ring.backupUnionDeg, 0, 'f', 1));
+                }
+            }
+        }
+        else
+        {
+            double sweepEntryPan = entryBranch[0];
+            double edgePan = entryBranch[0];
+            if (!pickPanSweepBranch(entryBranch[0],
+                                    panDir,
+                                    samplesPerRing,
+                                    intervalRad,
+                                    &sweepEntryPan,
+                                    &edgePan))
+            {
                 ok = false;
-                errorMessage = shiftErr.isEmpty()
-                                   ? QStringLiteral("pan branch shift for sweep failed")
-                                   : shiftErr;
+                errorMessage = QStringLiteral(
+                    "Ring %1: pan sweep would exceed shoulder_pan ±360° "
+                    "(entry %2°)")
+                                   .arg(ringIndex)
+                                   .arg(entryBranch[0] * 180.0 / kPi, 0, 'f', 1);
                 if (host.markRingFailed)
                     host.markRingFailed(ringIndex);
                 markPinFail();
                 break;
             }
-            entryBranch = shifted;
-            lastEntryBranch = entryBranch;
-            std::this_thread::sleep_for(std::chrono::milliseconds(stabilizeMs));
+            if (std::abs(sweepEntryPan - entryBranch[0]) >= (0.5 * kDegToRad))
+            {
+                if (host.log)
+                {
+                    host.log(QStringLiteral(
+                                 "UR3e semi-fixed ring %1: shift entry pan %2° → %3° "
+                                 "so init sweep stays within ±360°…")
+                                 .arg(ringIndex)
+                                 .arg(entryBranch[0] * 180.0 / kPi, 0, 'f', 1)
+                                 .arg(sweepEntryPan * 180.0 / kPi, 0, 'f', 1));
+                }
+                std::vector<double> shifted = entryBranch;
+                shifted[0] = sweepEntryPan;
+                QString shiftErr;
+                bool shiftStopped = false;
+                if (!hardwareMoveExact(input.serverUrl,
+                                       shifted,
+                                       QStringLiteral("semi-fixed shift pan for ±360° sweep"),
+                                       &shiftErr,
+                                       &shiftStopped))
+                {
+                    if (shiftStopped)
+                    {
+                        if (stopRequested())
+                            ur3eStopMotion(input.serverUrl);
+                        else
+                        {
+                            ok = false;
+                            errorMessage = shiftErr;
+                        }
+                        goto semi_fixed_done;
+                    }
+                    ok = false;
+                    errorMessage = shiftErr.isEmpty()
+                                       ? QStringLiteral("pan branch shift for sweep failed")
+                                       : shiftErr;
+                    if (host.markRingFailed)
+                        host.markRingFailed(ringIndex);
+                    markPinFail();
+                    break;
+                }
+                entryBranch = shifted;
+                lastEntryBranch = entryBranch;
+                std::this_thread::sleep_for(std::chrono::milliseconds(stabilizeMs));
+            }
+            samplePans.reserve(static_cast<std::size_t>(samplesPerRing));
+            for (int i = 0; i < samplesPerRing; ++i)
+            {
+                samplePans.push_back(
+                    edgePan
+                    + static_cast<double>(i) * intervalRad * static_cast<double>(panDir));
+            }
         }
+
+        const int samplesThisRing = static_cast<int>(samplePans.size());
+        const double edgePan = samplePans.empty() ? entryBranch[0] : samplePans.front();
         if (std::abs(edgePan - entryBranch[0]) >= (0.5 * kDegToRad))
         {
             if (host.log)
@@ -1076,9 +1309,8 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
             std::this_thread::sleep_for(std::chrono::milliseconds(stabilizeMs));
         }
 
-        // Absolute continuous targets from edge (never live+Δ — wrapped live caused
-        // mid-ring reverse sweeps in the logs, e.g. 270° → −89° → −71°).
-        for (int sample = 0; sample < samplesPerRing; ++sample)
+        // Absolute continuous targets (never live+Δ — wrapped live caused reverse sweeps).
+        for (int sample = 0; sample < samplesThisRing; ++sample)
         {
             if (!sessionOk() || stopRequested())
             {
@@ -1087,9 +1319,7 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
             }
 
             std::vector<double> sampleJoints = entryBranch;
-            sampleJoints[0] =
-                edgePan
-                + static_cast<double>(sample) * intervalRad * static_cast<double>(panDir);
+            sampleJoints[0] = samplePans[static_cast<std::size_t>(sample)];
 
             if (sample > 0)
             {
@@ -1100,7 +1330,7 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
                                  "(step %+5°)…")
                                  .arg(ringIndex)
                                  .arg(sample + 1)
-                                 .arg(samplesPerRing)
+                                 .arg(samplesThisRing)
                                  .arg(sampleJoints[0] * 180.0 / kPi, 0, 'f', 1)
                                  .arg(intervalDeg * panDir, 0, 'f', 1));
                 }
@@ -1142,7 +1372,7 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
                 host.log(QStringLiteral(
                              "UR3e semi-fixed ring %1: pan sample 1/%2 at edge %3°")
                              .arg(ringIndex)
-                             .arg(samplesPerRing)
+                             .arg(samplesThisRing)
                              .arg(sampleJoints[0] * 180.0 / kPi, 0, 'f', 1));
             }
 

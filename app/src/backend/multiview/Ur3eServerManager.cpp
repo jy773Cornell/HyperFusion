@@ -209,7 +209,7 @@ QString Ur3eServerManager::buildLaunchCommand() const
         serverArgs += QStringLiteral(" --tool-payload-shape %1").arg(shape);
         serverArgs += QStringLiteral(" --tool-payload-mesh-file %1").arg(mesh);
     }
-    const auto tcp = cfg.cameraToolTcpMm();
+    const auto tcp = cfg.activeToolTcpMm();
     serverArgs += QStringLiteral(" --tool-tcp-x-mm %1").arg(tcp.xMm, 0, 'f', 3);
     serverArgs += QStringLiteral(" --tool-tcp-y-mm %1").arg(tcp.yMm, 0, 'f', 3);
     serverArgs += QStringLiteral(" --tool-tcp-z-mm %1").arg(tcp.zMm, 0, 'f', 3);

@@ -19,9 +19,9 @@ exec ./venv/bin/python -m hyperfusion_ur3e.sidecar.server \
   --max-linear-speed 0.05 \
   --max-linear-accel 0.3 \
   --max-joint-velocity-deg 40 \
-  --tool-payload-radius-mm 80 \
+  --tool-payload-radius-mm 60 \
   --tool-payload-shape mesh \
-  --tool-payload-mesh-file ur_tool_payload.stl \
+  --tool-payload-mesh-file ur_tool_payload_new.stl \
   --tool-tcp-x-mm 0.715 \
   --tool-tcp-y-mm -54.197 \
   --tool-tcp-z-mm 73.755 \
@@ -33,7 +33,7 @@ exec ./venv/bin/python -m hyperfusion_ur3e.sidecar.server \
   --ur-type ur3e \
   --prestart-driver \
   --initial-joint-deg 90,-180,145,-55,90,-90 \
-  --ceiling-mount-height-mm 629 \
+  --ceiling-mount-height-mm 870 \
   --mount-roll-deg 180 \
   --mount-pitch-deg 0 \
   --mount-yaw-deg 0 \
@@ -42,5 +42,5 @@ exec ./venv/bin/python -m hyperfusion_ur3e.sidecar.server \
   --workspace-boundary-enabled \
   --workspace-length-mm 900 \
   --workspace-width-mm 600 \
-  --workspace-height-mm 529 \
+  --workspace-height-mm 720 \
   --workspace-ceiling-clearance-mm 40

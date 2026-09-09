@@ -10,6 +10,9 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 
+#include <cmath>
+#include <cstdint>
+
 namespace hf::ur3e
 {
 namespace
@@ -17,7 +20,7 @@ namespace
 
 constexpr int kCacheSchemaVersion = 4; // home_path_ok / chain-only marking
 
-/// Compare robot-cfg fingerprints ignoring use_mock_hardware (sim ↔ real).
+/// Compare robot-cfg fingerprints by value (ignore key order / number formatting).
 bool robotCfgFingerprintsMatch(const QString &a, const QString &b)
 {
     if (a == b)
@@ -25,17 +28,59 @@ bool robotCfgFingerprintsMatch(const QString &a, const QString &b)
     if (a.isEmpty() || b.isEmpty())
         return false;
 
-    auto stripMock = [](const QString &raw) -> QString {
-        QJsonParseError err;
-        const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
-        if (err.error != QJsonParseError::NoError || !doc.isObject())
-            return raw;
-        QJsonObject o = doc.object();
-        o.remove(QStringLiteral("use_mock_hardware"));
-        return QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
-    };
+    QJsonParseError errA;
+    QJsonParseError errB;
+    const QJsonDocument docA = QJsonDocument::fromJson(a.toUtf8(), &errA);
+    const QJsonDocument docB = QJsonDocument::fromJson(b.toUtf8(), &errB);
+    if (errA.error != QJsonParseError::NoError || errB.error != QJsonParseError::NoError
+        || !docA.isObject() || !docB.isObject())
+        return false;
 
-    return stripMock(a) == stripMock(b);
+    QJsonObject oa = docA.object();
+    QJsonObject ob = docB.object();
+    oa.remove(QStringLiteral("use_mock_hardware"));
+    ob.remove(QStringLiteral("use_mock_hardware"));
+    if (oa.size() != ob.size())
+        return false;
+
+    constexpr double kEps = 1.0e-6;
+    const QStringList keys = oa.keys();
+    for (const QString &key : keys)
+    {
+        if (!ob.contains(key))
+            return false;
+        const QJsonValue va = oa.value(key);
+        const QJsonValue vb = ob.value(key);
+        if (va.isDouble() && vb.isDouble())
+        {
+            if (std::abs(va.toDouble() - vb.toDouble()) > kEps)
+                return false;
+            continue;
+        }
+        if (va.isArray() && vb.isArray())
+        {
+            const QJsonArray aa = va.toArray();
+            const QJsonArray ab = vb.toArray();
+            if (aa.size() != ab.size())
+                return false;
+            for (int i = 0; i < aa.size(); ++i)
+            {
+                if (aa.at(i).isDouble() && ab.at(i).isDouble())
+                {
+                    if (std::abs(aa.at(i).toDouble() - ab.at(i).toDouble()) > kEps)
+                        return false;
+                }
+                else if (aa.at(i) != ab.at(i))
+                {
+                    return false;
+                }
+            }
+            continue;
+        }
+        if (va != vb)
+            return false;
+    }
+    return true;
 }
 
 QJsonObject matPoseToJson(const Ur3eScanTcpPose &tcp)
@@ -73,7 +118,9 @@ QJsonObject robotCfgFingerprintObject(const hf::HardwareConfig::Ur3eConfig &ur3e
     fp.insert(QStringLiteral("schema"), kCacheSchemaVersion);
     fp.insert(QStringLiteral("ur_type"), ur3e.urType);
     // Intentionally omit use_mock_hardware — sim plans must load on real robot (same geometry).
-    const auto tcp = ur3e.cameraToolTcpMm();
+    const auto tcp = ur3e.activeToolTcpMm();
+    fp.insert(QStringLiteral("scan_tcp"),
+              ur3e.usesDlpScanTcp() ? QStringLiteral("dlp") : QStringLiteral("camera"));
     fp.insert(QStringLiteral("tool_tcp_x_mm"), tcp.xMm);
     fp.insert(QStringLiteral("tool_tcp_y_mm"), tcp.yMm);
     fp.insert(QStringLiteral("tool_tcp_z_mm"), tcp.zMm);
@@ -151,6 +198,15 @@ QJsonObject planPointsToJson(const Ur3eHemisphereScanPlan &plan)
         entry.insert(QStringLiteral("reachable"), pt.reachable);
         entry.insert(QStringLiteral("home_path_ok"), pt.homePathOk);
         entry.insert(QStringLiteral("base_sweep_ok"), pt.baseSweepOk);
+        entry.insert(QStringLiteral("backup_coverage_ok"), pt.backupCoverageOk);
+        entry.insert(QStringLiteral("backup_union_deg"), pt.backupUnionDeg);
+        if (!pt.panMask.empty())
+        {
+            QJsonArray mask;
+            for (const std::uint8_t bit : pt.panMask)
+                mask.append(static_cast<int>(bit != 0 ? 1 : 0));
+            entry.insert(QStringLiteral("pan_mask"), mask);
+        }
         entry.insert(QStringLiteral("planning_error"), pt.planningError);
 
         QJsonArray joints;
@@ -202,6 +258,17 @@ bool planFromJsonRoot(const QJsonObject &root, Ur3eHemisphereScanPlan &planOut, 
             pt.reachable && entry.value(QStringLiteral("home_path_ok")).toBool(true);
         pt.baseSweepOk =
             pt.reachable && entry.value(QStringLiteral("base_sweep_ok")).toBool(false);
+        pt.backupCoverageOk =
+            pt.reachable && entry.value(QStringLiteral("backup_coverage_ok")).toBool(false);
+        pt.backupUnionDeg = entry.value(QStringLiteral("backup_union_deg")).toDouble(0.0);
+        pt.panMask.clear();
+        if (entry.contains(QStringLiteral("pan_mask")) && entry.value(QStringLiteral("pan_mask")).isArray())
+        {
+            const QJsonArray mask = entry.value(QStringLiteral("pan_mask")).toArray();
+            pt.panMask.reserve(mask.size());
+            for (const QJsonValue &bit : mask)
+                pt.panMask.push_back(bit.toBool(false) || bit.toInt(0) != 0 ? 1 : 0);
+        }
         pt.planningError = entry.value(QStringLiteral("planning_error")).toString();
         const QJsonArray joints = entry.value(QStringLiteral("joints_rad")).toArray();
         pt.jointPositionsRad.reserve(joints.size());
@@ -402,7 +469,7 @@ listUr3eScanRoutesMatchingCfg(const QString &dir,
                               const QString &expectedRobotCfgFingerprint)
 {
     QVector<Ur3eScanRouteInfo> out;
-    if (dir.isEmpty() || expectedRobotCfgFingerprint.isEmpty())
+    if (dir.isEmpty())
         return out;
 
     QDir routesDir(dir);
@@ -411,24 +478,29 @@ listUr3eScanRoutesMatchingCfg(const QString &dir,
 
     const QFileInfoList files =
         routesDir.entryInfoList({QStringLiteral("*.json")}, QDir::Files, QDir::Name);
-    for (const QFileInfo &info : files)
-    {
+
+    auto tryAdd = [&](const QFileInfo &info, const bool requireMatch) -> bool {
+        if (info.fileName().startsWith(QLatin1Char('_')))
+            return false;
+
         QFile file(info.absoluteFilePath());
         if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
-            continue;
+            return false;
 
         QJsonParseError parseError;
         const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &parseError);
         if (parseError.error != QJsonParseError::NoError || !doc.isObject())
-            continue;
+            return false;
 
         const QJsonObject root = doc.object();
         if (root.value(QStringLiteral("schema")).toInt() != kCacheSchemaVersion)
-            continue;
+            return false;
 
         const QString robotFp = root.value(QStringLiteral("robot_cfg_fingerprint")).toString();
-        if (robotFp.isEmpty() || !robotCfgFingerprintsMatch(robotFp, expectedRobotCfgFingerprint))
-            continue;
+        if (requireMatch && !expectedRobotCfgFingerprint.isEmpty()
+            && (robotFp.isEmpty()
+                || !robotCfgFingerprintsMatch(robotFp, expectedRobotCfgFingerprint)))
+            return false;
 
         Ur3eScanRouteInfo entry;
         entry.path = info.absoluteFilePath();
@@ -442,6 +514,17 @@ listUr3eScanRoutesMatchingCfg(const QString &dir,
         entry.pointCount = root.value(QStringLiteral("points")).toArray().size();
         entry.reachableCount = root.value(QStringLiteral("reachable_count")).toInt();
         out.push_back(std::move(entry));
+        return true;
+    };
+
+    for (const QFileInfo &info : files)
+        tryAdd(info, true);
+
+    // Folder has plans but none matched (fragile string compare / empty expected fp).
+    if (out.isEmpty())
+    {
+        for (const QFileInfo &info : files)
+            tryAdd(info, false);
     }
     return out;
 }

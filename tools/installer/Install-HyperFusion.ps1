@@ -546,6 +546,22 @@ if ($wslReady -and -not $SkipUr3e) {
         Write-Host "==> UR3e WSL mirrored network + firewall"
         & $netScript
     }
+
+    # WSL writes initial_positions.yaml / runtime URDF / driver logs. Admin
+    # install leaves Users=RX only, which is Errno 13 from /mnt/c/HyperFusion.
+    foreach ($rel in @("config", "logs")) {
+        $writable = Join-Path $ur3eWin $rel
+        if (-not (Test-Path -LiteralPath $writable)) {
+            New-Item -ItemType Directory -Force -Path $writable | Out-Null
+        }
+        if (Test-IsAdmin) {
+            icacls $writable /grant "Users:(OI)(CI)M" | Out-Null
+            Write-Host "==> UR3e $rel writable by Users (WSL prestart)"
+        }
+        else {
+            Write-Warning "UR3e $rel may be read-only for WSL. Re-run elevated or the sidecar will use ~/.cache/hyperfusion_ur3e."
+        }
+    }
 }
 
 if ($wslReady) {

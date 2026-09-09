@@ -150,7 +150,7 @@ generateSemiHemisphereScanPoints(const Ur3eHemisphereScanParams &params,
     std::vector<Ur3eHemisphereScanPoint> points;
     points.reserve(static_cast<std::size_t>(1 + nPhi * normalized.verticalPoints));
 
-    points.push_back(makeApexScanPoint(kSemiFixedApexRadiusM, apexXM, apexYM));
+    points.push_back(makeApexScanPoint(normalized.sphereRadiusM, apexXM, apexYM));
 
     for (const double thetaDeg : thetaSamples)
     {

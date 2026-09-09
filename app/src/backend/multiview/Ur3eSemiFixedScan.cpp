@@ -2,6 +2,7 @@
 
 #include "backend/multiview/Ur3eSemiFixedScan.hpp"
 
+#include "backend/HyperFusionConfig.hpp"
 #include "backend/multiview/Ur3eHemisphereScan.hpp"
 
 #include <QCoreApplication>
@@ -9,12 +10,14 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
+#include <QVector>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 namespace hf::ur3e
 {
@@ -30,17 +33,59 @@ bool robotCfgFingerprintsMatch(const QString &a, const QString &b)
     if (a.isEmpty() || b.isEmpty())
         return false;
 
-    auto stripMock = [](const QString &raw) -> QString {
-        QJsonParseError err;
-        const QJsonDocument doc = QJsonDocument::fromJson(raw.toUtf8(), &err);
-        if (err.error != QJsonParseError::NoError || !doc.isObject())
-            return raw;
-        QJsonObject o = doc.object();
-        o.remove(QStringLiteral("use_mock_hardware"));
-        return QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact));
-    };
+    QJsonParseError errA;
+    QJsonParseError errB;
+    const QJsonDocument docA = QJsonDocument::fromJson(a.toUtf8(), &errA);
+    const QJsonDocument docB = QJsonDocument::fromJson(b.toUtf8(), &errB);
+    if (errA.error != QJsonParseError::NoError || errB.error != QJsonParseError::NoError
+        || !docA.isObject() || !docB.isObject())
+        return false;
 
-    return stripMock(a) == stripMock(b);
+    QJsonObject oa = docA.object();
+    QJsonObject ob = docB.object();
+    oa.remove(QStringLiteral("use_mock_hardware"));
+    ob.remove(QStringLiteral("use_mock_hardware"));
+    if (oa.size() != ob.size())
+        return false;
+
+    constexpr double kEps = 1.0e-6;
+    const QStringList keys = oa.keys();
+    for (const QString &key : keys)
+    {
+        if (!ob.contains(key))
+            return false;
+        const QJsonValue va = oa.value(key);
+        const QJsonValue vb = ob.value(key);
+        if (va.isDouble() && vb.isDouble())
+        {
+            if (std::abs(va.toDouble() - vb.toDouble()) > kEps)
+                return false;
+            continue;
+        }
+        if (va.isArray() && vb.isArray())
+        {
+            const QJsonArray aa = va.toArray();
+            const QJsonArray ab = vb.toArray();
+            if (aa.size() != ab.size())
+                return false;
+            for (int i = 0; i < aa.size(); ++i)
+            {
+                if (aa.at(i).isDouble() && ab.at(i).isDouble())
+                {
+                    if (std::abs(aa.at(i).toDouble() - ab.at(i).toDouble()) > kEps)
+                        return false;
+                }
+                else if (aa.at(i) != ab.at(i))
+                {
+                    return false;
+                }
+            }
+            continue;
+        }
+        if (va != vb)
+            return false;
+    }
+    return true;
 }
 
 QJsonObject tcpToJson(const Ur3eScanTcpPose &tcp)
@@ -120,6 +165,8 @@ Ur3eSemiFixedRing defaultSemiFixedTopPose()
     top.reachabilityKnown = true;
     top.reachable = true;
     top.homePathOk = true;
+    top.noPan = true;
+    top.thetaDeg = 0.0;
     return top;
 }
 
@@ -133,14 +180,21 @@ void ensureSemiFixedTopPose(Ur3eSemiFixedRoute &route)
 
 QString defaultUr3eSemiScanRoutesDir()
 {
-    const QString besideExe = QDir(QCoreApplication::applicationDirPath())
-                                  .filePath(QStringLiteral("mvs_semi_scan_plans"));
+    QString rel = QStringLiteral("mvs_semi_scan_plans");
+    QString sub = hf::hardwareConfig().ur3e.semiScanPlansSubdir.trimmed();
+    sub.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    while (sub.startsWith(QLatin1Char('/')))
+        sub.remove(0, 1);
+    if (!sub.isEmpty() && !sub.contains(QLatin1String("..")) && !QDir::isAbsolutePath(sub))
+        rel += QLatin1Char('/') + sub;
+
+    const QString besideExe = QDir(QCoreApplication::applicationDirPath()).filePath(rel);
     if (QDir(besideExe).exists())
         return besideExe;
 
 #ifdef HF_APP_SOURCE_DIR
     const QString fromPreset = QDir(QString::fromUtf8(HF_APP_SOURCE_DIR))
-                                   .filePath(QStringLiteral("preset/mvs_semi_scan_plans"));
+                                   .filePath(QStringLiteral("preset/") + rel);
     if (QDir(fromPreset).exists())
         return fromPreset;
 #endif
@@ -185,6 +239,8 @@ bool saveUr3eSemiFixedRoute(const QString &path,
             top.insert(QStringLiteral("reachable"), toSave.topPose.reachable);
             top.insert(QStringLiteral("home_path_ok"), toSave.topPose.homePathOk);
         }
+        top.insert(QStringLiteral("base_sweep_ok"), toSave.topPose.baseSweepOk);
+        top.insert(QStringLiteral("backup_coverage_ok"), toSave.topPose.backupCoverageOk);
         root.insert(QStringLiteral("top_pose"), top);
     }
 
@@ -201,6 +257,19 @@ bool saveUr3eSemiFixedRoute(const QString &path,
         {
             o.insert(QStringLiteral("reachable"), ring.reachable);
             o.insert(QStringLiteral("home_path_ok"), ring.homePathOk);
+        }
+        o.insert(QStringLiteral("base_sweep_ok"), ring.baseSweepOk);
+        o.insert(QStringLiteral("backup_coverage_ok"), ring.backupCoverageOk);
+        o.insert(QStringLiteral("backup_union_deg"), ring.backupUnionDeg);
+        o.insert(QStringLiteral("phi_deg"), ring.phiDeg);
+        o.insert(QStringLiteral("theta_deg"), ring.thetaDeg);
+        o.insert(QStringLiteral("no_pan"), ring.noPan);
+        if (!ring.panMask.empty())
+        {
+            QJsonArray mask;
+            for (const std::uint8_t bit : ring.panMask)
+                mask.append(static_cast<int>(bit != 0 ? 1 : 0));
+            o.insert(QStringLiteral("pan_mask"), mask);
         }
         rings.append(o);
     }
@@ -312,6 +381,22 @@ bool loadUr3eSemiFixedRoute(const QString &path,
             ring.reachable = o.value(QStringLiteral("reachable")).toBool(false);
             ring.homePathOk = o.value(QStringLiteral("home_path_ok")).toBool(true);
         }
+        // Legacy routes had no flags — they were full-spin entries.
+        ring.baseSweepOk = o.value(QStringLiteral("base_sweep_ok")).toBool(true);
+        ring.backupCoverageOk = o.value(QStringLiteral("backup_coverage_ok")).toBool(false);
+        ring.backupUnionDeg = o.value(QStringLiteral("backup_union_deg")).toDouble(0.0);
+        ring.phiDeg = o.value(QStringLiteral("phi_deg")).toDouble(0.0);
+        ring.thetaDeg = o.value(QStringLiteral("theta_deg")).toDouble(0.0);
+        ring.noPan = o.value(QStringLiteral("no_pan")).toBool(false)
+                     || std::abs(ring.thetaDeg) < 0.75;
+        ring.panMask.clear();
+        if (o.contains(QStringLiteral("pan_mask")) && o.value(QStringLiteral("pan_mask")).isArray())
+        {
+            const QJsonArray mask = o.value(QStringLiteral("pan_mask")).toArray();
+            ring.panMask.reserve(mask.size());
+            for (const QJsonValue &bit : mask)
+                ring.panMask.push_back(bit.toBool(false) || bit.toInt(0) != 0 ? 1 : 0);
+        }
         if (ring.id.isEmpty())
             ring.id = QStringLiteral("ring_%1").arg(routeOut.rings.size() + 1);
         if (ring.displayName.isEmpty())
@@ -319,10 +404,10 @@ bool loadUr3eSemiFixedRoute(const QString &path,
         routeOut.rings.push_back(ring);
     }
 
-    if (routeOut.rings.isEmpty())
+    if (routeOut.rings.isEmpty() && !routeOut.hasTopPose)
     {
         if (errorMessage != nullptr)
-            *errorMessage = QStringLiteral("Route has no valid rings");
+            *errorMessage = QStringLiteral("Route has no valid rings or apex");
         return false;
     }
     return true;
@@ -365,6 +450,9 @@ Ur3eSemiFixedPreviewRing inferSemiFixedPreviewRing(const Ur3eSemiFixedRing &ring
     preview.reachabilityKnown = ring.reachabilityKnown;
     preview.reachable = ring.reachable;
     preview.homePathOk = ring.homePathOk;
+    preview.noPan = ring.noPan;
+    if (ring.noPan || std::abs(ring.thetaDeg) < 0.75)
+        preview.isTopPose = true;
     double cx = 0.0;
     double cy = 0.0;
     scanCenterOffsetM(cx, cy);
@@ -377,7 +465,9 @@ Ur3eSemiFixedPreviewRing inferSemiFixedPreviewRing(const Ur3eSemiFixedRing &ring
         const double dx = ring.entryTcp.xM - cx;
         const double dy = ring.entryTcp.yM - cy;
         preview.radiusM = std::hypot(dx, dy);
-        if (preview.radiusM < 0.02)
+        if (preview.isTopPose)
+            preview.radiusM = 0.0;
+        else if (preview.radiusM < 0.02)
             preview.radiusM = 0.05;
     }
     else
@@ -395,7 +485,13 @@ QVector<Ur3eSemiFixedPreviewRing> inferSemiFixedPreviewRings(const Ur3eSemiFixed
     // Rings first so execute ringIndex 0..N-1 still maps 1:1.
     for (const Ur3eSemiFixedRing &ring : route.rings)
         out.push_back(inferSemiFixedPreviewRing(ring));
-    if (route.hasTopPose)
+    bool haveApexRing = false;
+    for (const Ur3eSemiFixedPreviewRing &p : out)
+    {
+        if (p.isTopPose || p.noPan)
+            haveApexRing = true;
+    }
+    if (route.hasTopPose && !haveApexRing)
     {
         Ur3eSemiFixedPreviewRing top = inferSemiFixedPreviewRing(route.topPose);
         top.isTopPose = true;
@@ -420,21 +516,25 @@ Ur3eSemiFixedRoute semiFixedRouteFromHemispherePlan(const Ur3eHemisphereScanPlan
                                                     const double intervalDeg,
                                                     const int panDirection)
 {
-    // One ring entry per latitude. Prefer base_sweep_ok + home↔pin, then
-    // nearest joints to configured home.
+    // One full-spin pin per latitude. Two pins only when both are backup-only.
     struct Candidate
     {
         int index = -1;
         double thetaDeg = 0.0;
-        double homeDist = 1.0e9;
+        double phiDeg = 0.0;
         bool baseSweepOk = false;
+        bool backupCoverageOk = false;
         bool homePathOk = false;
     };
 
     const std::vector<double> homeJoints = ur3eScanHomeJointsRadFromConfig();
 
-    QHash<int, Candidate> bestByThetaKey;
+    QHash<int, QVector<Candidate>> pinsByThetaKey;
     int apexIndex = -1;
+    auto pinAccepted = [](const Ur3ePlannedScanPoint &pt) {
+        return pt.homePathOk && (pt.baseSweepOk || pt.backupCoverageOk);
+    };
+
     for (int i = 0; i < static_cast<int>(plan.points.size()); ++i)
     {
         const Ur3ePlannedScanPoint &pt = plan.points[static_cast<std::size_t>(i)];
@@ -443,7 +543,6 @@ Ur3eSemiFixedRoute semiFixedRouteFromHemispherePlan(const Ur3eHemisphereScanPlan
 
         if (std::abs(pt.gridPoint.thetaDeg) < 0.75)
         {
-            // Top/apex: require verified return-home (home_path_ok).
             if (!pt.homePathOk)
                 continue;
             if (apexIndex < 0
@@ -456,37 +555,37 @@ Ur3eSemiFixedRoute semiFixedRouteFromHemispherePlan(const Ur3eHemisphereScanPlan
             continue;
         }
 
-        // Semi plans: base-sweep OK and pin↔home (home_path_ok) required.
-        if (!pt.baseSweepOk || !pt.homePathOk)
+        if (!pinAccepted(pt))
             continue;
 
         const int thetaKey = static_cast<int>(std::lround(pt.gridPoint.thetaDeg * 2.0));
         Candidate cand;
         cand.index = i;
         cand.thetaDeg = pt.gridPoint.thetaDeg;
-        cand.homeDist = ur3eJointDistanceRad(homeJoints, pt.jointPositionsRad);
+        cand.phiDeg = pt.gridPoint.phiDeg;
         cand.baseSweepOk = pt.baseSweepOk;
+        cand.backupCoverageOk = pt.backupCoverageOk;
         cand.homePathOk = pt.homePathOk;
-
-        const auto it = bestByThetaKey.constFind(thetaKey);
-        if (it == bestByThetaKey.cend())
+        QVector<Candidate> &row = pinsByThetaKey[thetaKey];
+        const bool rowHasSweep = std::any_of(
+            row.cbegin(), row.cend(), [](const Candidate &c) { return c.baseSweepOk; });
+        if (rowHasSweep)
+            continue;
+        if (cand.baseSweepOk)
         {
-            bestByThetaKey.insert(thetaKey, cand);
+            row.clear();
+            row.push_back(cand);
             continue;
         }
-
-        const Candidate &cur = it.value();
-        const bool betterDist = cand.homeDist < cur.homeDist - 1e-9;
-        const bool betterIndex = std::abs(cand.homeDist - cur.homeDist) <= 1e-9
-                                 && cand.index < cur.index;
-        if (betterDist || betterIndex)
-            bestByThetaKey.insert(thetaKey, cand);
+        if (row.size() >= 2)
+            continue;
+        row.push_back(cand);
     }
 
-    // Fallback: if plan has no base_sweep_ok markers (legacy), use reachable
-    // pins that still have home_path_ok (return-home proven).
-    if (bestByThetaKey.isEmpty())
+    // Fallback: if plan has no sweep/backup markers (legacy), one nearest-home pin.
+    if (pinsByThetaKey.isEmpty())
     {
+        QHash<int, Candidate> bestByThetaKey;
         for (int i = 0; i < static_cast<int>(plan.points.size()); ++i)
         {
             const Ur3ePlannedScanPoint &pt = plan.points[static_cast<std::size_t>(i)];
@@ -500,23 +599,29 @@ Ur3eSemiFixedRoute semiFixedRouteFromHemispherePlan(const Ur3eHemisphereScanPlan
             Candidate cand;
             cand.index = i;
             cand.thetaDeg = pt.gridPoint.thetaDeg;
-            cand.homeDist = ur3eJointDistanceRad(homeJoints, pt.jointPositionsRad);
+            cand.phiDeg = pt.gridPoint.phiDeg;
             cand.homePathOk = pt.homePathOk;
+            cand.baseSweepOk = true;
             const auto it = bestByThetaKey.constFind(thetaKey);
+            const double homeDist = ur3eJointDistanceRad(homeJoints, pt.jointPositionsRad);
             if (it == bestByThetaKey.cend()
-                || cand.homeDist < it.value().homeDist)
+                || homeDist < ur3eJointDistanceRad(
+                                  homeJoints,
+                                  plan.points[static_cast<std::size_t>(it.value().index)]
+                                      .jointPositionsRad))
             {
                 bestByThetaKey.insert(thetaKey, cand);
             }
         }
+        for (auto it = bestByThetaKey.cbegin(); it != bestByThetaKey.cend(); ++it)
+            pinsByThetaKey[it.key()].push_back(it.value());
     }
 
-    QVector<Candidate> ordered;
-    ordered.reserve(bestByThetaKey.size());
-    for (auto it = bestByThetaKey.cbegin(); it != bestByThetaKey.cend(); ++it)
-        ordered.push_back(it.value());
-    std::sort(ordered.begin(), ordered.end(),
-              [](const Candidate &a, const Candidate &b) { return a.thetaDeg < b.thetaDeg; });
+    QVector<int> thetaKeys;
+    thetaKeys.reserve(pinsByThetaKey.size());
+    for (auto it = pinsByThetaKey.cbegin(); it != pinsByThetaKey.cend(); ++it)
+        thetaKeys.push_back(it.key());
+    std::sort(thetaKeys.begin(), thetaKeys.end());
 
     Ur3eSemiFixedRoute route;
     route.id = QStringLiteral("from_semi_plan");
@@ -539,32 +644,113 @@ Ur3eSemiFixedRoute semiFixedRouteFromHemispherePlan(const Ur3eHemisphereScanPlan
         route.topPose.reachabilityKnown = true;
         route.topPose.reachable = apex.reachable;
         route.topPose.homePathOk = apex.homePathOk;
+        route.topPose.baseSweepOk = true;
+        route.topPose.thetaDeg = 0.0;
+        route.topPose.noPan = true;
         route.hasTopPose = true;
     }
     else
     {
-        // No plan-proven apex — leave empty top (do not invent home_path_ok=true).
         route.hasTopPose = false;
     }
 
-    for (const Candidate &cand : ordered)
+    for (const int thetaKey : thetaKeys)
     {
-        const Ur3ePlannedScanPoint &pt =
-            plan.points[static_cast<std::size_t>(cand.index)];
-        Ur3eSemiFixedRing ring;
-        ring.id = QStringLiteral("theta_%1").arg(cand.thetaDeg, 0, 'f', 1);
-        ring.displayName = QStringLiteral("θ=%1° (plan)")
-                               .arg(cand.thetaDeg, 0, 'f', 1);
-        ring.entryJointsRad = pt.jointPositionsRad;
-        ring.entryTcp = pt.tcp;
-        ring.hasEntryTcp = true;
-        ring.reachabilityKnown = true;
-        ring.reachable = pt.reachable;
-        ring.homePathOk = pt.homePathOk;
-        route.rings.push_back(ring);
+        const QVector<Candidate> &row = pinsByThetaKey.value(thetaKey);
+        const int nPins = row.size();
+        for (int pin = 0; pin < nPins; ++pin)
+        {
+            const Candidate &cand = row[pin];
+            const Ur3ePlannedScanPoint &pt =
+                plan.points[static_cast<std::size_t>(cand.index)];
+            Ur3eSemiFixedRing ring;
+            ring.thetaDeg = cand.thetaDeg;
+            ring.phiDeg = cand.phiDeg;
+            ring.id = nPins >= 2
+                          ? QStringLiteral("theta_%1_pin%2")
+                                .arg(cand.thetaDeg, 0, 'f', 1)
+                                .arg(pin + 1)
+                          : QStringLiteral("theta_%1").arg(cand.thetaDeg, 0, 'f', 1);
+            if (nPins >= 2)
+            {
+                ring.displayName = QStringLiteral("θ=%1° pin%2 (φ=%3°)")
+                                       .arg(cand.thetaDeg, 0, 'f', 1)
+                                       .arg(pin + 1)
+                                       .arg(cand.phiDeg, 0, 'f', 1);
+                if (cand.backupCoverageOk && !cand.baseSweepOk)
+                    ring.displayName += QStringLiteral(" backup");
+            }
+            else
+            {
+                ring.displayName = QStringLiteral("θ=%1° (plan)")
+                                       .arg(cand.thetaDeg, 0, 'f', 1);
+            }
+            ring.entryJointsRad = pt.jointPositionsRad;
+            ring.entryTcp = pt.tcp;
+            ring.hasEntryTcp = true;
+            ring.reachabilityKnown = true;
+            ring.reachable = pt.reachable;
+            ring.homePathOk = pt.homePathOk;
+            ring.baseSweepOk = pt.baseSweepOk || !pt.backupCoverageOk;
+            ring.backupCoverageOk = pt.backupCoverageOk;
+            ring.backupUnionDeg = pt.backupUnionDeg;
+            ring.panMask = pt.panMask;
+            ring.noPan = false;
+            route.rings.push_back(ring);
+        }
     }
 
+    // Apex-only plans: one pin-only hop so Execute has a route entry (no 360° spin).
+    if (route.hasTopPose && route.rings.isEmpty())
+    {
+        Ur3eSemiFixedRing apex = route.topPose;
+        apex.id = QStringLiteral("apex");
+        if (apex.displayName.isEmpty() || apex.displayName == QStringLiteral("Top (θ=0)"))
+            apex.displayName = QStringLiteral("Apex (θ=0)");
+        apex.noPan = true;
+        apex.baseSweepOk = false;
+        apex.thetaDeg = 0.0;
+        route.rings.push_back(apex);
+    }
+
+    pruneSemiFixedRedundantFullSpinPins(route);
     return route;
+}
+
+void pruneSemiFixedRedundantFullSpinPins(Ur3eSemiFixedRoute &route)
+{
+    const auto sameTheta = [](const Ur3eSemiFixedRing &a, const Ur3eSemiFixedRing &b) {
+        if (std::abs(a.thetaDeg) < 0.75 || std::abs(b.thetaDeg) < 0.75)
+            return false;
+        return std::lround(a.thetaDeg * 2.0) == std::lround(b.thetaDeg * 2.0);
+    };
+
+    QVector<Ur3eSemiFixedRing> kept;
+    kept.reserve(route.rings.size());
+    for (const Ur3eSemiFixedRing &ring : route.rings)
+    {
+        bool drop = false;
+        for (int i = 0; i < kept.size(); ++i)
+        {
+            Ur3eSemiFixedRing &prev = kept[i];
+            if (!sameTheta(prev, ring))
+                continue;
+            if (prev.baseSweepOk)
+            {
+                drop = true;
+                break;
+            }
+            if (ring.baseSweepOk)
+            {
+                prev = ring;
+                drop = true;
+                break;
+            }
+        }
+        if (!drop)
+            kept.push_back(ring);
+    }
+    route.rings = std::move(kept);
 }
 
 QVector<Ur3eSemiFixedPreviewRing>
@@ -589,7 +775,7 @@ previewSemiFixedRingsFromScanParams(const Ur3eHemisphereScanParams &paramsIn)
             top.isTopPose = true;
             top.centerXM = pt.xM;
             top.centerYM = pt.yM;
-            top.centerZM = kSemiFixedApexRadiusM;
+            top.centerZM = pt.zM;
             top.radiusM = 0.0;
             top.reachabilityKnown = false;
             out.push_back(top);
@@ -716,13 +902,14 @@ previewSemiFixedRingsFromHemispherePlan(const Ur3eHemisphereScanPlan &plan)
         const int key = static_cast<int>(std::lround(pt.gridPoint.thetaDeg * 2.0));
         LatitudeAgg &agg = byTheta[key];
         agg.thetaDeg = pt.gridPoint.thetaDeg;
-        const bool prefer = pt.reachable && pt.baseSweepOk
+        const bool sweepOrBackup = pt.baseSweepOk || pt.backupCoverageOk;
+        const bool prefer = pt.reachable && sweepOrBackup
                             && (!agg.anySweepOk || (pt.homePathOk && !agg.anyHomePathOk));
         applyGeom(agg, pt, prefer || !agg.hasGeom);
         if (pt.reachable)
         {
             agg.anyReachable = true;
-            if (pt.baseSweepOk)
+            if (sweepOrBackup)
             {
                 agg.anySweepOk = true;
                 if (pt.homePathOk)
@@ -749,7 +936,7 @@ previewSemiFixedRingsFromHemispherePlan(const Ur3eHemisphereScanPlan &plan)
         ring.centerZM = agg.centerZM;
         ring.radiusM = agg.radiusM > 0.02 ? agg.radiusM : 0.05;
         ring.reachabilityKnown = true;
-        // Semi-executable ring = at least one base-sweep OK pin; else blue unreachable.
+        // Semi-executable ring = sweep-OK or backup-coverage pin; else blue.
         ring.reachable = agg.anySweepOk;
         ring.homePathOk = agg.anySweepOk && agg.anyHomePathOk;
         out.push_back(ring);
@@ -817,6 +1004,105 @@ int semiFixedSampleCount(const double intervalDeg)
         return 1;
     const int n = static_cast<int>(std::lround(360.0 / intervalDeg));
     return std::max(1, n);
+}
+
+namespace
+{
+int nearestPanMaskBin(const std::vector<std::uint8_t> &mask, const double panRad)
+{
+    const int n = static_cast<int>(mask.size());
+    if (n <= 0)
+        return -1;
+    const double wrapped = std::atan2(std::sin(panRad), std::cos(panRad));
+    int best = 0;
+    double bestAbs = 1.0e99;
+    for (int i = 0; i < n; ++i)
+    {
+        const double binPan =
+            std::atan2(std::sin(2.0 * 3.14159265358979323846 * static_cast<double>(i)
+                                / static_cast<double>(n)),
+                       std::cos(2.0 * 3.14159265358979323846 * static_cast<double>(i)
+                                / static_cast<double>(n)));
+        const double d = std::abs(std::atan2(std::sin(binPan - wrapped),
+                                             std::cos(binPan - wrapped)));
+        if (d < bestAbs)
+        {
+            bestAbs = d;
+            best = i;
+        }
+    }
+    return best;
+}
+
+int contiguousMaskCountFromEntry(const std::vector<std::uint8_t> &mask, const double entryPan)
+{
+    const int n = static_cast<int>(mask.size());
+    if (n <= 0)
+        return 0;
+    int entryBin = nearestPanMaskBin(mask, entryPan);
+    if (entryBin < 0)
+        return 0;
+    if (mask[static_cast<std::size_t>(entryBin)] == 0)
+    {
+        int found = -1;
+        for (int d = 1; d < n; ++d)
+        {
+            const int a = (entryBin + d) % n;
+            const int b = (entryBin - d + n) % n;
+            if (mask[static_cast<std::size_t>(a)] != 0)
+            {
+                found = a;
+                break;
+            }
+            if (mask[static_cast<std::size_t>(b)] != 0)
+            {
+                found = b;
+                break;
+            }
+        }
+        if (found < 0)
+            return 0;
+        entryBin = found;
+    }
+    int start = entryBin;
+    for (int k = 0; k < n - 1; ++k)
+    {
+        const int prev = (start - 1 + n) % n;
+        if (mask[static_cast<std::size_t>(prev)] == 0)
+            break;
+        if (prev == entryBin)
+            break;
+        start = prev;
+    }
+    int count = 0;
+    int i = start;
+    for (int k = 0; k < n; ++k)
+    {
+        if (mask[static_cast<std::size_t>(i)] == 0)
+            break;
+        ++count;
+        i = (i + 1) % n;
+        if (i == start)
+            break;
+    }
+    return count;
+}
+} // namespace
+
+int semiFixedRingSampleCount(const Ur3eSemiFixedRing &ring, const double intervalDeg)
+{
+    if (ring.noPan || std::abs(ring.thetaDeg) < 0.75)
+        return 1;
+    if (ring.backupCoverageOk && !ring.baseSweepOk)
+    {
+        if (ring.panMask.empty())
+            return 1;
+        const double entryPan =
+            ring.entryJointsRad.size() == 6 ? ring.entryJointsRad[0] : 0.0;
+        const int n = contiguousMaskCountFromEntry(ring.panMask, entryPan);
+        return std::max(1, n);
+    }
+    return semiFixedSampleCount(intervalDeg);
 }
 
 } // namespace hf::ur3e

@@ -65,6 +65,22 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
                        "Execute pans each ring (no collision on spin) + wrist."));
     form->addRow(QStringLiteral("Mode"), modeCombo_);
 
+    scanTcpCombo_ = new QComboBox(group);
+    scanTcpCombo_->addItem(QStringLiteral("Camera lens"),
+                           static_cast<int>(hf::HardwareConfig::Ur3eConfig::ScanTcpKind::Camera));
+    scanTcpCombo_->addItem(QStringLiteral("DLP lens"),
+                           static_cast<int>(hf::HardwareConfig::Ur3eConfig::ScanTcpKind::Dlp));
+    scanTcpCombo_->setToolTip(
+        QStringLiteral("MoveIt tip (hyperfusion_tcp). Camera = BFS Tsai; "
+                       "DLP = projector lens in tool0.\n"
+                       "Disconnect / Connect after switching so the URDF rematerializes."));
+    form->addRow(QStringLiteral("Scan tip"), scanTcpCombo_);
+    connect(scanTcpCombo_,
+            qOverload<int>(&QComboBox::currentIndexChanged),
+            this,
+            &Ur3eHemisphereScanSettingsWidget::onScanTcpChanged);
+    applyScanTcpFromConfig();
+
     // --- Auto section ---
     autoSection_ = new QWidget(group);
     auto *autoForm = new QFormLayout(autoSection_);
@@ -77,7 +93,7 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
     routeCombo_ = new QComboBox(autoSection_);
     routeCombo_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     routeCombo_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
-    routeCombo_->setMinimumContentsLength(8);
+    routeCombo_->setMinimumContentsLength(18);
     routeCombo_->setToolTip(
         QStringLiteral("Saved scan routes that match the current robot cfg "
                        "(hyperfusion.cfg). Changing sphere/grid does not hide them — "
@@ -362,6 +378,7 @@ hf::ur3e::Ur3eSemiFixedRoute Ur3eHemisphereScanSettingsWidget::semiFixedRoute() 
 void Ur3eHemisphereScanSettingsWidget::setSemiFixedRoute(const hf::ur3e::Ur3eSemiFixedRoute &route)
 {
     semiFixedRoute_ = route;
+    hf::ur3e::pruneSemiFixedRedundantFullSpinPins(semiFixedRoute_);
     hf::ur3e::ensureSemiFixedTopPose(semiFixedRoute_);
     if (semiFixedIntervalSpin_ != nullptr)
     {
@@ -383,7 +400,7 @@ void Ur3eHemisphereScanSettingsWidget::setSemiFixedRoute(const hf::ur3e::Ur3eSem
 
 bool Ur3eHemisphereScanSettingsWidget::semiFixedRouteReady() const
 {
-    return !semiFixedRoute_.rings.isEmpty();
+    return !semiFixedRoute_.rings.isEmpty() || semiFixedRoute_.hasTopPose;
 }
 
 void Ur3eHemisphereScanSettingsWidget::appendSemiFixedRing(
@@ -964,8 +981,8 @@ void Ur3eHemisphereScanSettingsWidget::refreshAvailableRoutes()
 
     if (routes.isEmpty())
     {
-        routeCombo_->addItem(semiMode ? QStringLiteral("(no matching Semi plans)")
-                                      : QStringLiteral("(no matching routes)"),
+        routeCombo_->addItem(semiMode ? QStringLiteral("(no Semi plans in mvs_semi_scan_plans)")
+                                      : QStringLiteral("(no Auto routes — Semi plans are under Mode: Semi-fixed)"),
                              QString());
         if (loadRouteBtn_ != nullptr)
             loadRouteBtn_->setEnabled(false);
@@ -1008,8 +1025,32 @@ void Ur3eHemisphereScanSettingsWidget::onLoadRouteClicked()
     }
 }
 
+void Ur3eHemisphereScanSettingsWidget::applyScanTcpFromConfig()
+{
+    const auto kind = hf::hardwareConfig().ur3e.scanTcp;
+    if (scanTcpCombo_ == nullptr)
+        return;
+    QSignalBlocker block(scanTcpCombo_);
+    const int idx = scanTcpCombo_->findData(static_cast<int>(kind));
+    scanTcpCombo_->setCurrentIndex(idx >= 0 ? idx : 0);
+}
+
+void Ur3eHemisphereScanSettingsWidget::onScanTcpChanged()
+{
+    if (scanTcpCombo_ == nullptr)
+        return;
+    hf::HardwareConfig cfg = hf::hardwareConfig();
+    cfg.ur3e.scanTcp = static_cast<hf::HardwareConfig::Ur3eConfig::ScanTcpKind>(
+        scanTcpCombo_->currentData().toInt());
+    hf::setHardwareConfig(cfg);
+    emit scanTcpChanged();
+    onParameterChanged();
+}
+
 void Ur3eHemisphereScanSettingsWidget::setParamsEnabled(const bool enabled)
 {
+    if (scanTcpCombo_ != nullptr)
+        scanTcpCombo_->setEnabled(enabled);
     if (sphereRadiusSpin_ != nullptr)
         sphereRadiusSpin_->setEnabled(enabled);
     if (horizontalPointsSpin_ != nullptr)
@@ -1092,6 +1133,19 @@ void Ur3eHemisphereScanSettingsWidget::updateImageEstimateLabel()
         syncSemiFixedRouteFromUi();
         const hf::ur3e::Ur3eWristSweepParams wrist = wristSweepParams();
         const int perSample = wrist.imagesPerPin();
+        const bool apexOnly =
+            semiFixedRoute_.hasTopPose
+            && (semiFixedRoute_.rings.isEmpty()
+                || (semiFixedRoute_.rings.size() == 1
+                    && (semiFixedRoute_.rings[0].noPan
+                        || std::abs(semiFixedRoute_.rings[0].thetaDeg) < 0.75)));
+        if (apexOnly)
+        {
+            const qint64 total = static_cast<qint64>(perSample);
+            semiFixedEstimateLabel_->setText(
+                QStringLiteral("%1/pose × 1 apex = %2").arg(perSample).arg(total));
+            return;
+        }
         const int layers = horizontalPointsSpin_ != nullptr ? horizontalPointsSpin_->value() : 1;
         const int rings =
             semiFixedRoute_.rings.isEmpty() ? std::max(1, layers) : semiFixedRoute_.rings.size();
