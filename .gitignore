@@ -89,7 +89,15 @@ resources/sam2/
 # --- HyperFusion local runtime / capture data ---
 /processing/
 app/calibration/multiview/results/undistort_preview/
-# FPP plane-calib stills + per-pose npz (multi-GB / ~340 MB). Keep README + index.
+app/calibration/multiview/bfs_cal/results/undistort_preview/
+# BFS stills (multi-GB). Keep board.yaml / scripts / small YAML results.
+app/calibration/multiview/bfs_cal/checkerboard/
+# FPP geometry bursts (~15 GB TIFFs). Keep README + manifest + stereo YAML.
+app/calibration/multiview/fpp_cal/checkerboard/*/
+!app/calibration/multiview/fpp_cal/checkerboard/README.md
+!app/calibration/multiview/fpp_cal/checkerboard/manifest.json
+app/calibration/multiview/fpp_cal/results/depth_smoke_*/
+# Legacy FPP plane-calib path (removed); keep ignore if leftovers appear.
 app/calibration/multiview/FPP/*
 !app/calibration/multiview/FPP/README.md
 !app/calibration/multiview/FPP/fpp_calib_index.json
