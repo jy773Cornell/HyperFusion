@@ -1,7 +1,7 @@
 ﻿#!/usr/bin/env python3
 """Batch Semi ring Plan: θ×radius sweep via MoveIt sidecar; one (R,θ) per saved JSON.
 
-Each file is apex (θ=0, home_path_ok) plus that latitude's base-sweep-OK pins.
+Each file is apex (θ=0 home pose with Z=R) plus that latitude's base-sweep-OK pins.
 Uses hyperfusion.cfg [multiview] (workspace, home, tip tolerance, φ candidates).
 Saves loadable schema-4 plans into ur3e_semi_scan_routes.
 """
@@ -226,12 +226,172 @@ def fetch_home_tcp(base: str) -> dict[str, float]:
     }
 
 
-def build_apex_pose(apex_radius_m: float, home_tcp: dict[str, float]) -> dict[str, Any]:
-    """θ=0 pin: home camera orientation, XY at home TCP, Z = this ring's R."""
+def _rpy_xyz_mat(
+    x_m: float,
+    y_m: float,
+    z_m: float,
+    roll: float,
+    pitch: float,
+    yaw: float,
+) -> list[list[float]]:
+    """URDF / tf2: R = Rz(yaw) * Ry(pitch) * Rx(roll)."""
+    cr, sr = math.cos(roll), math.sin(roll)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    return [
+        [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr, x_m],
+        [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr, y_m],
+        [-sp, cp * sr, cp * cr, z_m],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+
+
+def _mat_mul(a: list[list[float]], b: list[list[float]]) -> list[list[float]]:
+    out = [[0.0] * 4 for _ in range(4)]
+    for i in range(4):
+        for j in range(4):
+            out[i][j] = (
+                a[i][0] * b[0][j]
+                + a[i][1] * b[1][j]
+                + a[i][2] * b[2][j]
+                + a[i][3] * b[3][j]
+            )
+    return out
+
+
+def _mat_inv_rigid(t: list[list[float]]) -> list[list[float]]:
+    r00, r01, r02 = t[0][0], t[0][1], t[0][2]
+    r10, r11, r12 = t[1][0], t[1][1], t[1][2]
+    r20, r21, r22 = t[2][0], t[2][1], t[2][2]
+    px, py, pz = t[0][3], t[1][3], t[2][3]
+    return [
+        [r00, r10, r20, -(r00 * px + r10 * py + r20 * pz)],
+        [r01, r11, r21, -(r01 * px + r11 * py + r21 * pz)],
+        [r02, r12, r22, -(r02 * px + r12 * py + r22 * pz)],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+
+
+def _rotvec_xyz_mat(x: float, y: float, z: float, rx: float, ry: float, rz: float) -> list[list[float]]:
+    ang = math.sqrt(rx * rx + ry * ry + rz * rz)
+    t = [[1.0, 0.0, 0.0, x], [0.0, 1.0, 0.0, y], [0.0, 0.0, 1.0, z], [0.0, 0.0, 0.0, 1.0]]
+    if ang < 1.0e-12:
+        return t
+    ax, ay, az = rx / ang, ry / ang, rz / ang
+    c, s = math.cos(ang), math.sin(ang)
+    k = 1.0 - c
+    t[0][0] = c + ax * ax * k
+    t[0][1] = ax * ay * k - az * s
+    t[0][2] = ax * az * k + ay * s
+    t[1][0] = ay * ax * k + az * s
+    t[1][1] = c + ay * ay * k
+    t[1][2] = ay * az * k - ax * s
+    t[2][0] = az * ax * k - ay * s
+    t[2][1] = az * ay * k + ax * s
+    t[2][2] = c + az * az * k
+    return t
+
+
+def _mat_to_rotvec(t: list[list[float]]) -> tuple[float, float, float]:
+    m00, m01, m02 = t[0][0], t[0][1], t[0][2]
+    m10, m11, m12 = t[1][0], t[1][1], t[1][2]
+    m20, m21, m22 = t[2][0], t[2][1], t[2][2]
+    trace = m00 + m11 + m22
+    cos_angle = max(-1.0, min(1.0, (trace - 1.0) * 0.5))
+    angle = math.acos(cos_angle)
+    if angle <= 1.0e-12:
+        return 0.0, 0.0, 0.0
+    if angle > math.pi - 1.0e-6 or abs(math.sin(angle)) < 1.0e-6:
+        ax = math.sqrt(max(0.0, (m00 + 1.0) * 0.5))
+        ay = math.sqrt(max(0.0, (m11 + 1.0) * 0.5))
+        az = math.sqrt(max(0.0, (m22 + 1.0) * 0.5))
+        if ax >= ay and ax >= az:
+            ay = math.copysign(ay, m10 + m01)
+            az = math.copysign(az, m20 + m02)
+        elif ay >= az:
+            ax = math.copysign(ax, m10 + m01)
+            az = math.copysign(az, m21 + m12)
+        else:
+            ax = math.copysign(ax, m20 + m02)
+            ay = math.copysign(ay, m21 + m12)
+        length = math.sqrt(ax * ax + ay * ay + az * az)
+        if length < 1.0e-12:
+            return math.pi, 0.0, 0.0
+        return ax / length * math.pi, ay / length * math.pi, az / length * math.pi
+    inv = 0.5 / math.sin(angle)
+    return (m21 - m12) * inv * angle, (m02 - m20) * inv * angle, (m10 - m01) * inv * angle
+
+
+def _tcp_mm(cfg: dict[str, Any], *, camera: bool) -> dict[str, float]:
+    if camera:
+        return {
+            "x": float(cfg.get("tool_tcp_x_mm", 0.715)),
+            "y": float(cfg.get("tool_tcp_y_mm", -54.197)),
+            "z": float(cfg.get("tool_tcp_z_mm", 73.755)),
+            "roll": float(cfg.get("tool_tcp_roll_deg", -1.9138)),
+            "pitch": float(cfg.get("tool_tcp_pitch_deg", 0.7450)),
+            "yaw": float(cfg.get("tool_tcp_yaw_deg", 0.2868)),
+        }
+    return {
+        "x": float(cfg.get("dlp_tcp_x_mm", 0.372)),
+        "y": float(cfg.get("dlp_tcp_y_mm", 57.104)),
+        "z": float(cfg.get("dlp_tcp_z_mm", 27.4994)),
+        "roll": float(cfg.get("dlp_tcp_roll_deg", 25.0)),
+        "pitch": float(cfg.get("dlp_tcp_pitch_deg", 0.0)),
+        "yaw": float(cfg.get("dlp_tcp_yaw_deg", 0.0)),
+    }
+
+
+def _tool_mm_to_mat(tcp: dict[str, float]) -> list[list[float]]:
+    return _rpy_xyz_mat(
+        tcp["x"] * 0.001,
+        tcp["y"] * 0.001,
+        tcp["z"] * 0.001,
+        math.radians(tcp["roll"]),
+        math.radians(tcp["pitch"]),
+        math.radians(tcp["yaw"]),
+    )
+
+
+def camera_world_to_dlp_world(pose: dict[str, Any], cfg: dict[str, Any]) -> dict[str, float]:
+    """Camera world TCP → DLP world TCP (MoveIt tip when scan_tcp=dlp)."""
+    t_cam = _tool_mm_to_mat(_tcp_mm(cfg, camera=True))
+    t_dlp = _tool_mm_to_mat(_tcp_mm(cfg, camera=False))
+    t_cam_dlp = _mat_mul(_mat_inv_rigid(t_cam), t_dlp)
+    t_world_cam = _rotvec_xyz_mat(
+        float(pose["x"]),
+        float(pose["y"]),
+        float(pose["z"]),
+        float(pose["rx"]),
+        float(pose["ry"]),
+        float(pose["rz"]),
+    )
+    t_world_dlp = _mat_mul(t_world_cam, t_cam_dlp)
+    rx, ry, rz = _mat_to_rotvec(t_world_dlp)
+    return {
+        "x": t_world_dlp[0][3],
+        "y": t_world_dlp[1][3],
+        "z": t_world_dlp[2][3],
+        "rx": rx,
+        "ry": ry,
+        "rz": rz,
+        "tool_z_x": t_world_dlp[0][2],
+        "tool_z_y": t_world_dlp[1][2],
+        "tool_z_z": t_world_dlp[2][2],
+    }
+
+
+def build_apex_pose(
+    apex_radius_m: float,
+    home_tcp: dict[str, float],
+    cfg: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """θ=0: keep home XY + orientation; set Z to the ring radius."""
+    del cfg
     rx = float(home_tcp["rx"])
     ry = float(home_tcp["ry"])
     rz = float(home_tcp["rz"])
-    zx, zy, zz = rotvec_to_tool_z(rx, ry, rz)
+    tzx, tzy, tzz = rotvec_to_tool_z(rx, ry, rz)
     return {
         "index": 0,
         "x": float(home_tcp["x"]),
@@ -240,16 +400,43 @@ def build_apex_pose(apex_radius_m: float, home_tcp: dict[str, float]) -> dict[st
         "rx": rx,
         "ry": ry,
         "rz": rz,
-        "tool_z_x": zx,
-        "tool_z_y": zy,
-        "tool_z_z": zz,
+        "tool_z_x": tzx,
+        "tool_z_y": tzy,
+        "tool_z_z": tzz,
         "camera_up_x": 0.0,
         "camera_up_y": 0.0,
-        "camera_up_z": 0.0,
+        "camera_up_z": 1.0,
         "require_perpendicular": True,
         "theta_deg": 0.0,
         "phi_deg": 0.0,
     }
+
+
+def apex_pose_for_moveit(camera_pose: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
+    """MoveIt EE pose. scan_tcp=dlp → DLP world pose that puts the camera at *camera_pose*."""
+    out = dict(camera_pose)
+    out["_camera_tcp"] = {
+        "x": float(camera_pose["x"]),
+        "y": float(camera_pose["y"]),
+        "z": float(camera_pose["z"]),
+        "rx": float(camera_pose["rx"]),
+        "ry": float(camera_pose["ry"]),
+        "rz": float(camera_pose["rz"]),
+        "tool_z_x": float(camera_pose["tool_z_x"]),
+        "tool_z_y": float(camera_pose["tool_z_y"]),
+        "tool_z_z": float(camera_pose["tool_z_z"]),
+    }
+    scan = str(cfg.get("scan_tcp", "camera")).strip().lower()
+    if scan in ("dlp", "projector"):
+        out.update(camera_world_to_dlp_world(camera_pose, cfg))
+    return out
+
+
+def _apex_camera_tcp(pose: dict[str, Any]) -> dict[str, Any]:
+    saved = pose.get("_camera_tcp")
+    if isinstance(saved, dict) and "x" in saved:
+        return saved
+    return pose
 
 
 def build_ring_poses(
@@ -350,7 +537,7 @@ def _active_tool_tcp(cfg: dict[str, Any]) -> dict[str, float]:
             "x": float(cfg.get("dlp_tcp_x_mm", 0.372)),
             "y": float(cfg.get("dlp_tcp_y_mm", 57.104)),
             "z": float(cfg.get("dlp_tcp_z_mm", 27.4994)),
-            "roll": float(cfg.get("dlp_tcp_roll_deg", 0.0)),
+            "roll": float(cfg.get("dlp_tcp_roll_deg", 25.0)),
             "pitch": float(cfg.get("dlp_tcp_pitch_deg", 0.0)),
             "yaw": float(cfg.get("dlp_tcp_yaw_deg", 0.0)),
         }
@@ -401,6 +588,16 @@ def robot_cfg_fingerprint(cfg: dict[str, Any]) -> str:
         "scan_center_from_home_tcp": False,
         "scan_center_base_xy": True,
         "apex_over_home_tcp_xy": True,
+        "apex_on_ring_sphere": True,
+        "apex_look_down": False,
+        "apex_keep_home_pose_z_radius": True,
+        "apex_tcp": "scan",
+        "camera_tcp_x_mm": float(cfg.get("tool_tcp_x_mm", 0.715)),
+        "camera_tcp_y_mm": float(cfg.get("tool_tcp_y_mm", -54.197)),
+        "camera_tcp_z_mm": float(cfg.get("tool_tcp_z_mm", 73.755)),
+        "camera_tcp_roll_deg": float(cfg.get("tool_tcp_roll_deg", -1.9138)),
+        "camera_tcp_pitch_deg": float(cfg.get("tool_tcp_pitch_deg", 0.7450)),
+        "camera_tcp_yaw_deg": float(cfg.get("tool_tcp_yaw_deg", 0.2868)),
         "home_joints_deg": [float(v) for v in home],
         "scan_camera_up_world_z": bool(cfg.get("scan_camera_up_world_z", True)),
         "pin_pose_tolerance_deg": float(cfg.get("pin_pose_tolerance_deg", 0.0)),
@@ -421,6 +618,9 @@ def plan_fingerprint(radius_m: float, theta_deg: float, n_phi: int) -> str:
             "vertical_points": 2,
             "always_apex_pin": True,
             "apex_radius_m": radius_m,
+            "apex_look_down": False,
+            "apex_keep_home_pose_z_radius": True,
+            "apex_tcp": "scan",
         },
         separators=(",", ":"),
     )
@@ -438,6 +638,40 @@ def cylinder_fingerprint(rho_m: float, z_m: float, n_phi: int) -> str:
     )
 
 
+def _geometric_apex_point(pose: dict[str, Any]) -> dict[str, Any]:
+    """θ=0: home XY/orientation, Z = R. No joints yet."""
+    x = float(pose["x"])
+    y = float(pose["y"])
+    z = float(pose["z"])
+    return {
+        "grid": {
+            "phi_deg": 0.0,
+            "theta_deg": 0.0,
+            "x_m": x,
+            "y_m": y,
+            "z_m": z,
+        },
+        "tcp": {
+            "x_m": x,
+            "y_m": y,
+            "z_m": z,
+            "rx": float(pose["rx"]),
+            "ry": float(pose["ry"]),
+            "rz": float(pose["rz"]),
+            "tool_z_x": float(pose.get("tool_z_x", 0.0)),
+            "tool_z_y": float(pose.get("tool_z_y", 0.0)),
+            "tool_z_z": float(pose.get("tool_z_z", 1.0)),
+        },
+        "reachable": False,
+        "home_path_ok": False,
+        "base_sweep_ok": True,
+        "backup_coverage_ok": False,
+        "backup_union_deg": 0.0,
+        "planning_error": "apex is home pose with Z=R; joints planned at execute if missing",
+        "joints_rad": [],
+    }
+
+
 def _point_from_result(pose: dict[str, Any], res: dict[str, Any]) -> dict[str, Any]:
     tcp_obj = res.get("tcp") if isinstance(res.get("tcp"), dict) else {}
     joints = res.get("joints") or []
@@ -446,8 +680,8 @@ def _point_from_result(pose: dict[str, Any], res: dict[str, Any]) -> dict[str, A
         "grid": {
             "phi_deg": float(pose["phi_deg"]),
             "theta_deg": float(pose["theta_deg"]),
-            "x_m": float(tcp_obj.get("x", pose["x"])) if is_apex else float(pose["x"]),
-            "y_m": float(tcp_obj.get("y", pose["y"])) if is_apex else float(pose["y"]),
+            "x_m": float(pose["x"]),
+            "y_m": float(pose["y"]),
             "z_m": float(pose["z"]),
         },
         "tcp": {
@@ -485,16 +719,20 @@ def save_one_ring_plan(
     poses: list[dict[str, Any]],
     results: list[dict[str, Any]],
     cached_apex: dict[str, Any] | None = None,
+    home_tcp: dict[str, float] | None = None,
     plan_name: str | None = None,
     fingerprint: str | None = None,
     scan_params: dict[str, Any] | None = None,
 ) -> tuple[int, dict[str, Any] | None, int]:
-    """Write schema-4 plan: apex (home_path_ok) + base_sweep_ok ring pins.
+    """Write schema-4 plan: apex (same sphere R) + base_sweep_ok ring pins.
 
+    Always writes an apex point when the ring is saved. Planned joints if IK
+    succeeded; otherwise home XY/orientation with Z = R.
     Returns (n_written, apex_point_or_none, n_ring_pins). Does not write if no ring pins.
     """
     by_index = {int(r["index"]): r for r in results if isinstance(r, dict)}
     apex_point: dict[str, Any] | None = dict(cached_apex) if cached_apex else None
+    apex_pose = next((p for p in poses if _is_apex_pose(p)), None)
     ring_points: list[dict[str, Any]] = []
     for pose in poses:
         idx = int(pose["index"])
@@ -513,6 +751,12 @@ def save_one_ring_plan(
 
     if not ring_points:
         return 0, apex_point, 0
+
+    if apex_point is None:
+        if apex_pose is None and home_tcp and "x" in home_tcp:
+            apex_pose = build_apex_pose(radius_m, home_tcp, cfg)
+        if apex_pose is not None:
+            apex_point = _geometric_apex_point(apex_pose)
 
     points: list[dict[str, Any]] = []
     if apex_point is not None:
@@ -534,9 +778,9 @@ def save_one_ring_plan(
             "apex_radius_m": radius_m,
         },
         "points": points,
-        "reachable_count": len(points),
-        "unreachable_count": 0,
-        "home_path_ok_count": len(points),
+        "reachable_count": sum(1 for p in points if p.get("reachable")),
+        "unreachable_count": sum(1 for p in points if not p.get("reachable")),
+        "home_path_ok_count": sum(1 for p in points if p.get("home_path_ok")),
         "chain_only_count": 0,
         "moveit_used": True,
         "error_message": "",
@@ -670,7 +914,7 @@ def main() -> int:
         print(
             f"Combos={len(combos)} cylinder ρ={rho_mm:g} mm "
             f"z={heights_mm[0]:g}..{heights_mm[-1]:g} mm "
-            f"n_phi={n_phi} tip_tol={tol_deg} tilt={tilt_deg} backup_union>{backup_deg:g}° "
+            f"n_phi={n_phi} tip_tol={tol_deg} tilt={tilt_deg} backup complementary halves "
             f"hub={hub_label} skip_apex={skip_apex} out={args.out_dir}",
             flush=True,
         )
@@ -694,7 +938,7 @@ def main() -> int:
         combos = [(rm, th) for rm in radii_mm for th in thetas]
         print(
             f"Combos={len(combos)} theta={thetas[0]}..{thetas[-1]} R={radii_mm[0]}..{radii_mm[-1]} mm "
-            f"n_phi={n_phi} tip_tol={tol_deg} tilt={tilt_deg} backup_union>{backup_deg:g}° "
+            f"n_phi={n_phi} tip_tol={tol_deg} tilt={tilt_deg} backup complementary halves "
             f"hub={hub_label} skip_apex={skip_apex} "
             f"apex_z=same as R out={args.out_dir}",
             flush=True,
@@ -703,14 +947,12 @@ def main() -> int:
     progress_path = args.out_dir / str(args.progress_name)
     done: dict[str, Any] = {}
     if args.resume and progress_path.is_file():
-        done = json.loads(progress_path.read_text(encoding="utf-8"))
+        done = json.loads(progress_path.read_text(encoding="utf-8-sig"))
 
     wait_connected(args.base_url, timeout_s=float(args.connect_timeout_s))
     home_tcp = fetch_home_tcp(args.base_url)
     print(
-        "Connected. Apex keeps home TCP orientation "
-        f"rx={home_tcp['rx']:.4f} ry={home_tcp['ry']:.4f} rz={home_tcp['rz']:.4f} "
-        f"xy=({home_tcp['x']:.4f},{home_tcp['y']:.4f}).",
+        "Connected. Apex keeps home XY and orientation; only Z changes to the ring radius.",
         flush=True,
     )
 
@@ -746,7 +988,7 @@ def main() -> int:
             or cached_apex_radius_m is None
             or abs(cached_apex_radius_m - radius_m) > 1.0e-9
         ):
-            poses.append(build_apex_pose(radius_m, home_tcp))
+            poses.append(build_apex_pose(radius_m, home_tcp, cfg))
         if cylinder:
             poses.extend(
                 build_cylinder_poses(
@@ -818,25 +1060,35 @@ def main() -> int:
             poses=poses,
             results=results,
             cached_apex=cached_apex,
+            home_tcp=home_tcp,
             **save_kw,
         )
-        if apex_pt is not None:
+        if (
+            apex_pt is not None
+            and apex_pt.get("reachable")
+            and len(apex_pt.get("joints_rad") or []) == 6
+        ):
             cached_apex = apex_pt
             cached_apex_radius_m = radius_m
         dt = time.time() - t0
         if n_ok > 0:
             saved += 1
             has_apex = apex_pt is not None
-            if not has_apex:
+            planned_apex = bool(
+                apex_pt
+                and apex_pt.get("reachable")
+                and len(apex_pt.get("joints_rad") or []) == 6
+            )
+            if not planned_apex:
                 missing_apex += 1
             done[key] = {
                 "ok": True,
                 "sweep_ok": n_ring,
-                "apex_ok": has_apex,
+                "apex_ok": planned_apex,
                 "file": str(out_file),
                 "seconds": round(dt, 2),
             }
-            apex_tag = "apex+" if has_apex else "NO-APEX "
+            apex_tag = "apex+" if planned_apex else "apex-tcp "
             backup_n = sum(
                 1
                 for r in results

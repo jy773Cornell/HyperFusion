@@ -32,7 +32,7 @@ exec ./venv/bin/python -m hyperfusion_ur3e.sidecar.server \
   --tool-tcp-x-mm 0.372 \
   --tool-tcp-y-mm 57.104 \
   --tool-tcp-z-mm 27.4994 \
-  --tool-tcp-roll-deg 0 \
+  --tool-tcp-roll-deg 25 \
   --tool-tcp-pitch-deg 0 \
   --tool-tcp-yaw-deg 0 \
   --use-mock-hardware \

@@ -1,5 +1,5 @@
-﻿// Tray scan centers: base XY for ring dome; home active-TCP XY for apex (backend).
-// FK matches HyperFusion URDF chain (ceiling mount + UR3e + hyperfusion_tcp).
+﻿// Tray scan centers + home active-TCP in base_link for apex (backend).
+// Apex keeps home XY/orientation and only changes Z to the ring radius.
 #include "backend/multiview/Ur3eHemisphereScan.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
@@ -103,127 +103,8 @@ struct Mat4
     }
 };
 
-// UR3e fixed joint origins from ur_description / HyperFusion materialized URDF.
-Mat4 ur3eOpticalTcpWorldFromJoints(const std::array<double, 6> &qRad,
-                                   const HardwareConfig::Ur3eConfig &cfg)
+void rotvecFromMat(const Mat4 &t, double &rx, double &ry, double &rz)
 {
-    const double mountRoll = cfg.mountRollDeg * kPi / 180.0;
-    const double mountPitch = cfg.mountPitchDeg * kPi / 180.0;
-    const double mountYaw = cfg.mountYawDeg * kPi / 180.0;
-    const double mountX = cfg.mountOffsetXMm * 0.001;
-    const double mountY = cfg.mountOffsetYMm * 0.001;
-    const double mountZ = cfg.ceilingMountHeightMm * 0.001;
-
-    Mat4 t = Mat4::fromRpyXyz(mountRoll, mountPitch, mountYaw, mountX, mountY, mountZ);
-    t = t * Mat4::fromRpyXyz(0.0, 0.0, kPi, 0.0, 0.0, 0.0); // base_link → base_link_inertia
-    t = t * Mat4::translate(0.0, 0.0, 0.15185) * Mat4::rotZ(qRad[0]);
-    t = t * Mat4::fromRpyXyz(kPi * 0.5, 0.0, 0.0, 0.0, 0.0, 0.0) * Mat4::rotZ(qRad[1]);
-    t = t * Mat4::translate(-0.24355, 0.0, 0.0) * Mat4::rotZ(qRad[2]);
-    t = t * Mat4::translate(-0.2132, 0.0, 0.13105) * Mat4::rotZ(qRad[3]);
-    t = t * Mat4::fromRpyXyz(kPi * 0.5, 0.0, 0.0, 0.0, -0.08535, 0.0) * Mat4::rotZ(qRad[4]);
-    t = t
-        * Mat4::fromRpyXyz(kPi * 0.5, kPi, kPi, 0.0, 0.0921, 0.0)
-        * Mat4::rotZ(qRad[5]);
-    // wrist_3 → flange → tool0 (ROS-Industrial)
-    t = t * Mat4::fromRpyXyz(0.0, -kPi * 0.5, -kPi * 0.5, 0.0, 0.0, 0.0);
-    t = t * Mat4::fromRpyXyz(kPi * 0.5, 0.0, kPi * 0.5, 0.0, 0.0, 0.0);
-    // tool0 → hyperfusion_tcp (active scan tip: camera or DLP)
-    const auto tcp = cfg.activeToolTcpMm();
-    t = t
-        * Mat4::fromRpyXyz(tcp.rollDeg * kPi / 180.0,
-                           tcp.pitchDeg * kPi / 180.0,
-                           tcp.yawDeg * kPi / 180.0,
-                           tcp.xMm * 0.001,
-                           tcp.yMm * 0.001,
-                           tcp.zMm * 0.001);
-    return t;
-}
-
-void inverseSceneMountXy(double &xM, double &yM, const Ur3eMountTransform &mount)
-{
-    // Forward mount: yaw→pitch then +offset. Undo offset, then inverse pitch/yaw on XY (z=0).
-    xM -= mount.offsetXM;
-    yM -= mount.offsetYM;
-    if (std::abs(mount.yawRad) <= 1.0e-12 && std::abs(mount.pitchRad) <= 1.0e-12)
-        return;
-
-    const double cy = std::cos(-mount.yawRad);
-    const double sy = std::sin(-mount.yawRad);
-    const double cp = std::cos(-mount.pitchRad);
-    const double sp = std::sin(-mount.pitchRad);
-
-    const double x1 = cp * xM - sp * 0.0;
-    const double y1 = yM;
-    const double z1 = sp * xM + cp * 0.0;
-    xM = cy * x1 - sy * y1;
-    yM = sy * x1 + cy * y1;
-    (void)z1;
-}
-
-void homeOpticalTcpTrayXyM(double &xM, double &yM)
-{
-    const auto &cfg = hf::hardwareConfig().ur3e;
-    std::array<double, 6> qRad{};
-    for (int i = 0; i < 6; ++i)
-        qRad[static_cast<std::size_t>(i)] =
-            cfg.homeJointsDeg[static_cast<std::size_t>(i)] * kPi / 180.0;
-
-    const Mat4 tcpWorld = ur3eOpticalTcpWorldFromJoints(qRad, cfg);
-    double wx = 0.0;
-    double wy = 0.0;
-    double wz = 0.0;
-    tcpWorld.transformPoint(wx, wy, wz);
-
-    // Perpendicular projection onto the sample-tray surface: keep world XY.
-    xM = wx;
-    yM = wy;
-
-    // Grid is authored in pre-mount tray frame; C++ remounts poses for MoveIt.
-    inverseSceneMountXy(xM, yM, Ur3eMountTransform::sceneAlignFromConfig(cfg));
-}
-} // namespace
-
-void scanCenterOffsetM(double &xM, double &yM)
-{
-    // Ring dome / look-at: under base_link when mount_offset_x/y_mm = 0.
-    xM = 0.0;
-    yM = 0.0;
-}
-
-void homeTcpScanCenterOffsetM(double &xM, double &yM)
-{
-    // Apex only: active scan-tip XY at home_joints_deg (reachable look-down locus).
-    homeOpticalTcpTrayXyM(xM, yM);
-}
-
-void homeApexCameraUpWorld(double &x, double &y, double &z)
-{
-    // Keep apex image-up in the same wrist_3 family as home (no 180° camera roll).
-    const double w3 = hf::hardwareConfig().ur3e.homeJointsDeg[5];
-    double wrapped = std::fmod(w3 + 180.0, 360.0);
-    if (wrapped < 0.0)
-        wrapped += 360.0;
-    wrapped -= 180.0;
-    const bool plus90Family = std::abs(wrapped - 90.0) < std::abs(wrapped + 90.0);
-    x = plus90Family ? -1.0 : 1.0;
-    y = 0.0;
-    z = 0.0;
-}
-
-void homeOpticalTcpOrientation(double &rx, double &ry, double &rz,
-                               double &toolZX, double &toolZY, double &toolZZ)
-{
-    const auto &cfg = hf::hardwareConfig().ur3e;
-    std::array<double, 6> qRad{};
-    for (int i = 0; i < 6; ++i)
-        qRad[static_cast<std::size_t>(i)] =
-            cfg.homeJointsDeg[static_cast<std::size_t>(i)] * kPi / 180.0;
-
-    const Mat4 t = ur3eOpticalTcpWorldFromJoints(qRad, cfg);
-    toolZX = t.m[0][2];
-    toolZY = t.m[1][2];
-    toolZZ = t.m[2][2];
-
     const double m00 = t.m[0][0];
     const double m01 = t.m[0][1];
     const double m02 = t.m[0][2];
@@ -279,6 +160,146 @@ void homeOpticalTcpOrientation(double &rx, double &ry, double &rz,
     rx = (m21 - m12) / (2.0 * sinAngle) * angle;
     ry = (m02 - m20) / (2.0 * sinAngle) * angle;
     rz = (m10 - m01) / (2.0 * sinAngle) * angle;
+}
+
+// UR3e fixed joint origins from ur_description / HyperFusion materialized URDF.
+Mat4 ur3eActiveTcpBaseFromJoints(const std::array<double, 6> &qRad,
+                                 const HardwareConfig::Ur3eConfig &cfg)
+{
+    Mat4 t = Mat4::fromRpyXyz(0.0, 0.0, kPi, 0.0, 0.0, 0.0); // base_link → base_link_inertia
+    t = t * Mat4::translate(0.0, 0.0, 0.15185) * Mat4::rotZ(qRad[0]);
+    t = t * Mat4::fromRpyXyz(kPi * 0.5, 0.0, 0.0, 0.0, 0.0, 0.0) * Mat4::rotZ(qRad[1]);
+    t = t * Mat4::translate(-0.24355, 0.0, 0.0) * Mat4::rotZ(qRad[2]);
+    t = t * Mat4::translate(-0.2132, 0.0, 0.13105) * Mat4::rotZ(qRad[3]);
+    t = t * Mat4::fromRpyXyz(kPi * 0.5, 0.0, 0.0, 0.0, -0.08535, 0.0) * Mat4::rotZ(qRad[4]);
+    t = t
+        * Mat4::fromRpyXyz(kPi * 0.5, kPi, kPi, 0.0, 0.0921, 0.0)
+        * Mat4::rotZ(qRad[5]);
+    // wrist_3 → flange → tool0 (ROS-Industrial)
+    t = t * Mat4::fromRpyXyz(0.0, -kPi * 0.5, -kPi * 0.5, 0.0, 0.0, 0.0);
+    t = t * Mat4::fromRpyXyz(kPi * 0.5, 0.0, kPi * 0.5, 0.0, 0.0, 0.0);
+    const auto tcp = cfg.activeToolTcpMm();
+    t = t
+        * Mat4::fromRpyXyz(tcp.rollDeg * kPi / 180.0,
+                           tcp.pitchDeg * kPi / 180.0,
+                           tcp.yawDeg * kPi / 180.0,
+                           tcp.xMm * 0.001,
+                           tcp.yMm * 0.001,
+                           tcp.zMm * 0.001);
+    return t;
+}
+
+Mat4 ur3eOpticalTcpWorldFromJoints(const std::array<double, 6> &qRad,
+                                   const HardwareConfig::Ur3eConfig &cfg)
+{
+    const double mountRoll = cfg.mountRollDeg * kPi / 180.0;
+    const double mountPitch = cfg.mountPitchDeg * kPi / 180.0;
+    const double mountYaw = cfg.mountYawDeg * kPi / 180.0;
+    const double mountX = cfg.mountOffsetXMm * 0.001;
+    const double mountY = cfg.mountOffsetYMm * 0.001;
+    const double mountZ = cfg.ceilingMountHeightMm * 0.001;
+
+    Mat4 t = Mat4::fromRpyXyz(mountRoll, mountPitch, mountYaw, mountX, mountY, mountZ);
+    return t * ur3eActiveTcpBaseFromJoints(qRad, cfg);
+}
+
+void inverseSceneMountXy(double &xM, double &yM, const Ur3eMountTransform &mount)
+{
+    // Forward mount: yaw→pitch then +offset. Undo offset, then inverse pitch/yaw on XY (z=0).
+    xM -= mount.offsetXM;
+    yM -= mount.offsetYM;
+    if (std::abs(mount.yawRad) <= 1.0e-12 && std::abs(mount.pitchRad) <= 1.0e-12)
+        return;
+
+    const double cy = std::cos(-mount.yawRad);
+    const double sy = std::sin(-mount.yawRad);
+    const double cp = std::cos(-mount.pitchRad);
+    const double sp = std::sin(-mount.pitchRad);
+
+    const double x1 = cp * xM - sp * 0.0;
+    const double y1 = yM;
+    const double z1 = sp * xM + cp * 0.0;
+    xM = cy * x1 - sy * y1;
+    yM = sy * x1 + cy * y1;
+    (void)z1;
+}
+
+std::array<double, 6> homeJointsRad(const HardwareConfig::Ur3eConfig &cfg)
+{
+    std::array<double, 6> qRad{};
+    for (int i = 0; i < 6; ++i)
+        qRad[static_cast<std::size_t>(i)] =
+            cfg.homeJointsDeg[static_cast<std::size_t>(i)] * kPi / 180.0;
+    return qRad;
+}
+
+void fillHomeActiveTcpBase(const Mat4 &t,
+                           double &xM,
+                           double &yM,
+                           double &zM,
+                           double &rx,
+                           double &ry,
+                           double &rz,
+                           double &toolZX,
+                           double &toolZY,
+                           double &toolZZ)
+{
+    xM = t.m[0][3];
+    yM = t.m[1][3];
+    zM = t.m[2][3];
+    toolZX = t.m[0][2];
+    toolZY = t.m[1][2];
+    toolZZ = t.m[2][2];
+    rotvecFromMat(t, rx, ry, rz);
+}
+
+void homeOpticalTcpTrayXyM(double &xM, double &yM)
+{
+    const auto &cfg = hf::hardwareConfig().ur3e;
+    const Mat4 tcpBase = ur3eActiveTcpBaseFromJoints(homeJointsRad(cfg), cfg);
+    xM = tcpBase.m[0][3];
+    yM = tcpBase.m[1][3];
+}
+} // namespace
+
+void scanCenterOffsetM(double &xM, double &yM)
+{
+    // Ring dome / look-at: under base_link when mount_offset_x/y_mm = 0.
+    xM = 0.0;
+    yM = 0.0;
+}
+
+void homeTcpScanCenterOffsetM(double &xM, double &yM)
+{
+    homeOpticalTcpTrayXyM(xM, yM);
+}
+
+void homeActiveTcpBaseLink(double &xM, double &yM, double &zM,
+                           double &rx, double &ry, double &rz,
+                           double &toolZX, double &toolZY, double &toolZZ)
+{
+    const auto &cfg = hf::hardwareConfig().ur3e;
+    fillHomeActiveTcpBase(ur3eActiveTcpBaseFromJoints(homeJointsRad(cfg), cfg),
+                          xM, yM, zM, rx, ry, rz, toolZX, toolZY, toolZZ);
+}
+
+void homeApexCameraUpWorld(double &x, double &y, double &z)
+{
+    const auto &cfg = hf::hardwareConfig().ur3e;
+    const Mat4 t = ur3eActiveTcpBaseFromJoints(homeJointsRad(cfg), cfg);
+    // OpenCV image-up ≈ tool −Y.
+    x = -t.m[0][1];
+    y = -t.m[1][1];
+    z = -t.m[2][1];
+}
+
+void homeOpticalTcpOrientation(double &rx, double &ry, double &rz,
+                               double &toolZX, double &toolZY, double &toolZZ)
+{
+    double xM = 0.0;
+    double yM = 0.0;
+    double zM = 0.0;
+    homeActiveTcpBaseLink(xM, yM, zM, rx, ry, rz, toolZX, toolZY, toolZZ);
 }
 
 } // namespace hf::ur3e

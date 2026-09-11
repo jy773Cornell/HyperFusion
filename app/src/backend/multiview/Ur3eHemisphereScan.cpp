@@ -85,9 +85,8 @@ generateHemisphereScanPoints(const Ur3eHemisphereScanParams &params)
     double centerXM = 0.0;
     double centerYM = 0.0;
     scanCenterOffsetM(centerXM, centerYM);
-
-    double apexXM = 0.0;
-    double apexYM = 0.0;
+    double apexXM = centerXM;
+    double apexYM = centerYM;
     homeTcpScanCenterOffsetM(apexXM, apexYM);
 
     const std::vector<double> thetaSamples =
@@ -96,7 +95,7 @@ generateHemisphereScanPoints(const Ur3eHemisphereScanParams &params)
     std::vector<Ur3eHemisphereScanPoint> points;
     points.reserve(static_cast<std::size_t>(hemisphereScanPointCount(normalized)));
 
-    // Apex over home camera-TCP XY (reachable look-down); rings orbit base XY.
+    // Apex = home XY, Z = ring radius (same sphere height as θ=0).
     points.push_back(makeApexScanPoint(normalized.sphereRadiusM, apexXM, apexYM));
 
     for (const double thetaDeg : thetaSamples)
@@ -139,9 +138,8 @@ generateSemiHemisphereScanPoints(const Ur3eHemisphereScanParams &params,
     double centerXM = 0.0;
     double centerYM = 0.0;
     scanCenterOffsetM(centerXM, centerYM);
-
-    double apexXM = 0.0;
-    double apexYM = 0.0;
+    double apexXM = centerXM;
+    double apexYM = centerYM;
     homeTcpScanCenterOffsetM(apexXM, apexYM);
 
     const std::vector<double> thetaSamples =

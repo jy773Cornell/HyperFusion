@@ -1756,7 +1756,7 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "dlp_tcp_x_mm = 0.372\n"
         << "dlp_tcp_y_mm = 57.104\n"
         << "dlp_tcp_z_mm = 27.4994\n"
-        << "dlp_tcp_roll_deg = 0\n"
+        << "dlp_tcp_roll_deg = 25\n"
         << "dlp_tcp_pitch_deg = 0\n"
         << "dlp_tcp_yaw_deg = 0\n"
         << "# Robot mount height (mm): world Z of base_link / ceiling plane. Tray/sample stage stays at Z=0.\n"

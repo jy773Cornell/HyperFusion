@@ -91,9 +91,6 @@ private:
         bool executionFailed = false;
     };
 
-    /// Execute ringIndex (0..N-1) / top (N) → preview index, skipping plan-unreachable rings.
-    [[nodiscard]] int mapSemiExecuteIndexToPreview(int executeIndex) const;
-
     [[nodiscard]] Vec3 sceneCenter() const;
     [[nodiscard]] Vec3 mapScenePoint(const Vec3 &point) const;
     [[nodiscard]] ProjectedPoint projectPoint(const Vec3 &point, const QRectF &bounds, double scale) const;

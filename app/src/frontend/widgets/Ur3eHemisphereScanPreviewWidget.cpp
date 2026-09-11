@@ -234,45 +234,13 @@ void Ur3eHemisphereScanPreviewWidget::beginScanExecution()
     update();
 }
 
-int Ur3eHemisphereScanPreviewWidget::mapSemiExecuteIndexToPreview(const int executeIndex) const
-{
-    if (executeIndex < 0)
-        return -1;
-
-    // Execute order: sweep-OK latitude rings (θ ascending), then top.
-    // Plan-unreachable latitudes are preview-only and skipped here.
-    std::vector<int> executable;
-    int topPreview = -1;
-    executable.reserve(semiFixedRings_.size());
-    for (int i = 0; i < static_cast<int>(semiFixedRings_.size()); ++i)
-    {
-        const hf::ur3e::Ur3eSemiFixedPreviewRing &ring =
-            semiFixedRings_[static_cast<std::size_t>(i)].ring;
-        if (ring.isTopPose)
-        {
-            topPreview = i;
-            continue;
-        }
-        if (ring.reachabilityKnown && !ring.reachable)
-            continue;
-        executable.push_back(i);
-    }
-
-    if (executeIndex >= 0 && executeIndex < static_cast<int>(executable.size()))
-        return executable[static_cast<std::size_t>(executeIndex)];
-    if (executeIndex == static_cast<int>(executable.size()))
-        return topPreview;
-    return -1;
-}
-
 void Ur3eHemisphereScanPreviewWidget::setActiveScanPoint(const int pointIndex)
 {
     if (!executionActive_)
         return;
 
-    int previewIndex = pointIndex;
-    if (semiFixedPreviewActive_)
-        previewIndex = mapSemiExecuteIndexToPreview(pointIndex);
+    // Execute already sends preview indices (route.rings 0..N-1, apex in-list or N).
+    const int previewIndex = pointIndex;
 
     const int maxIndex = semiFixedPreviewActive_
                              ? static_cast<int>(semiFixedRings_.size())
@@ -297,7 +265,7 @@ void Ur3eHemisphereScanPreviewWidget::markScanPointCompleted(const int pointInde
 {
     if (semiFixedPreviewActive_)
     {
-        const int previewIndex = mapSemiExecuteIndexToPreview(pointIndex);
+        const int previewIndex = pointIndex;
         if (previewIndex < 0 || previewIndex >= static_cast<int>(semiFixedRings_.size()))
             return;
         PreviewSemiFixedRing &entry = semiFixedRings_[static_cast<std::size_t>(previewIndex)];
@@ -331,7 +299,7 @@ void Ur3eHemisphereScanPreviewWidget::markScanPointFailed(const int pointIndex)
 {
     if (semiFixedPreviewActive_)
     {
-        const int previewIndex = mapSemiExecuteIndexToPreview(pointIndex);
+        const int previewIndex = pointIndex;
         if (previewIndex < 0 || previewIndex >= static_cast<int>(semiFixedRings_.size()))
             return;
         PreviewSemiFixedRing &entry = semiFixedRings_[static_cast<std::size_t>(previewIndex)];
@@ -628,13 +596,20 @@ void Ur3eHemisphereScanPreviewWidget::drawLegend(QPainter &painter) const
     entries.push_back({QColor(140, 140, 140), QStringLiteral("Preview")});
     if (hasReachabilityLegend())
     {
-        if (executionActive_ || executionResultsVisible_)
+        if (executionActive_)
         {
-            if (executionActive_)
-                entries.push_back({QColor(170, 90, 230), QStringLiteral("Current")});
+            entries.push_back({QColor(170, 90, 230), QStringLiteral("Current")});
             entries.push_back({QColor(220, 190, 40), QStringLiteral("Pending")});
             entries.push_back({QColor(60, 180, 75), QStringLiteral("Completed")});
             entries.push_back({QColor(210, 45, 45), QStringLiteral("Execute failed")});
+            entries.push_back({QColor(70, 130, 220), QStringLiteral("Unreachable (plan)")});
+        }
+        else if (executionResultsVisible_)
+        {
+            entries.push_back({QColor(60, 180, 75), QStringLiteral("Completed")});
+            entries.push_back({QColor(210, 45, 45), QStringLiteral("Execute failed")});
+            entries.push_back({QColor(60, 180, 75), QStringLiteral("Reachable (home)")});
+            entries.push_back({QColor(230, 150, 40), QStringLiteral("Chain-only")});
             entries.push_back({QColor(70, 130, 220), QStringLiteral("Unreachable (plan)")});
         }
         else
@@ -889,7 +864,7 @@ void Ur3eHemisphereScanPreviewWidget::drawSemiFixedRings(QPainter &painter,
         {
             color = QColor(70, 130, 220);
         }
-        else if (executionActive_ || executionResultsVisible_)
+        else if (executionActive_ && (isActive || !entry.executionCompleted))
         {
             if (entry.executionFailed)
                 color = QColor(210, 45, 45);
@@ -899,14 +874,22 @@ void Ur3eHemisphereScanPreviewWidget::drawSemiFixedRings(QPainter &painter,
             {
                 const double pulse =
                     0.5 + 0.5 * std::sin(static_cast<double>(flashPulse_) * kPi / 8.0);
-                const int red = static_cast<int>(std::clamp(150.0 + pulse * 70.0, 0.0, 255.0));
-                const int green = static_cast<int>(std::clamp(55.0 + pulse * 35.0, 0.0, 255.0));
-                const int blue = static_cast<int>(std::clamp(200.0 + pulse * 55.0, 0.0, 255.0));
+                const int red = static_cast<int>(std::clamp(170.0 + pulse * 50.0, 0.0, 255.0));
+                const int green = static_cast<int>(std::clamp(70.0 + pulse * 40.0, 0.0, 255.0));
+                const int blue = static_cast<int>(std::clamp(210.0 + pulse * 45.0, 0.0, 255.0));
                 color = QColor(red, green, blue);
                 lineWidth = 3.0;
             }
             else
                 color = QColor(220, 190, 40); // pending
+        }
+        else if (entry.executionFailed)
+        {
+            color = QColor(210, 45, 45);
+        }
+        else if (entry.executionCompleted)
+        {
+            color = QColor(60, 180, 75);
         }
         else if (ring.reachabilityKnown)
         {
@@ -917,15 +900,28 @@ void Ur3eHemisphereScanPreviewWidget::drawSemiFixedRings(QPainter &painter,
             else
                 color = QColor(60, 180, 75);
         }
+        else
+        {
+            color = QColor(140, 140, 140);
+        }
 
         if (ring.isTopPose || ring.radiusM < 1.0e-3)
         {
-            // Apex / top init pose: short look-down pin (same green when reachable).
+            // Apex = north pole of the spin-ring sphere (same R), not the tray look-at.
             double centerXM = 0.0;
             double centerYM = 0.0;
             hf::ur3e::scanCenterOffsetM(centerXM, centerYM);
-            const Vec3 sphereCenter = mapScenePoint(Vec3{centerXM, centerYM, kTrayHeightM});
-            const Vec3 surface = mapScenePoint(Vec3{ring.centerXM, ring.centerYM, ring.centerZM});
+            double apexZM = 0.0;
+            for (const PreviewSemiFixedRing &other : semiFixedRings_)
+            {
+                if (other.ring.isTopPose || other.ring.radiusM < 1.0e-3)
+                    continue;
+                apexZM = std::max(apexZM, std::hypot(other.ring.radiusM, other.ring.centerZM));
+            }
+            if (apexZM < 0.01)
+                apexZM = params_.sphereRadiusM;
+            const Vec3 surface{centerXM, centerYM, apexZM};
+            const Vec3 sphereCenter{centerXM, centerYM, kTrayHeightM};
             double dirX = surface.x - sphereCenter.x;
             double dirY = surface.y - sphereCenter.y;
             double dirZ = surface.z - sphereCenter.z;
@@ -946,10 +942,7 @@ void Ur3eHemisphereScanPreviewWidget::drawSemiFixedRings(QPainter &painter,
                 painter.drawLine(projectPoint(pinStart, bounds, scale).screen,
                                  projectPoint(pinEnd, bounds, scale).screen);
             }
-            const QPointF tip = projectPoint(Vec3{ring.centerXM, ring.centerYM, ring.centerZM},
-                                             bounds,
-                                             scale)
-                                    .screen;
+            const QPointF tip = projectPoint(surface, bounds, scale).screen;
             painter.setBrush(color);
             painter.setPen(Qt::NoPen);
             painter.drawEllipse(tip, isActive ? 6.0 : 5.0, isActive ? 6.0 : 5.0);
@@ -1159,9 +1152,9 @@ void Ur3eHemisphereScanPreviewWidget::drawScanPin(QPainter &painter,
     {
         const double pulse =
             0.5 + 0.5 * std::sin(static_cast<double>(flashPulse_) * kPi / 8.0);
-        const int red = static_cast<int>(std::clamp(150.0 + pulse * 70.0, 0.0, 255.0));
-        const int green = static_cast<int>(std::clamp(55.0 + pulse * 35.0, 0.0, 255.0));
-        const int blue = static_cast<int>(std::clamp(200.0 + pulse * 55.0, 0.0, 255.0));
+        const int red = static_cast<int>(std::clamp(170.0 + pulse * 50.0, 0.0, 255.0));
+        const int green = static_cast<int>(std::clamp(70.0 + pulse * 40.0, 0.0, 255.0));
+        const int blue = static_cast<int>(std::clamp(210.0 + pulse * 45.0, 0.0, 255.0));
         pinColor = QColor(red, green, blue);
         lineWidth = 3.0;
     }

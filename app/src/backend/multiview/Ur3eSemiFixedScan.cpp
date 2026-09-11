@@ -135,46 +135,100 @@ std::vector<double> jointsFromJson(const QJsonArray &a)
     return out;
 }
 
+void snapApexPreviewToRingSphere(QVector<Ur3eSemiFixedPreviewRing> &rings,
+                                 const double fallbackRadiusM)
+{
+    double cx = 0.0;
+    double cy = 0.0;
+    scanCenterOffsetM(cx, cy);
+
+    double sphereR = 0.0;
+    for (const Ur3eSemiFixedPreviewRing &p : rings)
+    {
+        if (p.isTopPose)
+            continue;
+        sphereR = std::max(sphereR, std::hypot(p.radiusM, p.centerZM));
+    }
+    if (sphereR < 0.01)
+        sphereR = fallbackRadiusM;
+    if (sphereR < 0.01)
+        return;
+
+    for (Ur3eSemiFixedPreviewRing &p : rings)
+    {
+        if (!p.isTopPose)
+            continue;
+        p.centerXM = cx;
+        p.centerYM = cy;
+        p.centerZM = sphereR;
+        p.radiusM = 0.0;
+    }
+}
+
 } // namespace
 
-Ur3eSemiFixedRing defaultSemiFixedTopPose()
+Ur3eSemiFixedRing apexTopPoseOnRingSphere(const double sphereRadiusM)
 {
-    // Fixed apex look-down (θ=0) — always first still on semi-fixed execute.
     Ur3eSemiFixedRing top;
     top.id = QStringLiteral("top");
     top.displayName = QStringLiteral("Top (θ=0)");
-    top.entryJointsRad = {
-        1.320915979459176,
-        -3.345937397893044,
-        2.4709152402327033,
-        -0.6957748605175326,
-        1.5707963267948966,
-        -1.3209159800161308,
-    };
-    top.entryTcp.xM = -0.07501500004324846;
-    top.entryTcp.yM = -0.016443060582171126;
-    top.entryTcp.zM = 0.2;
-    top.entryTcp.rxRad = -2.221441296101876;
-    top.entryTcp.ryRad = 2.2214412956462506;
-    top.entryTcp.rzRad = 3.852205944410706e-07;
-    top.entryTcp.toolZMx = 0.0;
-    top.entryTcp.toolZMy = 0.0;
-    top.entryTcp.toolZMz = -1.0;
-    top.hasEntryTcp = true;
-    // Known-good planned apex pose — show green in preview.
-    top.reachabilityKnown = true;
-    top.reachable = true;
-    top.homePathOk = true;
     top.noPan = true;
     top.thetaDeg = 0.0;
+    double cx = 0.0;
+    double cy = 0.0;
+    homeTcpScanCenterOffsetM(cx, cy);
+    Ur3eHemisphereScanPoint grid;
+    grid.phiDeg = 0.0;
+    grid.thetaDeg = 0.0;
+    grid.xM = cx;
+    grid.yM = cy;
+    grid.zM = std::max(0.01, sphereRadiusM);
+    top.entryTcp = tcpPoseForHemispherePoint(grid);
+    top.hasEntryTcp = true;
+    top.reachabilityKnown = false;
+    top.reachable = false;
+    top.homePathOk = false;
     return top;
+}
+
+Ur3eSemiFixedRing defaultSemiFixedTopPose()
+{
+    return apexTopPoseOnRingSphere(kSemiFixedApexRadiusM);
+}
+
+double inferSemiFixedSphereRadiusM(const Ur3eSemiFixedRoute &route)
+{
+    double cx = 0.0;
+    double cy = 0.0;
+    scanCenterOffsetM(cx, cy);
+    double r = 0.0;
+    for (const Ur3eSemiFixedRing &ring : route.rings)
+    {
+        if (ring.noPan || std::abs(ring.thetaDeg) < 0.75)
+            continue;
+        if (!ring.hasEntryTcp)
+            continue;
+        const double horiz = std::hypot(ring.entryTcp.xM - cx, ring.entryTcp.yM - cy);
+        r = std::max(r, std::hypot(horiz, ring.entryTcp.zM));
+    }
+    return r;
 }
 
 void ensureSemiFixedTopPose(Ur3eSemiFixedRoute &route)
 {
-    if (route.hasTopPose && route.topPose.entryJointsRad.size() == 6)
+    const double ringR = inferSemiFixedSphereRadiusM(route);
+    if (route.hasTopPose && route.topPose.entryJointsRad.size() == 6
+        && route.topPose.hasEntryTcp)
+    {
+        if (ringR < 0.01 || std::abs(route.topPose.entryTcp.zM - ringR) <= 0.02)
+            return;
+    }
+    if (ringR < 0.01)
         return;
-    route.topPose = defaultSemiFixedTopPose();
+    std::vector<double> keepJoints = route.topPose.entryJointsRad;
+    route.topPose = apexTopPoseOnRingSphere(ringR);
+    if (keepJoints.size() == 6)
+        route.topPose.entryJointsRad = keepJoints;
     route.hasTopPose = true;
 }
 
@@ -507,6 +561,7 @@ QVector<Ur3eSemiFixedPreviewRing> inferSemiFixedPreviewRings(const Ur3eSemiFixed
         }
         out.push_back(top);
     }
+    snapApexPreviewToRingSphere(out, 0.0);
     return out;
 }
 
@@ -538,14 +593,23 @@ Ur3eSemiFixedRoute semiFixedRouteFromHemispherePlan(const Ur3eHemisphereScanPlan
     for (int i = 0; i < static_cast<int>(plan.points.size()); ++i)
     {
         const Ur3ePlannedScanPoint &pt = plan.points[static_cast<std::size_t>(i)];
-        if (!pt.reachable || pt.jointPositionsRad.size() != 6)
+        const bool isApex = std::abs(pt.gridPoint.thetaDeg) < 0.75;
+        if (!isApex && (!pt.reachable || pt.jointPositionsRad.size() != 6))
             continue;
 
-        if (std::abs(pt.gridPoint.thetaDeg) < 0.75)
+        if (isApex)
         {
-            if (!pt.homePathOk)
+            const bool haveJoints = pt.jointPositionsRad.size() == 6;
+            if (haveJoints && !pt.homePathOk)
                 continue;
+            if (!haveJoints)
+            {
+                if (apexIndex < 0)
+                    apexIndex = i;
+                continue;
+            }
             if (apexIndex < 0
+                || plan.points[static_cast<std::size_t>(apexIndex)].jointPositionsRad.size() != 6
                 || ur3eJointDistanceRad(homeJoints, pt.jointPositionsRad)
                        < ur3eJointDistanceRad(
                              homeJoints,
@@ -815,6 +879,7 @@ previewSemiFixedRingsFromScanParams(const Ur3eHemisphereScanParams &paramsIn)
     }
     if (hasTop)
         ordered.push_back(topRing);
+    snapApexPreviewToRingSphere(ordered, params.sphereRadiusM);
     return ordered;
 }
 
@@ -955,23 +1020,7 @@ previewSemiFixedRingsFromHemispherePlan(const Ur3eHemisphereScanPlan &plan)
         top.homePathOk = apex.anyHomePathOk;
         out.push_back(top);
     }
-    else if (!out.isEmpty())
-    {
-        // Ring-only plans (one θ per file) carry no θ=0 point, but execute always
-        // runs the built-in apex still first — preview it so both agree.
-        const Ur3eSemiFixedRing fallback = defaultSemiFixedTopPose();
-        Ur3eSemiFixedPreviewRing top = inferSemiFixedPreviewRing(fallback);
-        top.displayName = QStringLiteral("Top (θ=0)");
-        top.isTopPose = true;
-        if (fallback.hasEntryTcp)
-        {
-            top.centerXM = fallback.entryTcp.xM;
-            top.centerYM = fallback.entryTcp.yM;
-            top.centerZM = fallback.entryTcp.zM;
-        }
-        top.radiusM = 0.0;
-        out.push_back(top);
-    }
+    snapApexPreviewToRingSphere(out, 0.0);
     return out;
 }
 
@@ -1099,8 +1148,13 @@ int semiFixedRingSampleCount(const Ur3eSemiFixedRing &ring, const double interva
             return 1;
         const double entryPan =
             ring.entryJointsRad.size() == 6 ? ring.entryJointsRad[0] : 0.0;
-        const int n = contiguousMaskCountFromEntry(ring.panMask, entryPan);
-        return std::max(1, n);
+        const int bins = contiguousMaskCountFromEntry(ring.panMask, entryPan);
+        const int n = static_cast<int>(ring.panMask.size());
+        if (bins <= 0 || n <= 0)
+            return 1;
+        const double arcDeg = 360.0 * static_cast<double>(bins) / static_cast<double>(n);
+        const double step = intervalDeg > 0.0 ? intervalDeg : 10.0;
+        return std::max(1, static_cast<int>(std::lround(arcDeg / step)));
     }
     return semiFixedSampleCount(intervalDeg);
 }

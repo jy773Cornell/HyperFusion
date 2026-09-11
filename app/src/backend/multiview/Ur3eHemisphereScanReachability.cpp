@@ -29,6 +29,198 @@ namespace hf::ur3e
 
 {
 
+namespace
+{
+constexpr double kPi = 3.14159265358979323846;
+
+struct Mat4
+{
+    double m[4][4]{};
+
+    static Mat4 identity()
+    {
+        Mat4 t;
+        t.m[0][0] = t.m[1][1] = t.m[2][2] = t.m[3][3] = 1.0;
+        return t;
+    }
+
+    static Mat4 fromRpyXyz(const double roll,
+                           const double pitch,
+                           const double yaw,
+                           const double x,
+                           const double y,
+                           const double z)
+    {
+        const double cr = std::cos(roll);
+        const double sr = std::sin(roll);
+        const double cp = std::cos(pitch);
+        const double sp = std::sin(pitch);
+        const double cy = std::cos(yaw);
+        const double sy = std::sin(yaw);
+        Mat4 t = identity();
+        t.m[0][0] = cy * cp;
+        t.m[0][1] = cy * sp * sr - sy * cr;
+        t.m[0][2] = cy * sp * cr + sy * sr;
+        t.m[0][3] = x;
+        t.m[1][0] = sy * cp;
+        t.m[1][1] = sy * sp * sr + cy * cr;
+        t.m[1][2] = sy * sp * cr - cy * sr;
+        t.m[1][3] = y;
+        t.m[2][0] = -sp;
+        t.m[2][1] = cp * sr;
+        t.m[2][2] = cp * cr;
+        t.m[2][3] = z;
+        return t;
+    }
+
+    Mat4 operator*(const Mat4 &rhs) const
+    {
+        Mat4 out;
+        for (int row = 0; row < 4; ++row)
+        {
+            for (int col = 0; col < 4; ++col)
+            {
+                out.m[row][col] = m[row][0] * rhs.m[0][col] + m[row][1] * rhs.m[1][col]
+                                  + m[row][2] * rhs.m[2][col] + m[row][3] * rhs.m[3][col];
+            }
+        }
+        return out;
+    }
+};
+
+Mat4 inverseRigid(const Mat4 &t)
+{
+    Mat4 out = Mat4::identity();
+    for (int i = 0; i < 3; ++i)
+    {
+        for (int j = 0; j < 3; ++j)
+            out.m[i][j] = t.m[j][i];
+    }
+    const double px = t.m[0][3];
+    const double py = t.m[1][3];
+    const double pz = t.m[2][3];
+    out.m[0][3] = -(out.m[0][0] * px + out.m[0][1] * py + out.m[0][2] * pz);
+    out.m[1][3] = -(out.m[1][0] * px + out.m[1][1] * py + out.m[1][2] * pz);
+    out.m[2][3] = -(out.m[2][0] * px + out.m[2][1] * py + out.m[2][2] * pz);
+    return out;
+}
+
+Mat4 rotvecXyz(const double x,
+               const double y,
+               const double z,
+               const double rx,
+               const double ry,
+               const double rz)
+{
+    Mat4 t = Mat4::identity();
+    t.m[0][3] = x;
+    t.m[1][3] = y;
+    t.m[2][3] = z;
+    const double ang = std::sqrt(rx * rx + ry * ry + rz * rz);
+    if (ang <= 1.0e-12)
+        return t;
+    const double ax = rx / ang;
+    const double ay = ry / ang;
+    const double az = rz / ang;
+    const double c = std::cos(ang);
+    const double s = std::sin(ang);
+    const double k = 1.0 - c;
+    t.m[0][0] = c + ax * ax * k;
+    t.m[0][1] = ax * ay * k - az * s;
+    t.m[0][2] = ax * az * k + ay * s;
+    t.m[1][0] = ay * ax * k + az * s;
+    t.m[1][1] = c + ay * ay * k;
+    t.m[1][2] = ay * az * k - ax * s;
+    t.m[2][0] = az * ax * k - ay * s;
+    t.m[2][1] = az * ay * k + ax * s;
+    t.m[2][2] = c + az * az * k;
+    return t;
+}
+
+void rotvecFromMat(const Mat4 &t, double &rx, double &ry, double &rz)
+{
+    const double m00 = t.m[0][0];
+    const double m01 = t.m[0][1];
+    const double m02 = t.m[0][2];
+    const double m10 = t.m[1][0];
+    const double m11 = t.m[1][1];
+    const double m12 = t.m[1][2];
+    const double m20 = t.m[2][0];
+    const double m21 = t.m[2][1];
+    const double m22 = t.m[2][2];
+    const double trace = m00 + m11 + m22;
+    const double cosAngle = std::clamp((trace - 1.0) * 0.5, -1.0, 1.0);
+    const double angle = std::acos(cosAngle);
+    if (angle <= 1.0e-12)
+    {
+        rx = ry = rz = 0.0;
+        return;
+    }
+    if (angle > kPi - 1.0e-6 || std::abs(std::sin(angle)) < 1.0e-6)
+    {
+        double ax = std::sqrt(std::max(0.0, (m00 + 1.0) * 0.5));
+        double ay = std::sqrt(std::max(0.0, (m11 + 1.0) * 0.5));
+        double az = std::sqrt(std::max(0.0, (m22 + 1.0) * 0.5));
+        if (ax >= ay && ax >= az)
+        {
+            ay = std::copysign(ay, m10 + m01);
+            az = std::copysign(az, m20 + m02);
+        }
+        else if (ay >= az)
+        {
+            ax = std::copysign(ax, m10 + m01);
+            az = std::copysign(az, m21 + m12);
+        }
+        else
+        {
+            ax = std::copysign(ax, m20 + m02);
+            ay = std::copysign(ay, m21 + m12);
+        }
+        const double len = std::sqrt(ax * ax + ay * ay + az * az);
+        if (len <= 1.0e-12)
+        {
+            rx = kPi;
+            ry = 0.0;
+            rz = 0.0;
+            return;
+        }
+        rx = ax / len * kPi;
+        ry = ay / len * kPi;
+        rz = az / len * kPi;
+        return;
+    }
+    const double inv = 0.5 / std::sin(angle);
+    rx = (m21 - m12) * inv * angle;
+    ry = (m02 - m20) * inv * angle;
+    rz = (m10 - m01) * inv * angle;
+}
+
+Mat4 toolTcpMmToMat(const hf::HardwareConfig::Ur3eConfig::ToolTcpMm &tcp)
+{
+    return Mat4::fromRpyXyz(tcp.rollDeg * kPi / 180.0,
+                            tcp.pitchDeg * kPi / 180.0,
+                            tcp.yawDeg * kPi / 180.0,
+                            tcp.xMm * 0.001,
+                            tcp.yMm * 0.001,
+                            tcp.zMm * 0.001);
+}
+
+void insertMoveItPoseJson(QJsonObject &pose, const Ur3eScanTcpPose &optical, const bool isApex)
+{
+    (void)isApex;
+    const Ur3eScanTcpPose ee = optical;
+    pose.insert(QStringLiteral("x"), ee.xM);
+    pose.insert(QStringLiteral("y"), ee.yM);
+    pose.insert(QStringLiteral("z"), ee.zM);
+    pose.insert(QStringLiteral("rx"), ee.rxRad);
+    pose.insert(QStringLiteral("ry"), ee.ryRad);
+    pose.insert(QStringLiteral("rz"), ee.rzRad);
+    pose.insert(QStringLiteral("tool_z_x"), ee.toolZMx);
+    pose.insert(QStringLiteral("tool_z_y"), ee.toolZMy);
+    pose.insert(QStringLiteral("tool_z_z"), ee.toolZMz);
+}
+} // namespace
+
 Ur3eScanTcpPose tcpPoseForHemispherePoint(const Ur3eHemisphereScanPoint &gridPoint)
 
 {
@@ -45,35 +237,38 @@ Ur3eScanTcpPose tcpPoseForHemispherePoint(const Ur3eHemisphereScanPoint &gridPoi
 
     const Ur3eMountTransform mount =
         Ur3eMountTransform::sceneAlignFromConfig(hf::hardwareConfig().ur3e);
-    mount.transformPoint(tcp.xM, tcp.yM, tcp.zM);
-
-    // Apex look-at: under home camera-TCP XY (perpendicular). Rings: under base XY (0,0).
     const bool isApexPin = std::abs(gridPoint.thetaDeg) <= 1.0e-9;
-    double centerXM = 0.0;
-    double centerYM = 0.0;
-    if (isApexPin)
-        homeTcpScanCenterOffsetM(centerXM, centerYM);
-    else
-        scanCenterOffsetM(centerXM, centerYM);
-    double centerZM = kSampleTrayHeightM;
-    mount.transformPoint(centerXM, centerYM, centerZM);
-
     if (isApexPin)
     {
-        // Keep home camera orientation. Only the look-down height changes (Z = R).
-        homeOpticalTcpOrientation(tcp.rxRad, tcp.ryRad, tcp.rzRad, tcp.toolZMx,
-                                  tcp.toolZMy, tcp.toolZMz);
+        // Home XY + home orientation; Z = ring radius from the grid.
+        double hx = 0.0;
+        double hy = 0.0;
+        double hz = 0.0;
+        homeActiveTcpBaseLink(hx, hy, hz, tcp.rxRad, tcp.ryRad, tcp.rzRad,
+                              tcp.toolZMx, tcp.toolZMy, tcp.toolZMz);
+        (void)hz;
+        tcp.xM = hx;
+        tcp.yM = hy;
+        mount.transformPoint(tcp.xM, tcp.yM, tcp.zM);
         return tcp;
     }
+    mount.transformPoint(tcp.xM, tcp.yM, tcp.zM);
+    double centerXM = 0.0;
+    double centerYM = 0.0;
+    scanCenterOffsetM(centerXM, centerYM);
+    double centerZM = kSampleTrayHeightM;
+    mount.transformPoint(centerXM, centerYM, centerZM);
 
     tcp.toolZMx = centerXM - tcp.xM;
     tcp.toolZMy = centerYM - tcp.yM;
     tcp.toolZMz = centerZM - tcp.zM;
 
-    // Ring pins: image-up → world −Z (camera upside-down, projector on top).
+    // Rings: image-up = world −Z.
     double upX = 0.0;
     double upY = 0.0;
     double upZ = -1.0;
+    if (isApexPin)
+        homeApexCameraUpWorld(upX, upY, upZ);
     mount.transformVector(upX, upY, upZ);
 
     // Nominal tool +Z = look at scan-center. pin_tcp_tilt_deg is the tip angle of that
@@ -128,7 +323,10 @@ Ur3eScanTcpPose tcpPoseForHemispherePoint(const Ur3eHemisphereScanPoint &gridPoi
 
 }
 
-
+Ur3eScanTcpPose retargetApexCameraTcpToMoveItTip(Ur3eScanTcpPose cameraTcp)
+{
+    return cameraTcp;
+}
 
 Ur3eTcpPose urTcpPoseFromScanTcp(const Ur3eScanTcpPose &scanTcp)
 
@@ -186,26 +384,9 @@ Ur3eHemisphereScanPlan evaluateHemisphereScanPlanMoveIt(const QString &serverUrl
 
         pose.insert(QStringLiteral("index"), static_cast<int>(index));
 
-        pose.insert(QStringLiteral("x"), tcp.xM);
-
-        pose.insert(QStringLiteral("y"), tcp.yM);
-
-        pose.insert(QStringLiteral("z"), tcp.zM);
-
-        pose.insert(QStringLiteral("rx"), tcp.rxRad);
-
-        pose.insert(QStringLiteral("ry"), tcp.ryRad);
-
-        pose.insert(QStringLiteral("rz"), tcp.rzRad);
-
-        pose.insert(QStringLiteral("tool_z_x"), tcp.toolZMx);
-
-        pose.insert(QStringLiteral("tool_z_y"), tcp.toolZMy);
-
-        pose.insert(QStringLiteral("tool_z_z"), tcp.toolZMz);
-
         const bool isApexPin =
             std::abs(gridPoints[index].thetaDeg) <= 1.0e-9;
+        insertMoveItPoseJson(pose, tcp, isApexPin);
         double apexUpX = 1.0;
         double apexUpY = 0.0;
         double apexUpZ = 0.0;
@@ -388,16 +569,8 @@ Ur3eHemisphereScanPlan evaluateSemiHemisphereScanPlanMoveIt(
         const Ur3eScanTcpPose tcp = tcpPoseForHemispherePoint(gridPoints[index]);
         QJsonObject pose;
         pose.insert(QStringLiteral("index"), static_cast<int>(index));
-        pose.insert(QStringLiteral("x"), tcp.xM);
-        pose.insert(QStringLiteral("y"), tcp.yM);
-        pose.insert(QStringLiteral("z"), tcp.zM);
-        pose.insert(QStringLiteral("rx"), tcp.rxRad);
-        pose.insert(QStringLiteral("ry"), tcp.ryRad);
-        pose.insert(QStringLiteral("rz"), tcp.rzRad);
-        pose.insert(QStringLiteral("tool_z_x"), tcp.toolZMx);
-        pose.insert(QStringLiteral("tool_z_y"), tcp.toolZMy);
-        pose.insert(QStringLiteral("tool_z_z"), tcp.toolZMz);
         const bool isApexPin = std::abs(gridPoints[index].thetaDeg) <= 1.0e-9;
+        insertMoveItPoseJson(pose, tcp, isApexPin);
         double apexUpX = 1.0;
         double apexUpY = 0.0;
         double apexUpZ = 0.0;

@@ -1,4 +1,4 @@
-// HDMI PSP pattern paths (backend/fpp). Resolves calibration/multiview/patterns/psp. No device I/O.
+// HDMI PSP pattern paths (backend/fpp). Resolves calibration/multiview/fpp_cal/patterns/psp. No device I/O.
 #pragma once
 
 #include <QString>

@@ -1147,21 +1147,46 @@ void Ur3eHemisphereScanSettingsWidget::updateImageEstimateLabel()
             return;
         }
         const int layers = horizontalPointsSpin_ != nullptr ? horizontalPointsSpin_->value() : 1;
-        const int rings =
-            semiFixedRoute_.rings.isEmpty() ? std::max(1, layers) : semiFixedRoute_.rings.size();
-        const int perRing = hf::ur3e::semiFixedSampleCount(semiFixedRoute_.intervalDeg);
-        const qint64 total =
-            static_cast<qint64>(perSample)
-            * (1 + static_cast<qint64>(rings) * static_cast<qint64>(perRing));
-        const QString ringSource = semiFixedRoute_.rings.isEmpty()
-                                       ? QStringLiteral("%1 layers").arg(rings)
-                                       : QStringLiteral("%1 planned").arg(rings);
-        semiFixedEstimateLabel_->setText(
-            QStringLiteral("%1/pose × (1 top + %2/ring × %3) = %4")
-                .arg(perSample)
-                .arg(perRing)
-                .arg(ringSource)
-                .arg(total));
+        const double intervalDeg = semiFixedRoute_.intervalDeg > 0.0
+                                       ? semiFixedRoute_.intervalDeg
+                                       : 10.0;
+        qint64 ringPins = 0;
+        int ringEntries = 0;
+        if (semiFixedRoute_.rings.isEmpty())
+        {
+            ringEntries = std::max(1, layers);
+            ringPins = static_cast<qint64>(ringEntries)
+                       * hf::ur3e::semiFixedSampleCount(intervalDeg);
+        }
+        else
+        {
+            for (const hf::ur3e::Ur3eSemiFixedRing &ring : semiFixedRoute_.rings)
+            {
+                if (ring.noPan || std::abs(ring.thetaDeg) < 0.75)
+                    continue;
+                ringPins += hf::ur3e::semiFixedRingSampleCount(ring, intervalDeg);
+                ++ringEntries;
+            }
+        }
+        const qint64 total = static_cast<qint64>(perSample) * (1 + ringPins);
+        if (semiFixedRoute_.rings.isEmpty())
+        {
+            semiFixedEstimateLabel_->setText(
+                QStringLiteral("%1/pose × (1 apex + %2/ring × %3 layers) = %4")
+                    .arg(perSample)
+                    .arg(hf::ur3e::semiFixedSampleCount(intervalDeg))
+                    .arg(ringEntries)
+                    .arg(total));
+        }
+        else
+        {
+            semiFixedEstimateLabel_->setText(
+                QStringLiteral("%1/pose × (1 apex + %2 ring pins @ %3°) = %4")
+                    .arg(perSample)
+                    .arg(ringPins)
+                    .arg(intervalDeg, 0, 'f', 1)
+                    .arg(total));
+        }
         return;
     }
 

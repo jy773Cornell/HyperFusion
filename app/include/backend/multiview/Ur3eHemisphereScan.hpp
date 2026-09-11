@@ -15,7 +15,7 @@ struct Ur3eHemisphereScanParams
     int horizontalPoints = 12;
     int verticalPoints = 5;
     /// Polar angle from dome apex (0°) to equator (90°). Hemisphere only — clamped to 0–90°.
-    /// Scan grids always include one extra apex pin (θ=0, look-down) regardless of thetaMinDeg.
+    /// Scan grids always include one extra apex pin (θ=0) regardless of thetaMinDeg.
     double thetaMinDeg = 30.0;
     double thetaMaxDeg = 90.0;
 };
@@ -64,18 +64,22 @@ void normalizeHemisphereScanParams(Ur3eHemisphereScanParams &params);
 /// Ring-dome / look-at center on the tray (metres). Fixed at (0,0) — under base_link
 /// when mount_offset_x/y_mm = 0 (Semi pans about the base).
 void scanCenterOffsetM(double &xM, double &yM);
-/// Apex pin XY only: active scan tip at home_joints_deg projected onto the tray.
+/// Home active-TCP XY in base_link (same frame as ring / GET /pose).
 void homeTcpScanCenterOffsetM(double &xM, double &yM);
-/// Apex image-up in the tray frame (legacy). Prefer homeOpticalTcpOrientation.
+/// Home active-TCP image-up in base_link (tool −Y).
 void homeApexCameraUpWorld(double &x, double &y, double &z);
-/// Home active-TCP orientation in world/base. Apex copies this — no extra turn vs home.
+/// Home active-TCP in base_link: XY + orientation. Z is the live home height.
+void homeActiveTcpBaseLink(double &xM, double &yM, double &zM,
+                           double &rx, double &ry, double &rz,
+                           double &toolZX, double &toolZY, double &toolZZ);
+/// Home active-TCP orientation in base_link.
 void homeOpticalTcpOrientation(double &rx, double &ry, double &rz,
                                double &toolZX, double &toolZY, double &toolZZ);
 /// Grid pin count including the always-present apex (θ=0) pin.
 [[nodiscard]] int hemisphereScanPointCount(const Ur3eHemisphereScanParams &params);
 /// Latitude/longitude grid plus a fixed apex pin first.
-/// Apex sits over home active-TCP XY (perpendicular look-down); rings use base XY (0,0).
-/// Apex orientation = home TCP (no extra roll). Rings → world −Z.
+/// Apex = home XY and home orientation, Z = ring radius R (base_link).
+/// Rings orbit the scan-center on scan_tcp; image-up → world −Z.
 [[nodiscard]] std::vector<Ur3eHemisphereScanPoint>
 generateHemisphereScanPoints(const Ur3eHemisphereScanParams &params);
 /// Semi Plan grid: same θ layers + apex, but *searchCandidates* φ samples evenly over 360°.

@@ -52,7 +52,7 @@ struct Ur3eSemiFixedRoute
     /// +1 = positive pan direction, −1 = opposite.
     int panDirection = 1;
     int stabilizeMs = 500;
-    /// Always captured first (MoveIt look-down / θ=0). Filled with default if missing.
+    /// Always captured first (θ=0, home pose with Z = ring R). Filled if missing.
     Ur3eSemiFixedRing topPose{};
     bool hasTopPose = false;
     QVector<Ur3eSemiFixedRing> rings;
@@ -68,10 +68,16 @@ struct Ur3eSemiFixedRouteInfo
     double intervalDeg = 10.0;
 };
 
-/// Default apex look-down pose used for every semi-fixed scan (before rings).
+/// Apex TCP: home XY + home orientation, Z = *sphereRadiusM*.
+[[nodiscard]] Ur3eSemiFixedRing apexTopPoseOnRingSphere(double sphereRadiusM);
+
+/// Legacy wrapper — 200 mm leftover. Prefer apexTopPoseOnRingSphere(ring R).
 [[nodiscard]] Ur3eSemiFixedRing defaultSemiFixedTopPose();
 
-/// Ensure route.hasTopPose; if missing, install defaultSemiFixedTopPose().
+/// Sphere radius implied by planned ring TCPs (0 if unknown).
+[[nodiscard]] double inferSemiFixedSphereRadiusM(const Ur3eSemiFixedRoute &route);
+
+/// If the route has rings, install / replace a non-matching apex with home XY and Z = R.
 void ensureSemiFixedTopPose(Ur3eSemiFixedRoute &route);
 
 /// Named Semi plans beside app.exe (`mvs_semi_scan_plans`, copied from app/preset).
@@ -140,7 +146,7 @@ void syncHemisphereParamsFromPlanLatitudes(const Ur3eHemisphereScanPlan &plan,
 
 [[nodiscard]] int semiFixedSampleCount(double intervalDeg);
 
-/// Imaging samples for one ring entry (full 360°, backup mask run, or pin-only).
+/// Imaging samples for one ring: full 360° / interval, or backup arc / interval.
 [[nodiscard]] int semiFixedRingSampleCount(const Ur3eSemiFixedRing &ring, double intervalDeg);
 
 } // namespace hf::ur3e

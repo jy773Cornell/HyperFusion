@@ -22,7 +22,7 @@ QString resolveHdmiPspPatternDir()
     QDir dir(QCoreApplication::applicationDirPath());
     for (int depth = 0; depth < 8; ++depth)
     {
-        const QString candidate = dir.filePath(QStringLiteral("calibration/multiview/patterns/psp"));
+        const QString candidate = dir.filePath(QStringLiteral("calibration/multiview/fpp_cal/patterns/psp"));
         if (QFileInfo::exists(QDir(candidate).filePath(QStringLiteral("sine_1_0.png"))))
             return QFileInfo(candidate).absoluteFilePath();
         if (!dir.cdUp())

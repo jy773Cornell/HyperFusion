@@ -82,7 +82,7 @@ struct FppScanStep
     FppScanStepKind kind = FppScanStepKind::Pattern;
     const char *patternName = nullptr;
     const char *label = nullptr;
-    /// 1280×720 PNG under calibration/multiview/patterns/psp (HDMI only).
+    /// 1280×720 PNG under calibration/multiview/fpp_cal/patterns/psp (HDMI only).
     const char *hdmiFile = nullptr;
 };
 

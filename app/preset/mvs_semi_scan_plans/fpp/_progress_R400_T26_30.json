@@ -1,0 +1,10 @@
+{
+  "R400_T26": {
+    "ok": true,
+    "sweep_ok": 2,
+    "apex_ok": true,
+    "file": "D:\\Pototypy\\HyperFusion\\app\\preset\\mvs_semi_scan_plans\\fpp\\R400_T26.json",
+    "seconds": 42.79,
+    "backup": false
+  }
+}

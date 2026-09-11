@@ -676,20 +676,23 @@ Ur3eScanWaypointMoveResult ur3eExecuteScanWaypoint(const QString &serverUrl,
     if (tcpPose != nullptr)
     {
         QJsonObject tcp;
-        tcp.insert(QStringLiteral("x_m"), tcpPose->xM);
-        tcp.insert(QStringLiteral("y_m"), tcpPose->yM);
-        tcp.insert(QStringLiteral("z_m"), tcpPose->zM);
-        tcp.insert(QStringLiteral("rx"), tcpPose->rxRad);
-        tcp.insert(QStringLiteral("ry"), tcpPose->ryRad);
-        tcp.insert(QStringLiteral("rz"), tcpPose->rzRad);
-        tcp.insert(QStringLiteral("tool_z_x"), tcpPose->toolZMx);
-        tcp.insert(QStringLiteral("tool_z_y"), tcpPose->toolZMy);
-        tcp.insert(QStringLiteral("tool_z_z"), tcpPose->toolZMz);
-        // Apex look-down: exact perpendicular, camera-up = home facing (no 180° roll).
-        // Semi-fixed ring entries force cone (require_perpendicular=false).
+        Ur3eScanTcpPose sendTcp = *tcpPose;
         const bool apexLookDown = tcpPose->toolZMz < -0.98
                                   && std::abs(tcpPose->toolZMx) < 0.15
                                   && std::abs(tcpPose->toolZMy) < 0.15;
+        if (apexLookDown && !allowPinPoseCone)
+            sendTcp = retargetApexCameraTcpToMoveItTip(sendTcp);
+        tcp.insert(QStringLiteral("x_m"), sendTcp.xM);
+        tcp.insert(QStringLiteral("y_m"), sendTcp.yM);
+        tcp.insert(QStringLiteral("z_m"), sendTcp.zM);
+        tcp.insert(QStringLiteral("rx"), sendTcp.rxRad);
+        tcp.insert(QStringLiteral("ry"), sendTcp.ryRad);
+        tcp.insert(QStringLiteral("rz"), sendTcp.rzRad);
+        tcp.insert(QStringLiteral("tool_z_x"), sendTcp.toolZMx);
+        tcp.insert(QStringLiteral("tool_z_y"), sendTcp.toolZMy);
+        tcp.insert(QStringLiteral("tool_z_z"), sendTcp.toolZMz);
+        // Apex look-down: exact perpendicular, image-up = world +X.
+        // Semi-fixed ring entries force cone (require_perpendicular=false).
         if (allowPinPoseCone)
         {
             tcp.insert(QStringLiteral("require_perpendicular"), false);

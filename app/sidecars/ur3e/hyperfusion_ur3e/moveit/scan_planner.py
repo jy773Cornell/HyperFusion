@@ -279,6 +279,79 @@ def pan_union_coverage_deg(mask_a: Sequence[bool], mask_b: Sequence[bool]) -> fl
     return 360.0 * float(covered) / float(n)
 
 
+def pan_overlap_coverage_deg(mask_a: Sequence[bool], mask_b: Sequence[bool]) -> float:
+    """Intersection of two absolute pan masks, in degrees."""
+    n = min(len(mask_a), len(mask_b))
+    if n <= 0:
+        return 0.0
+    covered = sum(1 for i in range(n) if mask_a[i] and mask_b[i])
+    return 360.0 * float(covered) / float(n)
+
+
+def pan_only_coverage_deg(mask_a: Sequence[bool], mask_b: Sequence[bool]) -> float:
+    """Degrees in *mask_a* that are not in *mask_b*."""
+    n = min(len(mask_a), len(mask_b))
+    if n <= 0:
+        return 0.0
+    covered = sum(1 for i in range(n) if mask_a[i] and not mask_b[i])
+    return 360.0 * float(covered) / float(n)
+
+
+def pan_contiguous_mask_from_entry(
+    mask: Sequence[bool], entry_pan_rad: float
+) -> List[bool]:
+    """Contiguous True run containing *entry_pan_rad* (same island Execute pans)."""
+    n = len(mask)
+    if n <= 0:
+        return []
+    bits = [bool(v) for v in mask]
+    best = 0
+    best_abs = 1.0e9
+    for i in range(n):
+        bin_pan = wrap_to_pi(TWO_PI * (float(i) / float(n)))
+        delta = abs(
+            math.atan2(
+                math.sin(bin_pan - float(entry_pan_rad)),
+                math.cos(bin_pan - float(entry_pan_rad)),
+            )
+        )
+        if delta < best_abs:
+            best_abs = delta
+            best = i
+    if not bits[best]:
+        found: Optional[int] = None
+        for step in range(1, n):
+            a = (best + step) % n
+            b = (best - step + n) % n
+            if bits[a]:
+                found = a
+                break
+            if bits[b]:
+                found = b
+                break
+        if found is None:
+            return [False] * n
+        best = found
+    start = best
+    for _ in range(n - 1):
+        prev = (start - 1 + n) % n
+        if not bits[prev]:
+            break
+        start = prev
+        if start == best:
+            break
+    out = [False] * n
+    i = start
+    for _ in range(n):
+        if not bits[i]:
+            break
+        out[i] = True
+        i = (i + 1) % n
+        if i == start:
+            break
+    return out
+
+
 def home_joints_rad_from_body(body: Optional[Dict[str, Any]]) -> List[float]:
     """Read scan home pose from HyperFusion cfg payload (degrees → radians)."""
     if not isinstance(body, dict):
@@ -333,7 +406,7 @@ class ScanPoseResult:
     home_path_ok: bool = False
     # Semi: full shoulder_pan circle at fixed other joints is collision-free.
     base_sweep_ok: bool = False
-    # Semi backup: no full-spin pin on the ring; this pin is one of the max-union pair.
+    # Semi backup: no full-spin pin; this pin is one of a complementary 2-pin pair.
     backup_coverage_ok: bool = False
     backup_union_deg: float = 0.0
     # Abs 0..360° validity bins (shared grid). Empty = not a backup pair.
@@ -2816,6 +2889,7 @@ class MoveItScanPlanner:
         desired_tool_z: Optional[Sequence[float]] = None,
         max_solutions: int = PLAN_IK_MAX_CANDIDATES,
         prefer_collision_free_ik: bool = True,
+        relax_apex_self_collision: bool = False,
     ) -> tuple[List[List[float]], str]:
         """Collect up to *max_solutions* unique valid IK joint sets (unsorted)."""
         last_error = "no IK solution"
@@ -2830,6 +2904,10 @@ class MoveItScanPlanner:
         # collision-blind IK + explicit validity (avoids false NO_IK near walls).
         avoid_modes = (True,) if prefer_collision_free_ik else (True, False)
 
+        def _apex_self_collision(reason: str) -> bool:
+            low = (reason or "").lower()
+            return "forearm" in low or "pinch" in low or "fold" in low
+
         for seed_joints in ik_seeds:
             if len(solutions) >= max_solutions:
                 break
@@ -2842,7 +2920,10 @@ class MoveItScanPlanner:
             if not seed_valid:
                 if seed_reason:
                     last_error = seed_reason
-                continue
+                # Home itself is mesh-vs-forearm in this payload. Keep every seed
+                # for Z-only apex so IK can start from the live home family.
+                if not relax_apex_self_collision:
+                    continue
 
             joints = None
             ik_error = "no IK solution"
@@ -2869,8 +2950,11 @@ class MoveItScanPlanner:
 
             valid, reason = self._state_is_valid(joints)
             if not valid:
-                last_error = reason or "invalid state"
-                continue
+                if relax_apex_self_collision and _apex_self_collision(reason or ""):
+                    pass
+                else:
+                    last_error = reason or "invalid state"
+                    continue
 
             if check_tool_z:
                 alignment = self._tool_z_alignment(joints, desired_tool_z)
@@ -2921,6 +3005,7 @@ class MoveItScanPlanner:
         allow_previous_pin_path: bool = True,
         require_base_sweep: bool = False,
         base_sweep_samples: int = 36,
+        relax_apex_self_collision: bool = False,
     ) -> tuple[Optional[List[float]], str, bool, bool, Optional[List[bool]]]:
         """Collect IK candidates; prefer any home→pin path before previous→pin.
 
@@ -2939,16 +3024,30 @@ class MoveItScanPlanner:
         instead of an elbow-flip branch. Soft joint-limit clearance still ranks
         within each family.
         """
-        solutions, ik_error = self._collect_ik_solutions(
+        slide_err = ""
+        if relax_apex_self_collision:
+            slid, slide_err = self._solve_apex_z_slide(pose, home_joints)
+            if slid is not None:
+                return slid, "", False, True, None
+        solutions, collect_error = self._collect_ik_solutions(
             pose,
             home_joints,
             ik_seeds,
             desired_tool_z=desired_tool_z,
             max_solutions=PLAN_IK_MAX_CANDIDATES,
             prefer_collision_free_ik=prefer_collision_free_ik,
+            relax_apex_self_collision=relax_apex_self_collision,
         )
         if not solutions:
-            return None, ik_error or "no IK solution", False, False, None
+            return None, slide_err or collect_error or "no IK solution", False, False, None
+        if relax_apex_self_collision:
+            closest = min(
+                solutions,
+                key=lambda j: self._joint_distance_rad(home_joints, j),
+            )
+            normalized = self._normalize_joint_solution_to_reference(home_joints, closest)
+            if normalized is not None and self._ik_joint_angles_are_sane(normalized):
+                return normalized, "", False, True, None
 
         home_elbow = float(home_joints[2])
 
@@ -3169,7 +3268,17 @@ class MoveItScanPlanner:
         *,
         min_union_deg: float,
     ) -> int:
-        """If a ring has zero full-spin pins, keep the max pan-union pair > min_union_deg."""
+        """If a ring has no full-spin pin, keep a complementary 2-pin pan pair.
+
+        Rank by the executed contiguous island from each pin's entry (what
+        Execute actually pans), not the holey raw mask. Reject same-half pairs
+        (high overlap / little unique coverage). ``backup_union_deg`` is that
+        executed union. ``min_union_deg`` boosts pairs that reach that coverage.
+        """
+        min_exec_union_deg = 180.0
+        min_unique_each_deg = 60.0
+        max_overlap_frac = 0.50
+
         by_ring: Dict[int, List[Dict[str, Any]]] = {}
         for target_index, item in partial_by_index.items():
             ring_key = int(item["ring_key"])
@@ -3184,15 +3293,73 @@ class MoveItScanPlanner:
         for ring_key, cands in by_ring.items():
             if len(cands) < 2:
                 continue
-            ranked: List[tuple[float, Dict[str, Any], Dict[str, Any]]] = []
+            ranked: List[
+                tuple[
+                    float,
+                    float,
+                    float,
+                    float,
+                    Dict[str, Any],
+                    Dict[str, Any],
+                    List[bool],
+                    List[bool],
+                ]
+            ] = []
+            skipped_same = 0
             for i in range(len(cands)):
                 for j in range(i + 1, len(cands)):
-                    union_deg = pan_union_coverage_deg(cands[i]["mask"], cands[j]["mask"])
-                    ranked.append((union_deg, cands[i], cands[j]))
-            ranked.sort(key=lambda row: row[0], reverse=True)
-            for union_deg, left, right in ranked:
-                if union_deg <= min_union_deg + 1.0e-9:
-                    break
+                    left = cands[i]
+                    right = cands[j]
+                    joints_l = left.get("joints") or []
+                    joints_r = right.get("joints") or []
+                    if len(joints_l) != 6 or len(joints_r) != 6:
+                        continue
+                    exec_l = pan_contiguous_mask_from_entry(
+                        left.get("mask") or [], float(joints_l[0])
+                    )
+                    exec_r = pan_contiguous_mask_from_entry(
+                        right.get("mask") or [], float(joints_r[0])
+                    )
+                    cov_l = pan_mask_coverage_deg(exec_l)
+                    cov_r = pan_mask_coverage_deg(exec_r)
+                    only_l = pan_only_coverage_deg(exec_l, exec_r)
+                    only_r = pan_only_coverage_deg(exec_r, exec_l)
+                    overlap = pan_overlap_coverage_deg(exec_l, exec_r)
+                    union_deg = pan_union_coverage_deg(exec_l, exec_r)
+                    smaller = min(cov_l, cov_r)
+                    same_half = smaller > 1.0e-9 and overlap >= max_overlap_frac * smaller
+                    if (
+                        same_half
+                        or only_l < min_unique_each_deg
+                        or only_r < min_unique_each_deg
+                        or union_deg < min_exec_union_deg
+                    ):
+                        skipped_same += 1
+                        continue
+                    pref = 1.0 if union_deg + 1.0e-9 >= float(min_union_deg) else 0.0
+                    ranked.append(
+                        (
+                            pref,
+                            only_l + only_r,
+                            union_deg,
+                            -overlap,
+                            left,
+                            right,
+                            exec_l,
+                            exec_r,
+                        )
+                    )
+            ranked.sort(
+                key=lambda row: (row[0], row[1], row[2], row[3]), reverse=True
+            )
+            if not ranked:
+                if skipped_same > 0:
+                    sys.stderr.write(
+                        "UR3e MoveIt: ring backup skipped — "
+                        f"{skipped_same} pair(s) were same-half / low unique pan.\n"
+                    )
+                continue
+            for _pref, unique_deg, union_deg, _neg_ov, left, right, exec_l, exec_r in ranked:
                 pair_ok = True
                 for cand in (left, right):
                     joints = [float(v) for v in cand["joints"]]
@@ -3210,7 +3377,8 @@ class MoveItScanPlanner:
                         break
                 if not pair_ok:
                     continue
-                for cand in (left, right):
+                exec_masks = (exec_l, exec_r)
+                for cand, exec_mask in zip((left, right), exec_masks):
                     result = result_by_index.get(int(cand["target_index"]))
                     sample = cand["sample"]
                     if result is None:
@@ -3220,7 +3388,7 @@ class MoveItScanPlanner:
                     result.base_sweep_ok = False
                     result.backup_coverage_ok = True
                     result.backup_union_deg = float(union_deg)
-                    result.pan_mask = [bool(v) for v in cand.get("mask") or []]
+                    result.pan_mask = [bool(v) for v in exec_mask]
                     result.joint_positions = [float(v) for v in cand["joints"]]
                     result.cone_tip_deg = float(cand["tip_deg"])
                     result.error = ""
@@ -3238,7 +3406,8 @@ class MoveItScanPlanner:
                     "UR3e MoveIt: ring backup pair "
                     f"φ={float(left['sample'].phi_deg):g}°+"
                     f"{float(right['sample'].phi_deg):g}° "
-                    f"union={union_deg:.1f}°.\n"
+                    f"exec_union={union_deg:.1f}° unique={unique_deg:.1f}° "
+                    "(complementary halves).\n"
                 )
                 break
         return accepted
@@ -3346,12 +3515,15 @@ class MoveItScanPlanner:
 
                 last_pick_error = "IK failed"
                 try:
-                    # Apex: keep the requested TCP orientation (home camera). No cone/tilt.
+                    # Apex: home XY/ori in the planning frame; only Z is the ring radius.
                     pin_target = target
                     if target.require_perpendicular:
+                        pin_target = self._apex_target_from_home(
+                            target, plan_start_seed
+                        )
                         sys.stderr.write(
-                            "UR3e MoveIt: apex pin — home camera orientation "
-                            f"(Z={pin_target.z_m:.3f} m; no extra roll, no cone, no tilt).\n"
+                            "UR3e MoveIt: apex pin — home pose with Z="
+                            f"{pin_target.z_m:.3f} m (no extra roll, no cone, no tilt).\n"
                         )
                     current_pin_seed = (
                         last_reachable_pin
@@ -3417,6 +3589,7 @@ class MoveItScanPlanner:
                                         and not pin_target.require_perpendicular
                                     ),
                                     base_sweep_samples=base_sweep_samples,
+                                    relax_apex_self_collision=pin_target.require_perpendicular,
                                 )
                             )
                             if joints is None:
@@ -3540,9 +3713,9 @@ class MoveItScanPlanner:
                 )
                 if backup_kept > 0:
                     sys.stderr.write(
-                        "UR3e MoveIt: backup 2-pin pan-union accepted "
+                        "UR3e MoveIt: backup 2-pin complementary pan accepted "
                         f"{backup_kept} pin(s) (no full-spin on those rings, "
-                        f"union>{backup_min_deg:g}°).\n"
+                        f"prefer exec union>{backup_min_deg:g}°).\n"
                     )
 
             if multi_seed_recoveries > 0:
@@ -4682,6 +4855,7 @@ class MoveItScanPlanner:
                 desired_tool_z=(sample.tool_z_x, sample.tool_z_y, sample.tool_z_z),
                 prefer_collision_free_ik=not base.require_perpendicular,
                 allow_previous_pin_path=False,
+                relax_apex_self_collision=base.require_perpendicular,
             )
             if joints is None or not home_ok:
                 continue
@@ -4795,14 +4969,20 @@ class MoveItScanPlanner:
         target: ScanPoseTarget,
         home_joints: Sequence[float],
     ) -> ScanPoseTarget:
-        """Apex = home optical TCP XY/orientation with dome-radius Z (MoveIt FK).
+        """Apex = home TCP XY/orientation in the planning frame, Z = ring radius.
 
-        Ring pins stay on the base_link-centered dome; only apex uses home TCP XY.
+        GET /pose is base_link; MoveIt IK is world. Use FK so apex matches rings.
         """
         home_pose = self._fk_ee_pose(home_joints)
         if home_pose is None:
             return target
-        hx, hy, _hz, hrx, hry, hrz = home_pose
+        hx, hy, hz, hrx, hry, hrz = home_pose
+        qx, qy, qz, qw = rotvec_to_quaternion(hrx, hry, hrz)
+        tzx, tzy, tzz = quat_tool_z_axis(qx, qy, qz, qw)
+        sys.stderr.write(
+            "UR3e MoveIt: apex from home FK "
+            f"xy=({hx:.4f},{hy:.4f}) z {hz:.3f}→{float(target.z_m):.3f} m.\n"
+        )
         return ScanPoseTarget(
             index=target.index,
             x_m=float(hx),
@@ -4811,9 +4991,9 @@ class MoveItScanPlanner:
             rx=float(hrx),
             ry=float(hry),
             rz=float(hrz),
-            tool_z_x=0.0,
-            tool_z_y=0.0,
-            tool_z_z=-1.0,
+            tool_z_x=float(tzx),
+            tool_z_y=float(tzy),
+            tool_z_z=float(tzz),
             camera_up_x=target.camera_up_x,
             camera_up_y=target.camera_up_y,
             camera_up_z=target.camera_up_z,
@@ -4821,6 +5001,43 @@ class MoveItScanPlanner:
             theta_deg=target.theta_deg,
             phi_deg=target.phi_deg,
         )
+
+    def _solve_apex_z_slide(
+        self,
+        pose: Sequence[float],
+        home_joints: Sequence[float],
+    ) -> tuple[Optional[List[float]], str]:
+        """IK from home by walking Z only (collision-blind, 10 mm steps)."""
+        home_pose = self._fk_ee_pose(home_joints)
+        if home_pose is None:
+            return None, "apex Z-slide: no home FK"
+        hx, hy, hz, hrx, hry, hrz = home_pose
+        target_z = float(pose[2])
+        span = abs(target_z - hz)
+        n_steps = max(1, int(round(span / 0.010)))
+        current = [float(v) for v in home_joints]
+        last_error = "apex Z-slide: no IK"
+        seed_pose = (hx, hy, hz, hrx, hry, hrz)
+        seed_joints, seed_err = self._solve_ik(
+            seed_pose, current, avoid_collisions=False
+        )
+        if seed_joints is not None:
+            current = self._normalize_joint_solution_to_reference(
+                home_joints, seed_joints
+            )
+        for i in range(1, n_steps + 1):
+            z = hz + (target_z - hz) * (i / float(n_steps))
+            step_pose = (hx, hy, z, hrx, hry, hrz)
+            joints, err = self._solve_ik(
+                step_pose, current, avoid_collisions=False
+            )
+            if joints is None:
+                last_error = err or last_error
+                return None, f"apex Z-slide at z={z:.3f}: {last_error}"
+            current = self._normalize_joint_solution_to_reference(home_joints, joints)
+            if not self._ik_joint_angles_are_sane(current):
+                return None, f"apex Z-slide at z={z:.3f}: invalid joint angles"
+        return current, ""
 
     def _tcp_target_for_pin_pose_cone(
         self,

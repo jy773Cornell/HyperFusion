@@ -3,7 +3,11 @@
 #include "backend/multiview/Ur3eSemiFixedScanExecute.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
+#include "backend/multiview/Ur3eHemisphereScanReachability.hpp"
+#include "backend/multiview/Ur3eWorkspaceBoundary.hpp"
 
+#include <QJsonArray>
+#include <QJsonObject>
 #include <QString>
 
 #include <algorithm>
@@ -326,7 +330,8 @@ int nearestPanMaskBin(const std::vector<std::uint8_t> &mask, const double panRad
 /// Contiguous valid abs-pan run containing the entry, as continuous radians.
 std::vector<double> backupContiguousPans(const double entryPan,
                                          const std::vector<std::uint8_t> &mask,
-                                         const int panDir)
+                                         const int panDir,
+                                         const double intervalDeg)
 {
     std::vector<double> pans;
     const int n = static_cast<int>(mask.size());
@@ -422,7 +427,31 @@ std::vector<double> backupContiguousPans(const double entryPan,
         const double cont = unwrapContinuous(k == 0 ? prev : pans.back(), absPan);
         pans.push_back(cont);
     }
-    return pans;
+    if (pans.empty())
+        return pans;
+
+    const double stepDeg = intervalDeg > 0.0 ? intervalDeg : 10.0;
+    const double arcDeg =
+        360.0 * static_cast<double>(bins.size()) / static_cast<double>(n);
+    const int samples = std::max(1, static_cast<int>(std::lround(arcDeg / stepDeg)));
+    const double existingDir =
+        (pans.size() >= 2 && pans[1] + 1.0e-9 < pans[0]) || panDir < 0 ? -1.0
+                                                                       : 1.0;
+    const double arcStart = pans.front();
+    const double stepRad = stepDeg * kDegToRad * existingDir;
+    std::vector<double> sampled;
+    sampled.reserve(static_cast<std::size_t>(samples));
+    const double maxSpan = arcDeg * kDegToRad + 1.0e-9;
+    for (int i = 0; i < samples; ++i)
+    {
+        const double p = arcStart + static_cast<double>(i) * stepRad;
+        if (std::abs(p - arcStart) > maxSpan)
+            break;
+        sampled.push_back(p);
+    }
+    if (sampled.empty())
+        sampled.push_back(entryPan);
+    return sampled;
 }
 
 bool sameRouteRingTheta(const Ur3eSemiFixedRing &a, const Ur3eSemiFixedRing &b)
@@ -439,6 +468,114 @@ std::vector<double> configuredHomeJointsRad()
     for (int i = 0; i < 6; ++i)
         home[static_cast<std::size_t>(i)] = deg[static_cast<std::size_t>(i)] * kDegToRad;
     return home;
+}
+
+bool planApexJointsOnRingSphere(const QString &serverUrl,
+                                Ur3eSemiFixedRing &top,
+                                QString *errorOut)
+{
+    if (!top.hasEntryTcp)
+    {
+        if (errorOut != nullptr)
+            *errorOut = QStringLiteral("apex TCP missing");
+        return false;
+    }
+
+    Ur3eHemisphereScanPoint grid;
+    grid.thetaDeg = 0.0;
+    grid.phiDeg = 0.0;
+    grid.xM = top.entryTcp.xM;
+    grid.yM = top.entryTcp.yM;
+    grid.zM = top.entryTcp.zM;
+    const Ur3eScanTcpPose tcp = tcpPoseForHemispherePoint(grid);
+    top.entryTcp = tcp;
+    top.hasEntryTcp = true;
+
+    QJsonObject pose;
+    pose.insert(QStringLiteral("index"), 0);
+    const Ur3eScanTcpPose ee = tcp;
+    pose.insert(QStringLiteral("x"), ee.xM);
+    pose.insert(QStringLiteral("y"), ee.yM);
+    pose.insert(QStringLiteral("z"), ee.zM);
+    pose.insert(QStringLiteral("rx"), ee.rxRad);
+    pose.insert(QStringLiteral("ry"), ee.ryRad);
+    pose.insert(QStringLiteral("rz"), ee.rzRad);
+    pose.insert(QStringLiteral("tool_z_x"), ee.toolZMx);
+    pose.insert(QStringLiteral("tool_z_y"), ee.toolZMy);
+    pose.insert(QStringLiteral("tool_z_z"), ee.toolZMz);
+    pose.insert(QStringLiteral("require_perpendicular"), true);
+    double upX = 0.0;
+    double upY = 0.0;
+    double upZ = 1.0;
+    homeApexCameraUpWorld(upX, upY, upZ);
+    pose.insert(QStringLiteral("camera_up_x"), upX);
+    pose.insert(QStringLiteral("camera_up_y"), upY);
+    pose.insert(QStringLiteral("camera_up_z"), upZ);
+
+    const Ur3eWorkspaceBoundary boundary =
+        workspaceBoundaryFromConfig(hf::hardwareConfig().ur3e);
+    QJsonObject workspace;
+    workspace.insert(QStringLiteral("enabled"), boundary.enabled);
+    workspace.insert(QStringLiteral("length_m"), boundary.lengthM());
+    workspace.insert(QStringLiteral("width_m"), boundary.widthM());
+    workspace.insert(QStringLiteral("height_m"), boundary.heightM());
+    workspace.insert(QStringLiteral("mount_height_m"), boundary.mountHeightM());
+    workspace.insert(QStringLiteral("ceiling_clearance_m"), boundary.ceilingClearanceM());
+
+    QJsonArray poses;
+    poses.append(pose);
+    QJsonObject body;
+    body.insert(QStringLiteral("poses"), poses);
+    body.insert(QStringLiteral("workspace"), workspace);
+    body.insert(QStringLiteral("pin_pose_tolerance_deg"), 0.0);
+    body.insert(QStringLiteral("scan_camera_up_world_z"),
+                hf::hardwareConfig().ur3e.scanCameraUpWorldZ);
+    appendUr3eScanHomeJointsToJson(body);
+
+    QString planErr;
+    const int planTimeoutMs = std::max(60000, hf::hardwareConfig().ur3e.planTimeoutMs);
+    const QJsonObject response =
+        ur3ePostJsonRequest(serverUrl, QStringLiteral("/plan_hemisphere_scan"), body,
+                            planTimeoutMs, &planErr);
+    if (response.isEmpty() || !response.value(QStringLiteral("ok")).toBool(false))
+    {
+        if (errorOut != nullptr)
+            *errorOut = planErr.isEmpty() ? QStringLiteral("apex plan failed") : planErr;
+        return false;
+    }
+
+    const QJsonArray results = response.value(QStringLiteral("results")).toArray();
+    if (results.isEmpty())
+    {
+        if (errorOut != nullptr)
+            *errorOut = QStringLiteral("apex plan returned no results");
+        return false;
+    }
+    const QJsonObject entry = results.at(0).toObject();
+    if (!entry.value(QStringLiteral("reachable")).toBool(false)
+        || !entry.value(QStringLiteral("home_path_ok")).toBool(true))
+    {
+        if (errorOut != nullptr)
+        {
+            const QString err = entry.value(QStringLiteral("error")).toString();
+            *errorOut = err.isEmpty() ? QStringLiteral("apex unreachable at ring R") : err;
+        }
+        return false;
+    }
+    const QJsonArray joints = entry.value(QStringLiteral("joints")).toArray();
+    if (joints.size() != 6)
+    {
+        if (errorOut != nullptr)
+            *errorOut = QStringLiteral("apex plan missing joints");
+        return false;
+    }
+    top.entryJointsRad.clear();
+    for (const QJsonValue &j : joints)
+        top.entryJointsRad.push_back(j.toDouble());
+    top.reachable = true;
+    top.homePathOk = true;
+    top.reachabilityKnown = true;
+    return true;
 }
 
 bool hardwareMoveExact(const QString &serverUrl,
@@ -815,7 +952,31 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
     const bool apexRingOnly =
         ringCount == 1
         && (route.rings[0].noPan || std::abs(route.rings[0].thetaDeg) < 0.75);
-    const bool doTop = !input.skipTop && !(apexRingOnly && !input.skipRings);
+    bool doTop = !input.skipTop && !(apexRingOnly && !input.skipRings);
+    if (doTop)
+    {
+        Ur3eSemiFixedRoute apexProbe = route;
+        ensureSemiFixedTopPose(apexProbe);
+        if (apexProbe.topPose.entryJointsRad.size() != 6)
+        {
+            if (host.log)
+                host.log(QStringLiteral(
+                    "UR3e semi-fixed: no saved apex joints — planning home pose at Z=R…"));
+            QString apexErr;
+            if (!planApexJointsOnRingSphere(input.serverUrl, apexProbe.topPose, &apexErr))
+            {
+                if (host.log)
+                    host.log(QStringLiteral("UR3e semi-fixed: apex plan failed — %1")
+                                 .arg(apexErr));
+                doTop = false;
+            }
+            else
+            {
+                route.topPose = apexProbe.topPose;
+                route.hasTopPose = true;
+            }
+        }
+    }
     const double intervalDeg =
         route.intervalDeg > 0.0 ? route.intervalDeg : 10.0;
     const int samplesPerRing = semiFixedSampleCount(intervalDeg);
@@ -866,24 +1027,32 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
         }
     }
 
-    const int topPreviewIndex = ringCount;
+    int topPreviewIndex = ringCount;
+    for (int i = 0; i < ringCount; ++i)
+    {
+        if (route.rings[i].noPan || std::abs(route.rings[i].thetaDeg) < 0.75)
+        {
+            topPreviewIndex = i;
+            break;
+        }
+    }
     std::vector<double> lastEntryBranch;
     bool hasLastEntryBranch = false;
     if (doTop)
     {
         Ur3eSemiFixedRoute routeCopy = route;
         ensureSemiFixedTopPose(routeCopy);
-        const Ur3eSemiFixedRing &top = routeCopy.topPose;
+        Ur3eSemiFixedRing top = routeCopy.topPose;
 
         if (host.setActiveRing)
             host.setActiveRing(topPreviewIndex);
         if (host.log)
-            host.log(QStringLiteral("UR3e semi-fixed: MoveIt → top (θ=0) for first still…"));
+            host.log(QStringLiteral("UR3e semi-fixed: MoveIt → apex at ring R (θ=0)…"));
 
         QString moveErr;
         bool stopped = false;
         const Ur3eScanTcpPose *tcpPtr = top.hasEntryTcp ? &top.entryTcp : nullptr;
-        // Top / θ=0: exact look-down — no pin-pose cone.
+        // Top / θ=0: home XY + orientation, Z = ring R — no pin-pose cone.
         if (!moveItToJoints(input.serverUrl, top.entryJointsRad, tcpPtr, &moveErr, &stopped,
                             false))
         {
@@ -1152,7 +1321,8 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
         }
         else if (backupPartial)
         {
-            samplePans = backupContiguousPans(entryBranch[0], ring.panMask, panDir);
+            samplePans = backupContiguousPans(entryBranch[0], ring.panMask, panDir,
+                                             intervalDeg);
             if (samplePans.empty())
                 samplePans.push_back(entryBranch[0]);
             if (host.log)

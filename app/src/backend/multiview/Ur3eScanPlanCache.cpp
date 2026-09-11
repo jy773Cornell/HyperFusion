@@ -145,6 +145,16 @@ QJsonObject robotCfgFingerprintObject(const hf::HardwareConfig::Ur3eConfig &ur3e
     fp.insert(QStringLiteral("scan_center_from_home_tcp"), false);
     fp.insert(QStringLiteral("scan_center_base_xy"), true);
     fp.insert(QStringLiteral("apex_over_home_tcp_xy"), true);
+    fp.insert(QStringLiteral("apex_on_ring_sphere"), true);
+    fp.insert(QStringLiteral("apex_look_down"), false);
+    fp.insert(QStringLiteral("apex_keep_home_pose_z_radius"), true);
+    fp.insert(QStringLiteral("apex_tcp"), QStringLiteral("scan"));
+    fp.insert(QStringLiteral("camera_tcp_x_mm"), ur3e.toolTcpXMm);
+    fp.insert(QStringLiteral("camera_tcp_y_mm"), ur3e.toolTcpYMm);
+    fp.insert(QStringLiteral("camera_tcp_z_mm"), ur3e.toolTcpZMm);
+    fp.insert(QStringLiteral("camera_tcp_roll_deg"), ur3e.toolTcpRollDeg);
+    fp.insert(QStringLiteral("camera_tcp_pitch_deg"), ur3e.toolTcpPitchDeg);
+    fp.insert(QStringLiteral("camera_tcp_yaw_deg"), ur3e.toolTcpYawDeg);
 
     QJsonArray home;
     for (const double deg : ur3e.homeJointsDeg)
@@ -345,7 +355,8 @@ QString ur3eScanPlanFingerprint(const hf::HardwareConfig::Ur3eConfig &ur3e,
     fp.insert(QStringLiteral("theta_min_deg"), params.thetaMinDeg);
     fp.insert(QStringLiteral("theta_max_deg"), params.thetaMaxDeg);
     fp.insert(QStringLiteral("always_apex_pin"), true);
-    fp.insert(QStringLiteral("apex_camera_up_world_x"), true);
+    fp.insert(QStringLiteral("apex_keep_home_pose_z_radius"), true);
+    fp.insert(QStringLiteral("apex_look_down"), false);
     fp.insert(QStringLiteral("apex_no_cone"), true);
     return QString::fromUtf8(QJsonDocument(fp).toJson(QJsonDocument::Compact));
 }

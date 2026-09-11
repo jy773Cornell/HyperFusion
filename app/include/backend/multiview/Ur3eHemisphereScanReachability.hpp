@@ -112,8 +112,13 @@ struct Ur3eHemisphereScanPlan
 
 
 /// TCP pose with inward-facing tool axis for a dome grid point.
+/// Apex keeps home XY/orientation and sets Z = R; rings use the active scan tip.
 
 [[nodiscard]] Ur3eScanTcpPose tcpPoseForHemispherePoint(const Ur3eHemisphereScanPoint &gridPoint);
+
+/// Legacy no-op: apex is already the active scan TCP (home pose, Z = R).
+
+[[nodiscard]] Ur3eScanTcpPose retargetApexCameraTcpToMoveItTip(Ur3eScanTcpPose cameraTcp);
 
 
 

@@ -282,7 +282,9 @@ BfsCameraSettingsWidget::BfsCameraSettingsWidget(QWidget *parent)
     rootLayout->addWidget(scroll, 1);
 
     captureBtn_ = new QPushButton(QStringLiteral("Capture"), this);
-    captureBtn_->setToolTip(QStringLiteral("Save the latest streamed frame as a TIFF image."));
+    captureBtn_->setToolTip(
+        QStringLiteral("DLP connected: 26-frame HDMI FPP burst at the current pose "
+                       "(no robot or stage motion). DLP off: one TIFF."));
     captureBtn_->setEnabled(false);
     captureBtn_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
     auto *captureBar = new QWidget(this);

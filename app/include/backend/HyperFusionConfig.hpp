@@ -172,10 +172,11 @@ struct HardwareConfig
         ScanTcpKind scanTcp = ScanTcpKind::Camera;
         /// DLP projector lens in tool0 (mm + URDF rpy deg). Same convention as tool_tcp_*.
         /// Fusion CAD face (−x, −y, +z) → tool0 (−x, −y, z) after mesh pan-180.
+        /// +25° roll: mesh lens +Z leans toward the camera (−Y tool0).
         double dlpTcpXMm = 0.372;
         double dlpTcpYMm = 57.104;
         double dlpTcpZMm = 27.4994;
-        double dlpTcpRollDeg = 0.0;
+        double dlpTcpRollDeg = 25.0;
         double dlpTcpPitchDeg = 0.0;
         double dlpTcpYawDeg = 0.0;
 
@@ -270,7 +271,7 @@ struct HardwareConfig
         int ledBlueMa = 2400;
         /// Qt screen index for the EVM HDMI display. -1 = auto (1280×720, else non-primary).
         int hdmiScreenIndex = -1;
-        /// Optional override of calibration/multiview/patterns/psp.
+        /// Optional override of calibration/multiview/fpp_cal/patterns/psp.
         QString hdmiPatternDir;
     };
 
