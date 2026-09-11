@@ -6,13 +6,16 @@
 #include "backend/multiview/BfsTiffIo.hpp"
 #include "backend/multiview/Ur3eCameraTransforms.hpp"
 #include "backend/HyperFusionConfig.hpp"
+#include "frontend/controllers/DlpPanelController.hpp"
 #include "frontend/controllers/Ur3ePanelController.hpp"
 #include "frontend/logging/AppLog.hpp"
 #include "frontend/widgets/BfsCameraSettingsWidget.hpp"
 #include "frontend/widgets/MainWindow.hpp"
 #include "frontend/widgets/StreamPaneHelpers.hpp"
+#include "backend/fpp/DlpTypes.hpp"
 
 #include <QDateTime>
+#include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFont>
@@ -103,6 +106,10 @@ void BfsPanelController::initializeWorker()
 
 void BfsPanelController::shutdownSync()
 {
+    if (fppBurstThread_.joinable())
+        fppBurstThread_.join();
+    fppBurstBusy_ = false;
+
     if (worker_ == nullptr)
         return;
 
@@ -270,6 +277,63 @@ void BfsPanelController::onCaptureClicked()
     if (host_ == nullptr)
         return;
 
+    hf::dlp::DlpPanelController *dlp = host_->dlpPanel();
+    if (dlp != nullptr && dlp->isConnected())
+    {
+        if (fppBurstBusy_ || (host_->ur3ePanel() != nullptr && host_->ur3ePanel()->isScanExecuting()))
+        {
+            QMessageBox::warning(host_,
+                                 QStringLiteral("BFS Capture"),
+                                 QStringLiteral("An FPP burst is already running."));
+            return;
+        }
+        if (host_->ur3ePanel() == nullptr)
+        {
+            QMessageBox::warning(host_,
+                                 QStringLiteral("BFS Capture"),
+                                 QStringLiteral("UR3e panel unavailable for FPP burst."));
+            return;
+        }
+        BfsRgbFrame preview;
+        if (!tryCopyLastFrame(preview))
+        {
+            QMessageBox::warning(host_,
+                                 QStringLiteral("BFS Capture"),
+                                 QStringLiteral("No streamed frame available to start an FPP burst."));
+            return;
+        }
+
+        const QString parentDir = QFileDialog::getExistingDirectory(
+            host_,
+            QStringLiteral("Save FPP burst (26 HDMI frames)"),
+            QString(),
+            QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
+        if (parentDir.isEmpty())
+            return;
+
+        const QString stamp =
+            QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
+        const QString captureDir =
+            QDir(parentDir).filePath(QStringLiteral("multiview_%1").arg(stamp));
+        if (!QDir().mkpath(captureDir))
+        {
+            QMessageBox::warning(host_,
+                                 QStringLiteral("BFS Capture"),
+                                 QStringLiteral("Could not create folder:\n%1").arg(captureDir));
+            return;
+        }
+
+        host_->appendLog(
+            hf::log::Channel::Ur3e,
+            QStringLiteral("BFS Capture: DLP connected — stationary FPP burst (%1 frames) → %2")
+                .arg(hf::dlp::kFppScanningStepCount)
+                .arg(captureDir));
+        startStationaryFppBurst(captureDir);
+        return;
+    }
+
+    // DLP off: one still (existing Capture).
+
     BfsRgbFrame frame;
     if (!tryCopyLastFrame(frame))
     {
@@ -383,6 +447,55 @@ void BfsPanelController::onCaptureClicked()
                             .arg(jsonPath));
             }
         }
+    }
+}
+
+void BfsPanelController::startStationaryFppBurst(const QString &captureDir)
+{
+    if (fppBurstThread_.joinable())
+        fppBurstThread_.join();
+    fppBurstBusy_ = true;
+    if (host_->bfsCameraSettings_ != nullptr)
+        host_->bfsCameraSettings_->setCaptureEnabled(false);
+
+    hf::ur3e::Ur3ePanelController *ur3e = host_->ur3ePanel();
+    fppBurstThread_ = std::thread([this, ur3e, captureDir]() {
+        QString error;
+        const bool ok = ur3e != nullptr && ur3e->captureStationaryFppBurst(captureDir, &error);
+        const QString detail = ok ? captureDir : error;
+        QMetaObject::invokeMethod(
+            this,
+            [this, ok, detail]() { finishStationaryFppBurst(ok, detail); },
+            Qt::QueuedConnection);
+    });
+}
+
+void BfsPanelController::finishStationaryFppBurst(const bool ok, const QString &detail)
+{
+    fppBurstBusy_ = false;
+    if (fppBurstThread_.joinable())
+        fppBurstThread_.join();
+
+    const bool streaming = worker_ != nullptr
+        && (worker_->currentState() == BfsCameraState::Streaming
+            || worker_->currentState() == BfsCameraState::Connected);
+    if (host_ != nullptr && host_->bfsCameraSettings_ != nullptr)
+        host_->bfsCameraSettings_->setCaptureEnabled(streaming);
+
+    if (host_ == nullptr)
+        return;
+    if (ok)
+    {
+        host_->appendLog(hf::log::Channel::Ur3e,
+                         QStringLiteral("BFS Capture: FPP burst saved → %1").arg(detail));
+    }
+    else
+    {
+        host_->appendLog(hf::log::Channel::Ur3e,
+                         QStringLiteral("BFS Capture: FPP burst failed — %1").arg(detail));
+        QMessageBox::critical(host_,
+                              QStringLiteral("BFS Capture"),
+                              QStringLiteral("FPP burst failed:\n%1").arg(detail));
     }
 }
 

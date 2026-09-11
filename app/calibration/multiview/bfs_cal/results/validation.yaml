@@ -1,0 +1,38 @@
+ok: true
+count: 8
+translation_err_mm_median: 2.6319870572889643
+rotation_err_deg_median: 0.2948431627536535
+pnp_rms_px_median: 0.7797421813011169
+frames:
+- file: 00098.tif
+  translation_err_mm: 2.56097228169253
+  rotation_err_deg: 0.23094122431866324
+  pnp_rms_px: 0.8283048272132874
+- file: 00099.tif
+  translation_err_mm: 4.557246650751819
+  rotation_err_deg: 0.31640337221859544
+  pnp_rms_px: 0.767103910446167
+- file: 00100.tif
+  translation_err_mm: 2.7030018328853984
+  rotation_err_deg: 0.23132290316949336
+  pnp_rms_px: 0.7838916778564453
+- file: 00101.tif
+  translation_err_mm: 2.4213363741382437
+  rotation_err_deg: 0.33541895856721315
+  pnp_rms_px: 0.7755926847457886
+- file: 00102.tif
+  translation_err_mm: 13.453882520901063
+  rotation_err_deg: 3.942721193660962
+  pnp_rms_px: 0.7941089272499084
+- file: 00103.tif
+  translation_err_mm: 28.402627318129465
+  rotation_err_deg: 4.2841281919621865
+  pnp_rms_px: 0.7975490093231201
+- file: 00104.tif
+  translation_err_mm: 1.522275085087852
+  rotation_err_deg: 0.27328295328871155
+  pnp_rms_px: 0.7461892366409302
+- file: 00105.tif
+  translation_err_mm: 1.3446837981808697
+  rotation_err_deg: 0.21029590363598796
+  pnp_rms_px: 0.7492147088050842

@@ -5,12 +5,14 @@
 #include "frontend/streaming/StreamFpsTracker.hpp"
 
 #include <QObject>
+#include <QString>
 #include <QTimer>
 
 #include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <thread>
 
 class MainWindow;
 
@@ -46,6 +48,8 @@ private:
     void onConnectClicked();
     void onDisconnectClicked();
     void onCaptureClicked();
+    void startStationaryFppBurst(const QString &captureDir);
+    void finishStationaryFppBurst(bool ok, const QString &detail);
     void onSettingsEdited();
     void applySettingsFromUi();
     void onStateChanged(BfsCameraState state);
@@ -68,5 +72,7 @@ private:
     std::optional<BfsRgbFrame> lastFrame_;
     ui::StreamFpsTracker streamFps_;
     QTimer *settingsApplyTimer_ = nullptr;
+    std::thread fppBurstThread_;
+    bool fppBurstBusy_ = false;
 };
 } // namespace hf::bfs

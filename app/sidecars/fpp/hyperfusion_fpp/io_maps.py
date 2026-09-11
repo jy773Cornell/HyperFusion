@@ -15,6 +15,7 @@ from .depth import DepthResult
 
 
 def _save_preview(path: Path, data: np.ndarray, mask: np.ndarray, title: str) -> None:
+    """Preview PNG: invalid / unlit pixels are black (not white)."""
     vis = np.array(data, dtype=np.float32, copy=True)
     vis[~mask | ~np.isfinite(vis)] = np.nan
     finite = vis[np.isfinite(vis)]
@@ -23,13 +24,18 @@ def _save_preview(path: Path, data: np.ndarray, mask: np.ndarray, title: str) ->
         vmin, vmax = np.percentile(finite, (2.0, 98.0))
         if not np.isfinite(vmin) or not np.isfinite(vmax) or vmin >= vmax:
             vmin = vmax = None
-    fig, ax = plt.subplots(figsize=(8, 6))
-    im = ax.imshow(vis, cmap="turbo", vmin=vmin, vmax=vmax)
-    ax.set_title(title)
+    cmap = plt.get_cmap("turbo").copy()
+    cmap.set_bad(color="black")
+    fig, ax = plt.subplots(figsize=(8, 6), facecolor="black")
+    ax.set_facecolor("black")
+    im = ax.imshow(vis, cmap=cmap, vmin=vmin, vmax=vmax)
+    ax.set_title(title, color="white")
     ax.axis("off")
-    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.ax.yaxis.set_tick_params(color="white")
+    plt.setp(cbar.ax.yaxis.get_ticklabels(), color="white")
     fig.tight_layout()
-    fig.savefig(path, dpi=120)
+    fig.savefig(path, dpi=120, facecolor=fig.get_facecolor())
     plt.close(fig)
 
 
@@ -50,13 +56,13 @@ def write_decode_maps(out_dir: Path, decoded: DecodeResult, stem: str = "fpp") -
 
 def write_depth_maps(out_dir: Path, depth: DepthResult, stem: str = "fpp") -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    np.save(out_dir / f"{stem}_depth.npy", depth.depth_m)
-    np.save(out_dir / f"{stem}_disparity_u.npy", depth.disparity_u)
-    _save_preview(out_dir / f"{stem}_depth.png", depth.depth_m, depth.mask, "Projector u (px)")
-    if np.isfinite(depth.disparity_u).any():
+    np.save(out_dir / f"{stem}_depth.npy", depth.depth)
+    if depth.units == "mm":
+        _save_preview(out_dir / f"{stem}_depth.png", depth.depth, depth.mask, "Camera Z (mm)")
+    else:
         _save_preview(
-            out_dir / f"{stem}_disparity_u.png",
-            depth.disparity_u,
+            out_dir / f"{stem}_depth.png",
+            depth.depth,
             depth.mask,
-            "Δu vs plane (px)",
+            "Projector u (px)",
         )

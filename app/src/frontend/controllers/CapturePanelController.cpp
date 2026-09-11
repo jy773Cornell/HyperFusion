@@ -1060,10 +1060,13 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
       host_->captureRunGsamCheck_ != nullptr &&
       host_->captureRunGsamCheck_->isChecked();
   const bool bothCamerasConnected = bothFx10eAndSwir3CaptureCamerasConnected();
-  const bool fusionEnabled =
-      gsamChecked && idleOfflinePreprocess && bothCamerasConnected;
+  // Keep the user's fusion choice during a scan/post-process. Only clear it
+  // when GSAM is off or a camera is missing — otherwise after-scan fusion
+  // reads a checkbox that updateCaptureControls() just unchecked.
+  const bool fusionPrereqs = gsamChecked && bothCamerasConnected;
+  const bool fusionEnabled = fusionPrereqs && idleOfflinePreprocess;
   if (host_->captureRunHfFusionCheck_ != nullptr) {
-    if (!fusionEnabled) {
+    if (!fusionPrereqs) {
       const QSignalBlocker blocker(host_->captureRunHfFusionCheck_);
       host_->captureRunHfFusionCheck_->setChecked(false);
     }

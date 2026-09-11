@@ -783,6 +783,78 @@ bool Ur3ePanelController::tryGetLiveOpticalTcpPose(Ur3eScanTcpPose *out,
     return true;
 }
 
+bool Ur3ePanelController::captureStationaryFppBurst(const QString &captureDir, QString *errorMessage)
+{
+    if (host_ == nullptr)
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("BFS / UR3e host unavailable.");
+        return false;
+    }
+    if (host_->dlpPanel() == nullptr || !host_->dlpPanel()->isConnected())
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("DLP not connected.");
+        return false;
+    }
+
+    Ur3eScanTcpPose planned{};
+    QString poseError;
+    if (!tryGetLiveOpticalTcpPose(&planned, &poseError, nullptr))
+    {
+        QMetaObject::invokeMethod(
+            this,
+            [this, poseError]() {
+                host_->appendLog(
+                    QStringLiteral(
+                        "BFS Capture FPP: no live TCP (%1) — writing stills without a planned pose.")
+                        .arg(poseError));
+            },
+            Qt::QueuedConnection);
+    }
+
+    const QString serverUrl =
+        serverManager_ != nullptr ? serverManager_->serverUrl() : QString();
+    int captured = 0;
+    TransformsJsonDocument transformsDoc;
+    bool ok = true;
+    QString err;
+    const bool burstOk = capturePinStillsMaybeFpp(this,
+                                                  host_,
+                                                  serverUrl,
+                                                  captureDir,
+                                                  planned,
+                                                  &captured,
+                                                  &transformsDoc,
+                                                  &ok,
+                                                  &err,
+                                                  QStringLiteral("BFS Capture (stationary)"),
+                                                  []() { return true; },
+                                                  {});
+    if (!burstOk)
+    {
+        if (errorMessage != nullptr)
+        {
+            *errorMessage = err.isEmpty() ? QStringLiteral("FPP burst failed.") : err;
+        }
+        return false;
+    }
+    if (captured <= 0)
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("FPP burst wrote no stills.");
+        return false;
+    }
+    QString writeError;
+    if (!writeTransformsJson(captureDir, transformsDoc, &writeError, false))
+    {
+        if (errorMessage != nullptr)
+            *errorMessage = writeError;
+        return false;
+    }
+    return true;
+}
+
 void Ur3ePanelController::applyHardwareConfigToUi()
 {
     const hf::HardwareConfig::Ur3eConfig &cfg = hf::hardwareConfig().ur3e;
@@ -3233,17 +3305,18 @@ void Ur3ePanelController::refreshSemiFixedPreview()
         return;
 
     QVector<Ur3eSemiFixedPreviewRing> rings;
+    const Ur3eHemisphereScanParams params =
+        host_->ur3eHemisphereScanSettings_->semiPlanParams();
+    if (host_->ur3eScanRoutePlanWidget_ != nullptr)
+        host_->ur3eScanRoutePlanWidget_->setScanParams(params);
     const Ur3eSemiFixedRoute route = host_->ur3eHemisphereScanSettings_->semiFixedRoute();
-    // Route entries match execute indices (backup 2-pin rings are two hops).
-    if (!route.rings.isEmpty() || route.hasTopPose)
+    // Canned default top is always injected; only real planned/added rings skip params.
+    if (!route.rings.isEmpty())
         rings = inferSemiFixedPreviewRings(route);
     else if (!plannedScanPlan_.points.empty())
         rings = previewSemiFixedRingsFromHemispherePlan(plannedScanPlan_);
     else
-    {
-        rings = previewSemiFixedRingsFromScanParams(
-            host_->ur3eHemisphereScanSettings_->semiPlanParams());
-    }
+        rings = previewSemiFixedRingsFromScanParams(params);
     host_->ur3eScanRoutePlanWidget_->setSemiFixedPreviewRings(rings);
 }
 

@@ -182,6 +182,23 @@ def list_burst_starts(directory: Path) -> list[Path]:
     return starts
 
 
+def list_burst_jobs(root: Path) -> list[tuple[Path, Path]]:
+    """(burst_dir, start_tiff) in *root* and one-level child folders (Execute's multiview_*)."""
+    root = Path(root)
+    jobs: list[tuple[Path, Path]] = [(root, start) for start in list_burst_starts(root)]
+    if not root.is_dir():
+        return jobs
+    seen = {(str(d.resolve()), s.name) for d, s in jobs}
+    for child in sorted(p for p in root.iterdir() if p.is_dir()):
+        for start in list_burst_starts(child):
+            key = (str(child.resolve()), start.name)
+            if key in seen:
+                continue
+            seen.add(key)
+            jobs.append((child, start))
+    return jobs
+
+
 def load_burst(directory: Path, start: Path | None = None) -> FppBurst:
     directory = directory.resolve()
     tiffs = sorted(directory.glob("*.tif"), key=_stem_sort_key)

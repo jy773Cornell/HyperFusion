@@ -1,0 +1,80 @@
+{
+  "ok": true,
+  "input": "C:\\Users\\jy773\\Downloads\\FPP_CAL",
+  "n_ok": 16,
+  "n_skipped": 0,
+  "n_fit": 13,
+  "n_holdout": 3,
+  "fit_stems": [
+    "multiview_20260911_165130/00000.tif",
+    "multiview_20260911_165712/00000.tif",
+    "multiview_20260911_171315/00000.tif",
+    "multiview_20260911_171549/00000.tif",
+    "multiview_20260911_171655/00000.tif",
+    "multiview_20260911_171952/00000.tif",
+    "multiview_20260911_172734/00000.tif",
+    "multiview_20260911_173517/00000.tif",
+    "multiview_20260911_173854/00000.tif",
+    "multiview_20260911_174005/00000.tif",
+    "multiview_20260911_174311/00000.tif",
+    "multiview_20260911_174505/00000.tif",
+    "multiview_20260911_174605/00000.tif"
+  ],
+  "holdout_stems": [
+    "multiview_20260911_174847/00000.tif",
+    "multiview_20260911_174951/00000.tif",
+    "multiview_20260911_175138/00000.tif"
+  ],
+  "skipped": [],
+  "fit": {
+    "n_views": 13,
+    "projector_rms_px": 2.5043741869521066,
+    "stereo_rms_px": 2.3131395665309014,
+    "stereo_from": "stereoCalibrate",
+    "baseline_mm": 104.56427525509889
+  },
+  "train_mm": {
+    "rms_mm": 2.6538750289814366,
+    "med_mm": 1.6500049764621267,
+    "p95_mm": 5.050410992870784,
+    "max_mm": 11.333712123961012,
+    "reproj_rms_uv": 1.0937968675534582
+  },
+  "holdout_mm": {
+    "rms_mm": 2.267091650405036,
+    "med_mm": 1.2483994353519448,
+    "p95_mm": 5.027652814494117,
+    "max_mm": 7.635480292756357,
+    "reproj_rms_uv": 0.9616237688163309
+  },
+  "holdout_views": [
+    {
+      "stem": "00000",
+      "ok": true,
+      "n": 70,
+      "rms_mm": 1.4863098563740087,
+      "med_mm": 1.0610508419095808,
+      "max_mm": 3.5667018955146785,
+      "reproj_rms_uv": 0.8023056366021952
+    },
+    {
+      "stem": "00000",
+      "ok": true,
+      "n": 70,
+      "rms_mm": 1.4139328522927166,
+      "med_mm": 1.0018549133142995,
+      "max_mm": 3.3643400560398957,
+      "reproj_rms_uv": 0.6263924909707539
+    },
+    {
+      "stem": "00000",
+      "ok": true,
+      "n": 70,
+      "rms_mm": 3.348251865386106,
+      "med_mm": 2.2862677723373914,
+      "max_mm": 7.635480292756357,
+      "reproj_rms_uv": 1.3183698005451172
+    }
+  ],
+  "stereo": "D:\\Pototypy\\HyperFusion\\app\\calibration\\multiview\\fpp_cal\\results\\camera_projector_stereo.yaml"
+}

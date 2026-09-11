@@ -6,7 +6,7 @@ Working directory for **BFS camera intrinsics**, **flange → camera** (hand–e
 
 Written into `hyperfusion.cfg` and `hyperfusion_tcp` (xyz **and** rpy). Dummy `fx=4638` and CAD TCP are retired.
 
-**Dataset:** `checkerboard/` — 72 stills (clipped frames and 180° flip `00082` removed). 4096×3000. 72/72 detected (`10×7`). Fit 64, hold-out last 8. `00108` (glare) already gone.
+**Dataset:** `bfs_cal/checkerboard/` — current BFS stills + live tool0 JSON. 4096×3000. `10×7` inner corners.
 
 ### Intrinsics `K`, `D`
 
@@ -19,9 +19,7 @@ Written into `hyperfusion.cfg` and `hyperfusion_tcp` (xyz **and** rpy). Dummy `f
 | `bfs_camera_cy` | 1526.0259879957282 |
 | `bfs_camera_distortion` | −0.16223465, 0.10156067, 0.0025228506, 0.00068692294, −0.029189458 |
 
-Free `calibrateCamera` (not locked to 4638). `fx ≈ 1788` matches ~200 mm working distance. YAML: `results/camera_intrinsics.yaml`. Undistort before/after: `results/undistort_preview/`.
-
-Old still JSONs in `checkerboard/` still say `fx=4638` (capture log). The solver used the images. New stills write the measured `K,D` from cfg.
+Free `calibrateCamera` (not locked to 4638). `fx ≈ 1788` matches ~200 mm working distance. YAML: `bfs_cal/results/camera_intrinsics.yaml`. Undistort before/after: `bfs_cal/results/undistort_preview/`.
 
 ### Hand–eye Tsai (`tool0` → camera)
 
@@ -30,13 +28,13 @@ Old still JSONs in `checkerboard/` still say `fx=4638` (capture log). The solver
 | xyz mm | (0, −56.035, 81.825) | **(0.715, −54.197, 73.755)** |
 | rpy deg | 0, 0, 0 | **(−1.9138, 0.7450, 0.2868)** ≈ 2° |
 
-Optical +Z is ~2° off `tool0` +Z. `hyperfusion_tcp` uses the full SE(3). YAML: `results/flange_T_camera.yaml`.
+Optical +Z is ~2° off `tool0` +Z. `hyperfusion_tcp` uses the full SE(3). YAML: `bfs_cal/results/flange_T_camera.yaml`.
 
 Fit-set `base_T_board` cluster: median **0.29 mm / 0.10°**, max **2.5 mm / 0.71°** (after dropping `00082`).
 
 ### Board in `base_link`
 
-Origin ≈ **(12.5, −95.6, 629) mm**, yaw ≈ 90°. That Z is the printed-corner stand-off, not tray center. Cfg `ceiling_mount_height_mm = 629` matches this plane. YAML: `results/base_T_board.yaml`.
+Origin ≈ **(12.5, −95.6, 629) mm**, yaw ≈ 90°. That Z is the printed-corner stand-off, not tray center. Cfg `ceiling_mount_height_mm` should match this plane. YAML: `bfs_cal/results/base_T_board.yaml`.
 
 ### Hold-out (last 8)
 
@@ -46,7 +44,7 @@ Origin ≈ **(12.5, −95.6, 629) mm**, yaw ≈ 90°. That Z is the printed-corn
 | rotation | **0.15°** | &lt; 0.5° |
 | PnP RMS | **0.67 px** | &lt; 0.5 px |
 
-YAML: `results/validation.yaml`.
+YAML: `bfs_cal/results/validation.yaml`.
 
 ### Live check (`multiview_20260817_160212`)
 
@@ -63,7 +61,7 @@ Apex `00000`: optical TCP **199 mm** above tray (plan 200 mm). Intrinsics in tha
 | Intrinsics `K` | Measured `bfs_camera_fx/fy/cx/cy` |
 | Distortion `D` | Brown–Conrady in `bfs_camera_distortion`; stills store `D`; live view stays raw |
 | Optical TCP | Tsai `tool_tcp_*_mm` + `tool_tcp_roll/pitch/yaw_deg` on `hyperfusion_tcp` |
-| Board / tray | Averaged `base_link → board` in `results/base_T_board.yaml` |
+| Board / tray | Averaged `base_link → board` in `bfs_cal/results/base_T_board.yaml` |
 
 Do **not** hand–eye against `hyperfusion_tcp`. That frame already includes `tool_tcp_*`. Gripper frame is **`tool0` (flange)**.
 
@@ -95,23 +93,20 @@ OpenCV `calibrateHandEye(...)` returns **`Flange T Camera`**.
 
 ```
 app/calibration/multiview/
-  board.yaml
-  checkerboard/          # current stills + live tool0 JSON (this calibration)
-  captures/              # extra stamped sets
-  results/
-    camera_intrinsics.yaml
-    undistort_preview/
-    eval_preview/
-    flange_T_camera.yaml
-    base_T_board.yaml
-    validation.yaml
-  FPP/                   # flat-surface FPP bursts (26 HDMI PSP frames, u+v)
-  patterns/psp/          # 1280×720 HDMI sine frames shown on the EVM
-  scripts/
+  bfs_cal/
     calibrate_bfs.py     # checkerboard K/D + hand-eye
-    calibrate_fpp.py     # DLP plane / projector P
-    generate_psp.py      # regenerate HDMI sine PNGs
-    requirements.txt
+    board.yaml
+    checkerboard/        # BFS stills + live tool0 JSON
+    results/             # K/D, hand-eye, board, validation
+  fpp_cal/
+    calibrate_fpp_geometry.py  # camera–projector stereo (metric)
+    check_fpp_board.py
+    generate_psp.py            # regenerate HDMI sine PNGs
+    checkerboard/              # GOOD bursts 00000–00015
+    patterns/psp/              # 1280×720 HDMI sine frames shown on the EVM
+    results/                   # camera_projector_stereo.yaml
+  scripts/
+    requirements.txt     # shared venv deps
 ```
 
 ---
@@ -122,7 +117,7 @@ app/calibration/multiview/
 
 - Rigid, flat board. A4 sheet (~297 × 210 mm) is fine; printed area is not the OpenCV pattern span.
 - **Squares vs inner corners:** an `11 × 8` square grid has **`10 × 7` inner corners**.
-- **Measured square size: 22 mm.** Inner-corner span is **220 × 154 mm**. Store this in `board.yaml`; object points use metres (`0.022`).
+- **Measured square size: 18 mm.** Inner-corner span is **180 × 126 mm**. Store this in `board.yaml`; object points use metres (`0.018`).
 - Board frame (write it in `board.yaml` and do not change it):
   - origin = top-left **inner** corner as seen in a nadir image
   - +X along the long side (width)
@@ -150,7 +145,7 @@ Drop a pose if detection fails (`00082` was a 180° origin flip — 238 mm / 180
 1. Detect corners on **raw** TIFFs.
 2. Object points from **22 mm** squares and `(10, 7)`.
 3. `cv2.calibrateCamera` → 5-coeff Brown–Conrady. Do not lock fx to 4638.
-4. Write `results/camera_intrinsics.yaml`.
+4. Write `bfs_cal/results/camera_intrinsics.yaml`.
 5. Copy `bfs_camera_*` into `hyperfusion.cfg` after reviewing RMS and undistort previews.
 
 Today the app **stores** `D` in still JSON; it does **not** remap live pixels.
@@ -193,19 +188,27 @@ Targets: **&lt; 2 mm**, **&lt; 0.5°**, **&lt; 0.5 px**. This set: 0.57 mm, 0.15
 cd app\calibration\multiview
 python -m venv .venv
 .\.venv\Scripts\pip install -r scripts\requirements.txt
-.\.venv\Scripts\python scripts\calibrate_bfs.py --images checkerboard --board board.yaml --out results --holdout 8
+.\.venv\Scripts\python bfs_cal\calibrate_bfs.py --holdout 8
 ```
 
 Results: `camera_intrinsics.yaml`, `undistort_preview/`, `flange_T_camera.yaml`, `base_T_board.yaml`, `validation.yaml`.
 
-### FPP plane (separate from BFS)
+### FPP geometry (checkerboard in the DLP patch — no empty tray)
 
-One HDMI PSP burst **per robot pose** (same folder). Each pose gets its own `P` / `u` map.
+Same 10×7 / **18 mm** board as `bfs_cal/board.yaml`. Robot **nadir, one pin**, stage locked. Connect DLP. Execute once per board pose (26 frames). Keep GOOD bursts under `fpp_cal/checkerboard/` as `00000`–`00015` (13 fit + 3 hold-out). Whole board must sit inside the bright rectangle.
 
 ```powershell
-.\.venv\Scripts\python scripts\calibrate_fpp.py --input FPP --out FPP
+.\.venv\Scripts\python fpp_cal\check_fpp_board.py --input fpp_cal\checkerboard
+.\.venv\Scripts\python fpp_cal\calibrate_fpp_geometry.py --holdout 3
 ```
 
-Writes `{stem}_fpp_calib.npz` and `fpp_calib_index.json`. Tray Z in `base_link` defaults to `ceiling_mount_height_mm` (not world 0). Sample decode: `app/sidecars/fpp/fpp_cli.py --calib FPP`.
+Writes `fpp_cal/results/camera_projector_stereo.yaml`. Offline object depth:
+
+```powershell
+cd app\sidecars\fpp
+..\..\calibration\multiview\.venv\Scripts\python fpp_cli.py --input D:\path\to\burst --out D:\path\to\out
+```
+
+(defaults to that stereo YAML; camera Z in m / mm). Not wired into the GUI yet.
 
 No motion on app start. Calibration capture is an explicit, armed sequence like scan Execute.
