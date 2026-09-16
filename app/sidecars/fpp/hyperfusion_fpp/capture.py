@@ -1,4 +1,8 @@
-"""Load one HyperFusion FPP pin burst (26 HDMI PSP TIFF + JSON, or legacy 14 u-only)."""
+﻿"""Load one HyperFusion FPP pin burst (26 HDMI PSP TIFF + JSON, or legacy 14 u-only).
+
+RGB stills become one decode channel: ``r``/``g``/``b`` when DLP LEDs are mono-primary
+(JSON ``dlp_led`` / ``decode_channel``), else Rec.601 ``luma``.
+"""
 
 from __future__ import annotations
 
@@ -45,13 +49,99 @@ PROJECTOR_WIDTH_PX = 1280
 PROJECTOR_HEIGHT_PX = 720
 
 _LEGACY_MARKERS = ("splash", "fpp lines", "horizontal ramp")
+_CHANNEL_ALIASES = {
+    "r": "r",
+    "red": "r",
+    "g": "g",
+    "green": "g",
+    "b": "b",
+    "blue": "b",
+    "luma": "luma",
+    "gray": "luma",
+    "grey": "luma",
+    "rgb": "luma",
+    "auto": "auto",
+}
 
 
-def _to_gray_f32(image: np.ndarray) -> np.ndarray:
+def _normalize_channel(name: str | None) -> str:
+    if name is None:
+        return "auto"
+    return _CHANNEL_ALIASES.get(str(name).strip().lower(), "auto")
+
+
+def decode_channel_from_led_ma(red_ma: float, green_ma: float, blue_ma: float) -> str:
+    """Pick r/g/b when one LED dominates; otherwise luma."""
+    r, g, b = float(red_ma), float(green_ma), float(blue_ma)
+    mx = max(r, g, b)
+    if mx < 50.0:
+        return "luma"
+    second = sorted((r, g, b), reverse=True)[1]
+    if second * 2.0 > mx:
+        return "luma"
+    if r >= g and r >= b:
+        return "r"
+    if g >= r and g >= b:
+        return "g"
+    return "b"
+
+
+def decode_channel_from_meta(meta: dict[str, Any] | None) -> str | None:
+    """Return channel from pose JSON, or None if unknown."""
+    if not isinstance(meta, dict):
+        return None
+    direct = _normalize_channel(meta.get("decode_channel"))
+    if direct != "auto":
+        return direct
+    led = meta.get("dlp_led")
+    if isinstance(led, dict):
+        led_ch = _normalize_channel(led.get("decode_channel"))
+        if led_ch != "auto":
+            return led_ch
+        try:
+            return decode_channel_from_led_ma(
+                float(led.get("red_ma", 0) or 0),
+                float(led.get("green_ma", 0) or 0),
+                float(led.get("blue_ma", 0) or 0),
+            )
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def decode_channel_from_rgb_image(image: np.ndarray) -> str:
+    """Heuristic when JSON has no LED: dominant mean channel on a color still."""
     arr = np.asarray(image)
-    if arr.ndim == 3:
-        arr = arr[..., :3].astype(np.float32)
-        gray = 0.299 * arr[..., 0] + 0.587 * arr[..., 1] + 0.114 * arr[..., 2]
+    if arr.ndim != 3 or arr.shape[2] < 3:
+        return "luma"
+    sample = arr[::4, ::4] if arr.shape[0] * arr.shape[1] > 512 * 512 else arr
+    means = sample[..., :3].reshape(-1, 3).astype(np.float64).mean(axis=0)
+    if means.max() <= 1.5:
+        means = means * 255.0
+    mx = float(means.max())
+    if mx < 8.0:
+        return "luma"
+    second = float(sorted(means, reverse=True)[1])
+    if second * 1.8 > mx:
+        return "luma"
+    return ("r", "g", "b")[int(np.argmax(means))]
+
+
+def _to_gray_f32(image: np.ndarray, channel: str = "luma") -> np.ndarray:
+    arr = np.asarray(image)
+    ch = _normalize_channel(channel)
+    if ch == "auto":
+        ch = "luma"
+    if arr.ndim == 3 and arr.shape[2] >= 3:
+        rgb = arr[..., :3].astype(np.float32)
+        if ch == "r":
+            gray = rgb[..., 0]
+        elif ch == "g":
+            gray = rgb[..., 1]
+        elif ch == "b":
+            gray = rgb[..., 2]
+        else:
+            gray = 0.299 * rgb[..., 0] + 0.587 * rgb[..., 1] + 0.114 * rgb[..., 2]
     else:
         gray = arr.astype(np.float32)
     if gray.max() > 1.5:
@@ -94,6 +184,7 @@ class FppBurst:
     directory: Path
     frames: list[FppFrame]
     by_index: dict[int, FppFrame] = field(default_factory=dict)
+    decode_channel: str = "luma"
 
     def image(self, step_index: int) -> np.ndarray:
         return self.by_index[step_index].image
@@ -199,7 +290,30 @@ def list_burst_jobs(root: Path) -> list[tuple[Path, Path]]:
     return jobs
 
 
-def load_burst(directory: Path, start: Path | None = None) -> FppBurst:
+def resolve_decode_channel(
+    *,
+    meta: dict[str, Any] | None = None,
+    channel: str | None = "auto",
+    probe_image: np.ndarray | None = None,
+) -> str:
+    """CLI / JSON / image priority for the gray channel used by PSP decode."""
+    override = _normalize_channel(channel)
+    if override != "auto":
+        return override
+    from_meta = decode_channel_from_meta(meta)
+    if from_meta is not None:
+        return from_meta
+    if probe_image is not None:
+        return decode_channel_from_rgb_image(probe_image)
+    return "luma"
+
+
+def load_burst(
+    directory: Path,
+    start: Path | None = None,
+    *,
+    channel: str | None = "auto",
+) -> FppBurst:
     directory = directory.resolve()
     tiffs = sorted(directory.glob("*.tif"), key=_stem_sort_key)
     tiffs += sorted(p for p in directory.glob("*.tiff") if p not in set(tiffs))
@@ -221,6 +335,14 @@ def load_burst(directory: Path, start: Path | None = None) -> FppBurst:
         )
     chunk = tiffs[offset : offset + stride]
 
+    first_meta: dict[str, Any] = {}
+    first_json = chunk[0].with_suffix(".json")
+    if first_json.is_file():
+        first_meta = _read_json(first_json)
+
+    probe = tifffile.imread(chunk[min(1, len(chunk) - 1)])
+    decode_ch = resolve_decode_channel(meta=first_meta, channel=channel, probe_image=probe)
+
     frames: list[FppFrame] = []
     by_index: dict[int, FppFrame] = {}
     for fallback, path in enumerate(chunk):
@@ -229,7 +351,7 @@ def load_burst(directory: Path, start: Path | None = None) -> FppBurst:
         if json_path.is_file():
             meta = _read_json(json_path)
         index, pattern, label = _match_step(meta, fallback, specs)
-        image = _to_gray_f32(tifffile.imread(path))
+        image = _to_gray_f32(tifffile.imread(path), decode_ch)
         frame = FppFrame(
             path=path,
             step_index=index,
@@ -244,7 +366,12 @@ def load_burst(directory: Path, start: Path | None = None) -> FppBurst:
     missing = [spec[2] for spec in specs if spec[0] not in by_index]
     if missing:
         raise ValueError(f"FPP burst missing steps: {', '.join(missing)}")
-    return FppBurst(directory=directory, frames=frames, by_index=by_index)
+    return FppBurst(
+        directory=directory,
+        frames=frames,
+        by_index=by_index,
+        decode_channel=decode_ch,
+    )
 
 
 def camera_intrinsics(meta: dict[str, Any]) -> tuple[np.ndarray, np.ndarray] | None:

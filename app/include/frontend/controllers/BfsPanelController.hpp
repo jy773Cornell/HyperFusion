@@ -9,6 +9,7 @@
 #include <QTimer>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -38,10 +39,14 @@ public:
     /// Latest grab counter (0 if none). Safe from the scan worker thread.
     [[nodiscard]] std::uint64_t lastFrameIndex() const;
     /// Block until lastFrame_.frameIndex >= afterIndex + minNewFrames. Safe from a worker thread.
+    /// If *abortRequested* returns true, returns false immediately (Stop / session end).
     [[nodiscard]] bool waitForNewerFrame(std::uint64_t afterIndex,
                                          int minNewFrames,
                                          int timeoutMs,
-                                         BfsRgbFrame *out = nullptr) const;
+                                         BfsRgbFrame *out = nullptr,
+                                         const std::function<bool()> &abortRequested = {}) const;
+    /// Current BFS UI settings (for pose JSON ``bfs_capture`` and apply).
+    [[nodiscard]] BfsCameraSettings settingsFromUi() const;
 
 private:
     void onRefreshClicked();
@@ -58,7 +63,6 @@ private:
     void queueFrame(BfsRgbFrame frame);
     void flushPendingFrame();
     void showFrameOnPreview(const BfsRgbFrame &frame);
-    [[nodiscard]] BfsCameraSettings settingsFromUi() const;
     void updatePreviewDisconnected();
 
     MainWindow *host_ = nullptr;

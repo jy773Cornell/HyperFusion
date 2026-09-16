@@ -1,4 +1,4 @@
-﻿// Hemisphere / semi-fixed scan parameters for UR3e (frontend/ui layer).
+﻿// Hemisphere / semi-fixed / FPP scan parameters for UR3e (frontend/ui layer).
 #pragma once
 
 #include "backend/multiview/Ur3eAutoHemisphereScanExecute.hpp"
@@ -34,29 +34,36 @@ public:
     [[nodiscard]] hf::ur3e::Ur3eHemisphereScanParams semiPlanParams() const;
     [[nodiscard]] hf::ur3e::Ur3eWristSweepParams wristSweepParams() const;
     [[nodiscard]] hf::ur3e::Ur3eSemiFixedRoute semiFixedRoute() const;
+    /// Multiview stage: pos1 = home/apex, pos2 = rings/DLP spin (mm).
+    [[nodiscard]] double stagePosition1Mm() const;
+    [[nodiscard]] double stagePosition2Mm() const;
     void setSemiFixedRoute(const hf::ur3e::Ur3eSemiFixedRoute &route);
     [[nodiscard]] bool semiFixedRouteReady() const;
     [[nodiscard]] bool rememberLastPlan() const;
     void setParams(const hf::ur3e::Ur3eHemisphereScanParams &params);
-    /// Semi Load: apply radius / Layer / θ / interval / pan without emitting paramsChanged
+    /// Semi / FPP Load: apply radius / Layer / θ / interval / pan without emitting paramsChanged
     /// (paramsChanged would clear the rings about to be installed).
     void applyLoadedSemiPlanSettings(const hf::ur3e::Ur3eHemisphereScanParams &params,
                                      double intervalDeg,
-                                     int panDirection);
+                                     int panDirection,
+                                     double panRangeDeg = 360.0);
     void applyBoundaryLimits(const hf::ur3e::Ur3eWorkspaceBoundary &boundary);
-    void applyScanTcpFromConfig();
+    /// Force Camera lens MoveIt tip (Scan tip UI removed; DLP TCP stays in cfg).
+    void forceCameraScanTcp();
     void setPlanEnabled(bool enabled);
     void setExecuteEnabled(bool enabled);
     void setParamsEnabled(bool enabled);
     void setLoadRouteEnabled(bool enabled);
-    /// Refresh Auto + Semi-fixed route combos from disk (cfg-matching only).
+    /// Refresh Auto + Semi/FPP route combos from disk (cfg-matching only).
     void refreshAvailableRoutes();
-    /// Persist selected Auto / Semi plan paths (and optional semi route file).
+    /// Persist selected Auto / Semi-FPP plan paths (and optional semi route file).
     void rememberAutoRoutePath(const QString &path);
     void rememberSemiFixedPlanPath(const QString &path);
+    void rememberFppPlanPath(const QString &path);
     void rememberSemiFixedRoutePath(const QString &path);
     [[nodiscard]] QString rememberedAutoRoutePath() const;
     [[nodiscard]] QString rememberedSemiFixedPlanPath() const;
+    [[nodiscard]] QString rememberedFppPlanPath() const;
     [[nodiscard]] QString rememberedSemiFixedRoutePath() const;
     /// After Plan: use reachable pin count for total-image estimate (−1 = grid estimate).
     void setPlannedReachablePins(int reachablePins);
@@ -80,14 +87,13 @@ signals:
     void addSemiFixedRingRequested();
 
 private:
-    void onScanTcpChanged();
     void onParameterChanged();
     void onWristSweepChanged();
     void updateImageEstimateLabel();
     void loadFromSettings();
     void saveToSettings() const;
-    void applyModePanelToUi(const PersistedUr3eScanModePanelSettings &panel, bool semiMode);
-    [[nodiscard]] PersistedUr3eScanModePanelSettings captureModePanelFromUi(bool semiMode) const;
+    void applyModePanelToUi(const PersistedUr3eScanModePanelSettings &panel, bool ringMode);
+    [[nodiscard]] PersistedUr3eScanModePanelSettings captureModePanelFromUi() const;
     void syncWristSweepEnabledState();
     void onLoadRouteClicked();
     void onScanModeChanged();
@@ -99,31 +105,48 @@ private:
     void onSaveSemiFixedRouteClicked();
     void onLoadSemiFixedRouteFileClicked();
     void onLoadPlannedAsSemiFixedClicked();
+    void setFormFieldVisible(QWidget *field, bool visible);
 
     hf::ur3e::Ur3eWorkspaceBoundary boundaryLimits_;
     hf::ur3e::Ur3eSemiFixedRoute semiFixedRoute_;
     int plannedReachablePins_ = -1;
 
     QComboBox *modeCombo_ = nullptr;
-    QComboBox *scanTcpCombo_ = nullptr;
     QWidget *autoSection_ = nullptr;
     QWidget *semiFixedSection_ = nullptr;
 
     QLabel *gridFormLabel_ = nullptr;
+    QLabel *radiusFormLabel_ = nullptr;
+    QLabel *rangeIntervalFormLabel_ = nullptr;
+    QLabel *stageFormLabel_ = nullptr;
+    QLabel *thetaFormLabel_ = nullptr;
+    QLabel *sweepFormLabel_ = nullptr;
+    QLabel *wristStepFormLabel_ = nullptr;
+    QLabel *wristAxesFormLabel_ = nullptr;
 
     QComboBox *routeCombo_ = nullptr;
     QPushButton *loadRouteBtn_ = nullptr;
     QDoubleSpinBox *sphereRadiusSpin_ = nullptr;
+    QWidget *rangeIntervalRow_ = nullptr;
+    QDoubleSpinBox *fppRangeSpin_ = nullptr;
     QSpinBox *horizontalPointsSpin_ = nullptr;
     QSpinBox *verticalPointsSpin_ = nullptr;
+    QLabel *gridTimesLabel_ = nullptr;
+    QWidget *gridRow_ = nullptr;
     QDoubleSpinBox *thetaMinSpin_ = nullptr;
     QDoubleSpinBox *thetaMaxSpin_ = nullptr;
+    QWidget *thetaRow_ = nullptr;
     QCheckBox *wristSweepEnabledCheck_ = nullptr;
     QDoubleSpinBox *wristSweepStepSpin_ = nullptr;
     QSpinBox *wristSweepStepsSpin_ = nullptr;
+    QWidget *wristStepRow_ = nullptr;
     QCheckBox *wrist1Check_ = nullptr;
     QCheckBox *wrist2Check_ = nullptr;
     QCheckBox *wrist3Check_ = nullptr;
+    QWidget *wristAxesRow_ = nullptr;
+    QWidget *stageRow_ = nullptr;
+    QDoubleSpinBox *stagePosition1Spin_ = nullptr;
+    QDoubleSpinBox *stagePosition2Spin_ = nullptr;
     QLabel *imageEstimateLabel_ = nullptr;
 
     QComboBox *semiFixedPlanRouteCombo_ = nullptr;
@@ -135,7 +158,6 @@ private:
     QPushButton *semiFixedRemoveBtn_ = nullptr;
     QPushButton *semiFixedSaveBtn_ = nullptr;
     QPushButton *semiFixedLoadFileBtn_ = nullptr;
-    QLabel *semiFixedEstimateLabel_ = nullptr;
 
     QPushButton *planBtn_ = nullptr;
     QPushButton *executeBtn_ = nullptr;

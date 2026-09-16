@@ -16,6 +16,7 @@ enum class Ur3eScanExecuteMode
 {
     AutoHemisphere = 0,
     SemiFixed = 1,
+    Fpp = 2,
 };
 
 [[nodiscard]] inline QString ur3eScanExecuteModeLabel(const Ur3eScanExecuteMode mode)
@@ -24,10 +25,19 @@ enum class Ur3eScanExecuteMode
     {
     case Ur3eScanExecuteMode::SemiFixed:
         return QStringLiteral("Semi-fixed");
+    case Ur3eScanExecuteMode::Fpp:
+        return QStringLiteral("FPP");
     case Ur3eScanExecuteMode::AutoHemisphere:
     default:
         return QStringLiteral("Auto planning");
     }
+}
+
+/// Semi-fixed and FPP execute saved ring plans under ``mvs_scan_plans/semi`` and
+/// ``mvs_scan_plans/fpp`` respectively.
+[[nodiscard]] inline bool isSavedRingRouteMode(const Ur3eScanExecuteMode mode)
+{
+    return mode == Ur3eScanExecuteMode::SemiFixed || mode == Ur3eScanExecuteMode::Fpp;
 }
 
 [[nodiscard]] inline bool autoHemisphereScanPlanReady(const Ur3eHemisphereScanPlan &plan)

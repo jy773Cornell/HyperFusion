@@ -28,7 +28,7 @@ class DecodeResult:
 def decode_burst(
     burst: FppBurst,
     *,
-    min_modulation: float = 0.08,
+    min_modulation: float = 0.15,
     min_phase_quality: float = 0.04,
 ) -> DecodeResult:
     n = len(burst.frames)

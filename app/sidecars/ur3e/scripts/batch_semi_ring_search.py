@@ -1,8 +1,8 @@
-﻿#!/usr/bin/env python3
-"""Batch Semi ring Plan: θ×radius sweep via MoveIt sidecar; one (R,θ) per saved JSON.
+#!/usr/bin/env python3
+"""Batch Semi ring Plan: theta x radius sweep via MoveIt sidecar; one (R,theta) per saved JSON.
 
-Each file is apex (θ=0 home pose with Z=R) plus that latitude's base-sweep-OK pins.
-Uses hyperfusion.cfg [multiview] (workspace, home, tip tolerance, φ candidates).
+Each file is apex (theta=0 home pose with Z=R) plus that latitude base-sweep-OK pins.
+Uses hyperfusion.cfg [multiview] (workspace, home, tip tolerance, phi candidates).
 Saves loadable schema-4 plans into ur3e_semi_scan_routes.
 """
 from __future__ import annotations
@@ -25,7 +25,7 @@ def _repo_root() -> Path:
 
 
 def load_hub_joints_deg(path: Path) -> tuple[list[float], str]:
-    """First base-sweep-OK pin in a saved plan → joints deg + label."""
+    """First base-sweep-OK pin in a saved plan ? joints deg + label."""
     root = json.loads(path.read_text(encoding="utf-8"))
     for pt in root.get("points") or []:
         if not isinstance(pt, dict):
@@ -38,8 +38,8 @@ def load_hub_joints_deg(path: Path) -> tuple[list[float], str]:
         deg = [math.degrees(float(v)) for v in joints]
         grid = pt.get("grid") if isinstance(pt.get("grid"), dict) else {}
         label = (
-            f"{path.name} φ={float(grid.get('phi_deg', 0.0)):g}° "
-            f"θ={float(grid.get('theta_deg', 0.0)):g}°"
+            f"{path.name} f={float(grid.get('phi_deg', 0.0)):g}? "
+            f"?={float(grid.get('theta_deg', 0.0)):g}?"
         )
         return deg, label
     raise RuntimeError(f"No base_sweep_ok pin with joints in {path}")
@@ -97,7 +97,7 @@ def wait_connected(base: str, timeout_s: float = 180.0) -> None:
     try:
         http_json("POST", f"{base}/connect/start", body={}, timeout=30.0)
     except urllib.error.HTTPError as exc:
-        # Already connecting (or a stale 500) — poll status instead of aborting.
+        # Already connecting (or a stale 500) ? poll status instead of aborting.
         if exc.code not in (409, 500):
             raise
     t0 = time.time()
@@ -354,7 +354,7 @@ def _tool_mm_to_mat(tcp: dict[str, float]) -> list[list[float]]:
 
 
 def camera_world_to_dlp_world(pose: dict[str, Any], cfg: dict[str, Any]) -> dict[str, float]:
-    """Camera world TCP → DLP world TCP (MoveIt tip when scan_tcp=dlp)."""
+    """Camera world TCP ? DLP world TCP (MoveIt tip when scan_tcp=dlp)."""
     t_cam = _tool_mm_to_mat(_tcp_mm(cfg, camera=True))
     t_dlp = _tool_mm_to_mat(_tcp_mm(cfg, camera=False))
     t_cam_dlp = _mat_mul(_mat_inv_rigid(t_cam), t_dlp)
@@ -386,7 +386,7 @@ def build_apex_pose(
     home_tcp: dict[str, float],
     cfg: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """θ=0: keep home XY + orientation; set Z to the ring radius."""
+    """?=0: keep home XY + orientation; set Z to the ring radius."""
     del cfg
     rx = float(home_tcp["rx"])
     ry = float(home_tcp["ry"])
@@ -413,7 +413,7 @@ def build_apex_pose(
 
 
 def apex_pose_for_moveit(camera_pose: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
-    """MoveIt EE pose. scan_tcp=dlp → DLP world pose that puts the camera at *camera_pose*."""
+    """MoveIt EE pose. scan_tcp=dlp ? DLP world pose that puts the camera at *camera_pose*."""
     out = dict(camera_pose)
     out["_camera_tcp"] = {
         "x": float(camera_pose["x"]),
@@ -447,11 +447,11 @@ def build_ring_poses(
     *,
     start_index: int = 0,
 ) -> list[dict[str, Any]]:
-    """One latitude ring. Look-at tray XY (0,0). Camera upside-down (up = world −Z)."""
+    """One latitude ring. Look-at tray XY (0,0). Image-up = world +Z (camera bottom)."""
     poses: list[dict[str, Any]] = []
     theta = math.radians(theta_deg)
     sin_t, cos_t = math.sin(theta), math.cos(theta)
-    up = (0.0, 0.0, -1.0)
+    up = (0.0, 0.0, 1.0)
     for i in range(max(1, n_phi)):
         phi_deg = 360.0 * i / float(n_phi)
         phi = math.radians(phi_deg)
@@ -474,7 +474,7 @@ def build_ring_poses(
                 "tool_z_z": zz,
                 "camera_up_x": 0.0,
                 "camera_up_y": 0.0,
-                "camera_up_z": -1.0,
+                "camera_up_z": 1.0,
                 "require_perpendicular": False,
                 "theta_deg": float(theta_deg),
                 "phi_deg": float(phi_deg),
@@ -491,9 +491,9 @@ def build_cylinder_poses(
     *,
     start_index: int = 0,
 ) -> list[dict[str, Any]]:
-    """Vertical cylinder: fixed XY radius, look-at tray origin (0,0,0). Camera up = world −Z."""
+    """Vertical cylinder: fixed XY radius, look-at tray origin (0,0,0). Camera up = world +Z."""
     look_deg = math.degrees(math.atan2(max(0.0, rho_m), max(1.0e-9, z_m)))
-    up = (0.0, 0.0, -1.0)
+    up = (0.0, 0.0, 1.0)
     poses: list[dict[str, Any]] = []
     for i in range(max(1, n_phi)):
         phi_deg = 360.0 * i / float(n_phi)
@@ -517,7 +517,7 @@ def build_cylinder_poses(
                 "tool_z_z": zz,
                 "camera_up_x": 0.0,
                 "camera_up_y": 0.0,
-                "camera_up_z": -1.0,
+                "camera_up_z": 1.0,
                 "require_perpendicular": False,
                 "theta_deg": float(look_deg),
                 "phi_deg": float(phi_deg),
@@ -639,7 +639,7 @@ def cylinder_fingerprint(rho_m: float, z_m: float, n_phi: int) -> str:
 
 
 def _geometric_apex_point(pose: dict[str, Any]) -> dict[str, Any]:
-    """θ=0: home XY/orientation, Z = R. No joints yet."""
+    """?=0: home XY/orientation, Z = R. No joints yet."""
     x = float(pose["x"])
     y = float(pose["y"])
     z = float(pose["z"])
@@ -709,6 +709,27 @@ def _point_from_result(pose: dict[str, Any], res: dict[str, Any]) -> dict[str, A
     return point
 
 
+def ring_coverage_deg(poses: list[dict[str, Any]], results: list[dict[str, Any]]) -> int | None:
+    """360 if any base-sweep pin; else max backup_union_deg. None if nothing savable."""
+    by_index = {int(r["index"]): r for r in results if isinstance(r, dict)}
+    union = 0.0
+    has_pin = False
+    for pose in poses:
+        if _is_apex_pose(pose):
+            continue
+        res = by_index.get(int(pose["index"]))
+        if res is None or not res.get("reachable") or not res.get("home_path_ok", True):
+            continue
+        if res.get("base_sweep_ok"):
+            return 360
+        if res.get("backup_coverage_ok"):
+            has_pin = True
+            union = max(union, float(res.get("backup_union_deg", 0.0) or 0.0))
+    if not has_pin:
+        return None
+    return int(round(union))
+
+
 def save_one_ring_plan(
     out_path: Path,
     *,
@@ -729,6 +750,7 @@ def save_one_ring_plan(
     Always writes an apex point when the ring is saved. Planned joints if IK
     succeeded; otherwise home XY/orientation with Z = R.
     Returns (n_written, apex_point_or_none, n_ring_pins). Does not write if no ring pins.
+    Filename / name should be R###_T##_### with coverage deg (e.g. R400_T10_360).
     """
     by_index = {int(r["index"]): r for r in results if isinstance(r, dict)}
     apex_point: dict[str, Any] | None = dict(cached_apex) if cached_apex else None
@@ -763,9 +785,14 @@ def save_one_ring_plan(
         points.append(apex_point)
     points.extend(ring_points)
 
+    cov = ring_coverage_deg(poses, results)
+    default_name = f"R{int(round(radius_m * 1000))}_T{theta_deg:g}"
+    if cov is not None:
+        default_name = f"{default_name}_{cov}"
+
     root = {
         "schema": CACHE_SCHEMA,
-        "name": plan_name or f"R{int(round(radius_m * 1000))}_T{theta_deg:g}",
+        "name": plan_name or default_name,
         "fingerprint": fingerprint or plan_fingerprint(radius_m, theta_deg, n_phi),
         "robot_cfg_fingerprint": robot_cfg_fingerprint(cfg),
         "scan_params": scan_params
@@ -801,7 +828,7 @@ def main() -> int:
     parser.add_argument(
         "--out-dir",
         type=Path,
-        default=_repo_root() / "app" / "build" / "Release" / "ur3e_semi_scan_routes",
+        default=_repo_root() / "app" / "build" / "Release" / "mvs_scan_plans" / "semi",
     )
     parser.add_argument("--theta-min", type=float, default=20.0)
     parser.add_argument("--theta-max", type=float, default=40.0)
@@ -845,7 +872,7 @@ def main() -> int:
     parser.add_argument(
         "--skip-apex",
         action="store_true",
-        help="Do not plan or save the θ=0 apex pin.",
+        help="Do not plan or save the ?=0 apex pin.",
     )
     parser.add_argument(
         "--home-joints-deg",
@@ -857,7 +884,7 @@ def main() -> int:
         type=Path,
         default=None,
         help="Use this saved plan's first base-sweep-OK pin as the path hub "
-        "(T20↔pin instead of scan-home↔pin). Skips apex.",
+        "(T20?pin instead of scan-home?pin). Skips apex.",
     )
     parser.add_argument(
         "--cylinder",
@@ -912,7 +939,7 @@ def main() -> int:
         rho_mm = float(args.cyl_radius_mm)
         combos = [(rho_mm, zmm) for zmm in heights_mm]
         print(
-            f"Combos={len(combos)} cylinder ρ={rho_mm:g} mm "
+            f"Combos={len(combos)} cylinder ?={rho_mm:g} mm "
             f"z={heights_mm[0]:g}..{heights_mm[-1]:g} mm "
             f"n_phi={n_phi} tip_tol={tol_deg} tilt={tilt_deg} backup complementary halves "
             f"hub={hub_label} skip_apex={skip_apex} out={args.out_dir}",
@@ -1021,7 +1048,7 @@ def main() -> int:
                 body=body,
                 timeout=args.plan_timeout_s,
             )
-        except Exception as exc:  # noqa: BLE001 — batch must continue
+        except Exception as exc:  # noqa: BLE001 ? batch must continue
             failed += 1
             done[key] = {"ok": False, "error": str(exc)}
             progress_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1038,11 +1065,13 @@ def main() -> int:
             print(f"[{i}/{len(combos)}] {key} plan not ok: {err}", flush=True)
             continue
 
-        out_file = args.out_dir / f"{key}.json"
-        save_kw: dict[str, Any] = {}
+        cov = ring_coverage_deg(poses, results)
+        stem = f"{key}_{cov}" if cov is not None else key
+        out_file = args.out_dir / f"{stem}.json"
+        save_kw: dict[str, Any] = {"plan_name": stem}
         if cylinder:
             save_kw = {
-                "plan_name": key,
+                "plan_name": stem,
                 "fingerprint": cylinder_fingerprint(radius_m, z_m, n_phi),
                 "scan_params": {
                     "cyl_radius_m": radius_m,
@@ -1098,19 +1127,20 @@ def main() -> int:
             )
             kind = "BACKUP " if backup_n else apex_tag
             print(
-                f"[{i}/{len(combos)}] {key} {kind}{n_ring} ({dt:.1f}s)",
+                f"[{i}/{len(combos)}] {stem} {kind}{n_ring} ({dt:.1f}s)",
                 flush=True,
             )
             done[key]["backup"] = backup_n > 0
             # Only mirror top-level library writes. Subdir tests must not
             # overwrite Release/R250_T*.json with a different home fingerprint.
-            if out_file.parent.name == "mvs_semi_scan_plans":
+            if out_file.parent.name == "semi" and out_file.parent.parent.name == "mvs_scan_plans":
                 release_copy = (
                     _repo_root()
                     / "app"
                     / "build"
                     / "Release"
-                    / "mvs_semi_scan_plans"
+                    / "mvs_scan_plans"
+                    / "semi"
                     / out_file.name
                 )
                 if (

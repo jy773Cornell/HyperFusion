@@ -48,4 +48,5 @@ private:
     LighthouseControllerPowerStatus powerStatus_;
     bool deviceDetected_ = false;
     int activeBoardNumber_ = -1;
+    int analogChannelCount_ = 8;
 };

@@ -4,6 +4,7 @@
 
 #include "backend/HyperFusionConfig.hpp"
 #include "backend/multiview/Ur3eHemisphereScan.hpp"
+#include "backend/multiview/Ur3eScanPlanCache.hpp"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -228,37 +229,18 @@ void ensureSemiFixedTopPose(Ur3eSemiFixedRoute &route)
     std::vector<double> keepJoints = route.topPose.entryJointsRad;
     route.topPose = apexTopPoseOnRingSphere(ringR);
     if (keepJoints.size() == 6)
-        route.topPose.entryJointsRad = keepJoints;
+        route.topPose.entryJointsRad = std::move(keepJoints);
+    // Apex is home pose with Z=R; joints are filled at execute when missing.
+    // Keep preview green (not gray/blue) for deferred IK.
+    route.topPose.reachabilityKnown = true;
+    route.topPose.reachable = true;
+    route.topPose.homePathOk = true;
     route.hasTopPose = true;
 }
 
 QString defaultUr3eSemiScanRoutesDir()
 {
-    QString rel = QStringLiteral("mvs_semi_scan_plans");
-    QString sub = hf::hardwareConfig().ur3e.semiScanPlansSubdir.trimmed();
-    sub.replace(QLatin1Char('\\'), QLatin1Char('/'));
-    while (sub.startsWith(QLatin1Char('/')))
-        sub.remove(0, 1);
-    if (!sub.isEmpty() && !sub.contains(QLatin1String("..")) && !QDir::isAbsolutePath(sub))
-        rel += QLatin1Char('/') + sub;
-
-    const QString besideExe = QDir(QCoreApplication::applicationDirPath()).filePath(rel);
-    if (QDir(besideExe).exists())
-        return besideExe;
-
-#ifdef HF_APP_SOURCE_DIR
-    const QString fromPreset = QDir(QString::fromUtf8(HF_APP_SOURCE_DIR))
-                                   .filePath(QStringLiteral("preset/") + rel);
-    if (QDir(fromPreset).exists())
-        return fromPreset;
-#endif
-
-    const QString legacy = QDir(QCoreApplication::applicationDirPath())
-                               .filePath(QStringLiteral("ur3e_semi_scan_routes"));
-    if (QDir(legacy).exists())
-        return legacy;
-
-    return besideExe;
+    return defaultUr3eSemiScanPlansDir();
 }
 
 bool saveUr3eSemiFixedRoute(const QString &path,
@@ -272,11 +254,14 @@ bool saveUr3eSemiFixedRoute(const QString &path,
 
     QJsonObject root;
     root.insert(QStringLiteral("schema"), kSchemaVersion);
-    root.insert(QStringLiteral("kind"), QStringLiteral("ur3e_semi_fixed_route"));
+    root.insert(QStringLiteral("kind"),
+                toSave.isFppPlan ? QStringLiteral("fpp")
+                                 : QStringLiteral("ur3e_semi_fixed_route"));
     root.insert(QStringLiteral("id"), toSave.id);
     root.insert(QStringLiteral("display_name"), toSave.displayName);
     root.insert(QStringLiteral("robot_cfg_fingerprint"), toSave.robotCfgFingerprint);
     root.insert(QStringLiteral("interval_deg"), toSave.intervalDeg);
+    root.insert(QStringLiteral("pan_range_deg"), toSave.panRangeDeg);
     root.insert(QStringLiteral("pan_direction"), toSave.panDirection);
     root.insert(QStringLiteral("stabilize_ms"), toSave.stabilizeMs);
 
@@ -363,6 +348,16 @@ bool loadUr3eSemiFixedRoute(const QString &path,
     }
 
     const QJsonObject root = doc.object();
+    const QString kind = root.value(QStringLiteral("kind")).toString();
+    if (!kind.isEmpty() && kind != QStringLiteral("fpp")
+        && kind != QStringLiteral("ur3e_semi_fixed_route"))
+    {
+        if (errorMessage != nullptr)
+            *errorMessage =
+                QStringLiteral("Unsupported route kind \"%1\" in %2").arg(kind, path);
+        return false;
+    }
+
     const QString fp = root.value(QStringLiteral("robot_cfg_fingerprint")).toString();
     // Empty fingerprint = hand-authored / shared route — skip cfg gate.
     if (!fp.isEmpty() && !expectedRobotCfgFingerprint.isEmpty()
@@ -374,17 +369,28 @@ bool loadUr3eSemiFixedRoute(const QString &path,
     }
 
     routeOut = {};
+    routeOut.isFppPlan = (kind == QStringLiteral("fpp"));
     routeOut.id = root.value(QStringLiteral("id")).toString(QFileInfo(path).completeBaseName());
     routeOut.displayName =
         root.value(QStringLiteral("display_name")).toString(routeOut.id);
     routeOut.robotCfgFingerprint = fp;
     routeOut.intervalDeg = root.value(QStringLiteral("interval_deg")).toDouble(10.0);
+    routeOut.panRangeDeg = root.value(QStringLiteral("pan_range_deg")).toDouble(360.0);
+    if (!(routeOut.panRangeDeg >= 0.0))
+        routeOut.panRangeDeg = 0.0;
+    if (routeOut.panRangeDeg > 360.0)
+        routeOut.panRangeDeg = 360.0;
     routeOut.panDirection = root.value(QStringLiteral("pan_direction")).toInt(1);
     if (routeOut.panDirection >= 0)
         routeOut.panDirection = 1;
     else
         routeOut.panDirection = -1;
     routeOut.stabilizeMs = root.value(QStringLiteral("stabilize_ms")).toInt(500);
+
+    // Stage stops are GUI-owned (Multiview Stage 1 / 2). Ignore legacy JSON stage blocks.
+    routeOut.haveStagePositions = false;
+    routeOut.stageHomeMm = 0.0;
+    routeOut.stageDlpMm = 0.0;
 
     if (root.contains(QStringLiteral("top_pose")) && root.value(QStringLiteral("top_pose")).isObject())
     {
@@ -565,6 +571,147 @@ QVector<Ur3eSemiFixedPreviewRing> inferSemiFixedPreviewRings(const Ur3eSemiFixed
     return out;
 }
 
+namespace
+{
+void fillPinTipDir(Ur3eSemiFixedPreviewRing &pin, const Ur3eSemiFixedRing &ring)
+{
+    if (ring.hasEntryTcp)
+    {
+        const double lx = ring.entryTcp.toolZMx;
+        const double ly = ring.entryTcp.toolZMy;
+        const double lz = ring.entryTcp.toolZMz;
+        const double len = std::sqrt(lx * lx + ly * ly + lz * lz);
+        if (len > 1.0e-9)
+        {
+            pin.tipDirX = lx / len;
+            pin.tipDirY = ly / len;
+            pin.tipDirZ = lz / len;
+            return;
+        }
+    }
+    double cx = 0.0;
+    double cy = 0.0;
+    scanCenterOffsetM(cx, cy);
+    const double dx = cx - pin.centerXM;
+    const double dy = cy - pin.centerYM;
+    const double dz = 0.0 - pin.centerZM;
+    const double len = std::sqrt(dx * dx + dy * dy + dz * dz);
+    if (len > 1.0e-9)
+    {
+        pin.tipDirX = dx / len;
+        pin.tipDirY = dy / len;
+        pin.tipDirZ = dz / len;
+    }
+    else
+    {
+        pin.tipDirX = 0.0;
+        pin.tipDirY = 0.0;
+        pin.tipDirZ = 1.0;
+    }
+}
+
+Ur3eSemiFixedPreviewRing makeFppPin(const Ur3eSemiFixedRing &ring,
+                                    const double xM,
+                                    const double yM,
+                                    const double zM,
+                                    const int executeIndex,
+                                    const QString &label)
+{
+    Ur3eSemiFixedPreviewRing pin;
+    pin.displayName = label;
+    pin.centerXM = xM;
+    pin.centerYM = yM;
+    pin.centerZM = zM;
+    pin.radiusM = 0.0;
+    pin.isTopPose = false;
+    pin.drawAsPin = true;
+    pin.noPan = ring.noPan;
+    pin.reachabilityKnown = ring.reachabilityKnown;
+    pin.reachable = ring.reachable;
+    pin.homePathOk = ring.homePathOk;
+    pin.executeIndex = executeIndex;
+    fillPinTipDir(pin, ring);
+    return pin;
+}
+} // namespace
+
+QVector<Ur3eSemiFixedPreviewRing> inferFppPreviewPins(const Ur3eSemiFixedRoute &route)
+{
+    QVector<Ur3eSemiFixedPreviewRing> out;
+    double cx = 0.0;
+    double cy = 0.0;
+    scanCenterOffsetM(cx, cy);
+
+    const double intervalDeg = route.intervalDeg > 0.0 ? route.intervalDeg : 10.0;
+    const double rangeDeg =
+        route.panRangeDeg >= 0.0 ? std::min(360.0, route.panRangeDeg) : 360.0;
+    const int panDir = route.panDirection >= 0 ? 1 : -1;
+    const int ringCount = route.rings.size();
+
+    // Rings first so execute ringIndex 0..N-1 still maps via executeIndex.
+    for (int ri = 0; ri < ringCount; ++ri)
+    {
+        const Ur3eSemiFixedRing &ring = route.rings[ri];
+        if (!ring.hasEntryTcp)
+            continue;
+
+        const bool pinOnly = ring.noPan || std::abs(ring.thetaDeg) < 0.75;
+        if (pinOnly)
+        {
+            out.push_back(makeFppPin(ring,
+                                     ring.entryTcp.xM,
+                                     ring.entryTcp.yM,
+                                     ring.entryTcp.zM,
+                                     ri,
+                                     ring.displayName.isEmpty()
+                                         ? QStringLiteral("pin %1").arg(ri + 1)
+                                         : ring.displayName));
+            continue;
+        }
+
+        const int samples = semiFixedSampleCount(intervalDeg, rangeDeg);
+        const double dx0 = ring.entryTcp.xM - cx;
+        const double dy0 = ring.entryTcp.yM - cy;
+        for (int s = 0; s < samples; ++s)
+        {
+            const double ang =
+                static_cast<double>(panDir) * static_cast<double>(s) * intervalDeg
+                * (3.14159265358979323846 / 180.0);
+            const double c = std::cos(ang);
+            const double sn = std::sin(ang);
+            const double x = cx + dx0 * c - dy0 * sn;
+            const double y = cy + dx0 * sn + dy0 * c;
+            const QString label =
+                samples <= 1
+                    ? ring.displayName
+                    : QStringLiteral("%1 @%2°")
+                          .arg(ring.displayName)
+                          .arg(static_cast<double>(panDir) * static_cast<double>(s)
+                                   * intervalDeg,
+                               0, 'f', 0);
+            out.push_back(makeFppPin(ring, x, y, ring.entryTcp.zM, ri, label));
+        }
+    }
+
+    if (route.hasTopPose && route.topPose.entryJointsRad.size() == 6)
+    {
+        Ur3eSemiFixedRing top = route.topPose;
+        const double x = top.hasEntryTcp ? top.entryTcp.xM : cx;
+        const double y = top.hasEntryTcp ? top.entryTcp.yM : cy;
+        const double z = top.hasEntryTcp ? top.entryTcp.zM : 0.25;
+        Ur3eSemiFixedPreviewRing home =
+            makeFppPin(top,
+                       x,
+                       y,
+                       z,
+                       ringCount,
+                       top.displayName.isEmpty() ? QStringLiteral("Home") : top.displayName);
+        home.isTopPose = true;
+        out.push_back(home);
+    }
+    return out;
+}
+
 Ur3eSemiFixedRoute semiFixedRouteFromHemispherePlan(const Ur3eHemisphereScanPlan &plan,
                                                     const QString &robotCfgFingerprint,
                                                     const QString &displayName,
@@ -705,9 +852,11 @@ Ur3eSemiFixedRoute semiFixedRouteFromHemispherePlan(const Ur3eHemisphereScanPlan
         route.topPose.entryJointsRad = apex.jointPositionsRad;
         route.topPose.entryTcp = apex.tcp;
         route.topPose.hasEntryTcp = true;
+        // Saved plans often leave apex joints empty (planned at execute as home@Z=R).
+        const bool deferredApex = apex.jointPositionsRad.size() != 6;
         route.topPose.reachabilityKnown = true;
-        route.topPose.reachable = apex.reachable;
-        route.topPose.homePathOk = apex.homePathOk;
+        route.topPose.reachable = apex.reachable || deferredApex;
+        route.topPose.homePathOk = apex.homePathOk || deferredApex;
         route.topPose.baseSweepOk = true;
         route.topPose.thetaDeg = 0.0;
         route.topPose.noPan = true;
@@ -952,13 +1101,16 @@ previewSemiFixedRingsFromHemispherePlan(const Ur3eHemisphereScanPlan &plan)
             hasApex = true;
             apex.isTop = true;
             apex.thetaDeg = 0.0;
-            const bool prefer = pt.reachable && (!apex.anyReachable || pt.homePathOk);
+            const bool deferredApex = pt.jointPositionsRad.size() != 6;
+            const bool prefer =
+                (pt.reachable || deferredApex) && (!apex.anyReachable || pt.homePathOk);
             applyGeom(apex, pt, prefer || !apex.hasGeom);
-            if (pt.reachable)
+            // Deferred apex (empty joints) is still executable — show green in preview.
+            if (pt.reachable || deferredApex)
             {
                 apex.anyReachable = true;
                 apex.anySweepOk = true; // top has no base sweep requirement
-                if (pt.homePathOk)
+                if (pt.homePathOk || deferredApex)
                     apex.anyHomePathOk = true;
             }
             continue;
@@ -1047,11 +1199,12 @@ void syncHemisphereParamsFromPlanLatitudes(const Ur3eHemisphereScanPlan &plan,
     normalizeHemisphereScanParams(paramsInOut);
 }
 
-int semiFixedSampleCount(const double intervalDeg)
+int semiFixedSampleCount(const double intervalDeg, const double rangeDeg)
 {
-    if (!(intervalDeg > 0.0))
+    const double range = std::clamp(rangeDeg, 0.0, 360.0);
+    if (!(intervalDeg > 0.0) || !(range > 0.0))
         return 1;
-    const int n = static_cast<int>(std::lround(360.0 / intervalDeg));
+    const int n = static_cast<int>(std::lround(range / intervalDeg));
     return std::max(1, n);
 }
 
@@ -1138,7 +1291,9 @@ int contiguousMaskCountFromEntry(const std::vector<std::uint8_t> &mask, const do
 }
 } // namespace
 
-int semiFixedRingSampleCount(const Ur3eSemiFixedRing &ring, const double intervalDeg)
+int semiFixedRingSampleCount(const Ur3eSemiFixedRing &ring,
+                             const double intervalDeg,
+                             const double rangeDeg)
 {
     if (ring.noPan || std::abs(ring.thetaDeg) < 0.75)
         return 1;
@@ -1154,9 +1309,10 @@ int semiFixedRingSampleCount(const Ur3eSemiFixedRing &ring, const double interva
             return 1;
         const double arcDeg = 360.0 * static_cast<double>(bins) / static_cast<double>(n);
         const double step = intervalDeg > 0.0 ? intervalDeg : 10.0;
-        return std::max(1, static_cast<int>(std::lround(arcDeg / step)));
+        const double capped = std::min(arcDeg, std::clamp(rangeDeg, 0.0, 360.0));
+        return std::max(1, static_cast<int>(std::lround(capped / step)));
     }
-    return semiFixedSampleCount(intervalDeg);
+    return semiFixedSampleCount(intervalDeg, rangeDeg);
 }
 
 } // namespace hf::ur3e

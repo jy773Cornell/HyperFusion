@@ -246,7 +246,8 @@ std::uint64_t BfsPanelController::lastFrameIndex() const
 bool BfsPanelController::waitForNewerFrame(const std::uint64_t afterIndex,
                                            int minNewFrames,
                                            int timeoutMs,
-                                           BfsRgbFrame *out) const
+                                           BfsRgbFrame *out,
+                                           const std::function<bool()> &abortRequested) const
 {
     if (minNewFrames < 1)
         minNewFrames = 1;
@@ -257,6 +258,8 @@ bool BfsPanelController::waitForNewerFrame(const std::uint64_t afterIndex,
         std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
     while (std::chrono::steady_clock::now() < deadline)
     {
+        if (abortRequested && abortRequested())
+            return false;
         {
             std::lock_guard<std::mutex> lock(lastFrameMutex_);
             if (lastFrame_.has_value() && lastFrame_->frameIndex >= need
@@ -415,6 +418,24 @@ void BfsPanelController::onCaptureClicked()
             const hf::ur3e::Mat4 c2w = hf::ur3e::cameraToWorldOpenGlFromTcp(tcp);
             const hf::ur3e::CameraExtrinsicsRt extrinsics =
                 hf::ur3e::cameraExtrinsicsOpenCvFromTcp(tcp);
+            const hf::bfs::BfsCameraSettings bfsSettings = settingsFromUi();
+            calib.haveBfsCapture = true;
+            calib.bfsCameraId = bfsSettings.cameraId;
+            calib.bfsExposureMode = bfsSettings.exposureMode;
+            calib.bfsExposureAuto = bfsSettings.exposureAuto;
+            calib.bfsExposureTimeUs = bfsSettings.exposureTimeUs;
+            calib.bfsGainAuto = bfsSettings.gainAuto;
+            calib.bfsGainDb = bfsSettings.gainDb;
+            calib.bfsGammaEnable = bfsSettings.gammaEnable;
+            calib.bfsGamma = bfsSettings.gamma;
+            calib.bfsBalanceWhiteAuto = bfsSettings.balanceWhiteAuto;
+            calib.bfsBalanceRatioSelector = bfsSettings.balanceRatioSelector;
+            calib.bfsBalanceRatio = bfsSettings.balanceRatio;
+            calib.bfsAcquisitionFrameRateEnable = bfsSettings.acquisitionFrameRateEnable;
+            calib.bfsAcquisitionFrameRateHz = bfsSettings.acquisitionFrameRateHz;
+            calib.bfsDeviceLinkThroughputLimit = bfsSettings.deviceLinkThroughputLimit;
+            calib.bfsBlackLevelPercent = bfsSettings.blackLevelPercent;
+            calib.bfsEvCompensation = bfsSettings.evCompensation;
             QString writeError;
             if (!hf::ur3e::writeCameraPoseJson(jsonPath,
                                                tcp,
@@ -442,8 +463,8 @@ void BfsPanelController::onCaptureClicked()
                 else
                     host_->appendLog(
                         hf::log::Channel::Ur3e,
-                        QStringLiteral("BFS capture pose JSON: %1 (hand_eye_ready, "
-                                       "base_T_flange=tool0)")
+                        QStringLiteral("BFS capture pose JSON: %1 (camera optical = "
+                                       "tool0⊗tool_tcp_*; hand_eye_ready, base_T_flange=tool0)")
                             .arg(jsonPath));
             }
         }

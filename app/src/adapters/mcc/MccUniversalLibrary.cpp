@@ -92,6 +92,7 @@ void MccUniversalLibrary::unload()
     toEngUnits_ = nullptr;
     dBitOut_ = nullptr;
     dConfigPort_ = nullptr;
+    aInputMode_ = nullptr;
     loaded_ = false;
 }
 
@@ -105,6 +106,7 @@ bool MccUniversalLibrary::resolveSymbols(LighthouseError &error)
     toEngUnits_ = reinterpret_cast<ToEngUnitsFn>(GetProcAddress(module, "cbToEngUnits"));
     dBitOut_ = reinterpret_cast<DBitOutFn>(GetProcAddress(module, "cbDBitOut"));
     dConfigPort_ = reinterpret_cast<DConfigPortFn>(GetProcAddress(module, "cbDConfigPort"));
+    aInputMode_ = reinterpret_cast<AInputModeFn>(GetProcAddress(module, "cbAInputMode"));
 
     if (getConfig_ == nullptr || getErrMsg_ == nullptr || vOut_ == nullptr || aIn_ == nullptr
         || toEngUnits_ == nullptr || dBitOut_ == nullptr || dConfigPort_ == nullptr)
@@ -194,6 +196,60 @@ bool MccUniversalLibrary::configurePortAOutput(const int boardNumber, Lighthouse
         return false;
     }
 
+    return true;
+}
+
+bool MccUniversalLibrary::setAnalogInputMode(const int boardNumber,
+                                             const int inputMode,
+                                             LighthouseError &error) const
+{
+    error = {};
+    if (!loaded_)
+    {
+        error.code = LighthouseErrorCode::InvalidState;
+        error.message = "MCC Universal Library is not loaded.";
+        return false;
+    }
+    if (aInputMode_ == nullptr)
+    {
+        error.code = LighthouseErrorCode::NotImplemented;
+        error.message = "cbAInputMode is not available in this UL DLL.";
+        return false;
+    }
+
+    const int result = aInputMode_(boardNumber, inputMode);
+    if (result != kNoErrors)
+    {
+        error.code = LighthouseErrorCode::SdkError;
+        error.message = "cbAInputMode: " + formatUlError(result);
+        return false;
+    }
+    return true;
+}
+
+bool MccUniversalLibrary::analogChannelCount(const int boardNumber,
+                                             int &channelCount,
+                                             LighthouseError &error) const
+{
+    error = {};
+    channelCount = 0;
+    if (!loaded_ || getConfig_ == nullptr)
+    {
+        error.code = LighthouseErrorCode::InvalidState;
+        error.message = "MCC Universal Library is not loaded.";
+        return false;
+    }
+
+    int value = 0;
+    const int result = getConfig_(kBoardInfo, boardNumber, 0, kBiNumAdChans, &value);
+    if (result != kNoErrors)
+    {
+        error.code = LighthouseErrorCode::SdkError;
+        error.message = "cbGetConfig(BINUMADCHANS): " + formatUlError(result);
+        return false;
+    }
+
+    channelCount = value;
     return true;
 }
 

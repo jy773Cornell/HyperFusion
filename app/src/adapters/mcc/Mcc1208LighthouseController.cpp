@@ -131,13 +131,34 @@ bool Mcc1208LighthouseController::connect(LighthouseError &error)
     activeBoardNumber_ = detected.boardNumber;
     deviceInfo_ = detected;
 
-    // SE vs DIFF is InstaCal on this board. cbAInputMode() faults (BADFUNCTION) here.
-    logMessage("Light backend: analog input mode from InstaCal (USB-1208FS-Plus has no cbAInputMode)");
-
     if (!ul_.configurePortAOutput(activeBoardNumber_, error))
     {
         state_ = LighthouseState::Fault;
         return false;
+    }
+
+    // Device must be open (Port A config) before cbAInputMode. DIFF pairs CH2 (T1)
+    // onto software CH1, so the panel shows Transmittance 1 as Reflectance 2.
+    analogChannelCount_ = 8;
+    LighthouseError modeError;
+    const bool singleEnded =
+        ul_.setAnalogInputMode(activeBoardNumber_, mcc::kAnalogInputModeSingleEnded, modeError);
+    if (!singleEnded)
+        logMessage("Light backend: could not set single-ended analog (" + modeError.message + ")");
+    else
+        logMessage("Light backend: analog input mode set to single-ended");
+
+    LighthouseError countError;
+    int channelCount = 0;
+    if (ul_.analogChannelCount(activeBoardNumber_, channelCount, countError) && channelCount > 0)
+    {
+        analogChannelCount_ = singleEnded ? 8 : channelCount;
+        logMessage(std::string("Light backend: analog channel count ") + std::to_string(channelCount)
+                   + (analogChannelCount_ >= 8 ? " (single-ended)" : " (differential — T1 shown as Reflectance 2 unless SE)"));
+    }
+    else if (singleEnded)
+    {
+        analogChannelCount_ = 8;
     }
 
     if (!applyConnectDefaults(error))
@@ -147,6 +168,8 @@ bool Mcc1208LighthouseController::connect(LighthouseError &error)
     }
 
     deviceInfo_.details = detected.details + "\nConnected. Port A configured for output.";
+    if (analogChannelCount_ < 8)
+        deviceInfo_.details += "\nAnalog is differential: alive LEDs use DIFF CH0=R1, DIFF CH1=T1.";
     state_ = LighthouseState::Connected;
     logMessage("Light backend: USB-1208FS-Plus connected on board "
                + std::to_string(activeBoardNumber_)
@@ -170,6 +193,7 @@ void Mcc1208LighthouseController::disconnect()
     deviceDetected_ = false;
     deviceInfo_ = {};
     activeBoardNumber_ = -1;
+    analogChannelCount_ = 8;
     powerStatus_ = {};
     state_ = LighthouseState::Disconnected;
     logMessage("Light backend: disconnected, all outputs off");
@@ -185,9 +209,18 @@ bool Mcc1208LighthouseController::pollControllerPowerStatus(LighthouseController
         return true;
 
     LighthouseControllerPowerStatus reading;
+    reading.analogChannelCount = analogChannelCount_;
     for (int lampIndex = 0; lampIndex < kLighthouseLampCount; ++lampIndex)
     {
-        const int channel = lighthousePowerMonitorChannelForLamp(static_cast<LighthouseLamp>(lampIndex));
+        const int channel = lighthousePowerMonitorChannelForLamp(
+            static_cast<LighthouseLamp>(lampIndex), analogChannelCount_);
+        if (channel < 0)
+        {
+            reading.monitorVolts[static_cast<std::size_t>(lampIndex)] = 0.0f;
+            reading.controllerAlive[static_cast<std::size_t>(lampIndex)] = false;
+            continue;
+        }
+
         float volts = 0.0f;
         if (!ul_.readAnalogInputVolts(activeBoardNumber_, channel, volts, error))
             return false;

@@ -200,11 +200,12 @@ struct HardwareConfig
             return {dlpTcpXMm, dlpTcpYMm, dlpTcpZMm, dlpTcpRollDeg, dlpTcpPitchDeg, dlpTcpYawDeg};
         }
         [[nodiscard]] bool usesDlpScanTcp() const { return scanTcp == ScanTcpKind::Dlp; }
-        /// MoveIt / plan fingerprint tip. BFS capture still uses cameraToolTcpMm().
-        [[nodiscard]] ToolTcpMm activeToolTcpMm() const
-        {
-            return usesDlpScanTcp() ? dlpToolTcpMm() : cameraToolTcpMm();
-        }
+    /// MoveIt / plan fingerprint tip. Capture JSON always uses cameraToolTcpMm()
+    /// via tool0 ⊗ tool_tcp_* (see cameraOpticalTcpFromTool0).
+    [[nodiscard]] ToolTcpMm activeToolTcpMm() const
+    {
+        return usesDlpScanTcp() ? dlpToolTcpMm() : cameraToolTcpMm();
+    }
         /// Robot base mount height in world frame (mm). Z=0 is tray surface; mount plane is at this height.
         double ceilingMountHeightMm = 650.0;
         /// MoveIt workspace collision cube (mm). Extends downward from the mount plane (relative to robot).
@@ -245,8 +246,6 @@ struct HardwareConfig
         /// Semi Plan: number of φ candidates per θ ring when hunting base-sweep OK entries.
         /// Spaced evenly over 360° (e.g. 260 → every ~1.4°).
         int semiRingSearchCandidates = 360;
-        /// Optional subfolder under mvs_semi_scan_plans (Semi Route combo). Empty = top-level.
-        QString semiScanPlansSubdir;
         /// Persist last MoveIt plan beside app.exe; reload on start if cfg fingerprint matches.
         bool rememberLastScanPlan = true;
         /// BFS OpenCV intrinsics for multiview pose JSON / transforms.json (pixels).

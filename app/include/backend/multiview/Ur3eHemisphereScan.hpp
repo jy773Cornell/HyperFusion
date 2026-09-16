@@ -79,7 +79,7 @@ void homeOpticalTcpOrientation(double &rx, double &ry, double &rz,
 [[nodiscard]] int hemisphereScanPointCount(const Ur3eHemisphereScanParams &params);
 /// Latitude/longitude grid plus a fixed apex pin first.
 /// Apex = home XY and home orientation, Z = ring radius R (base_link).
-/// Rings orbit the scan-center on scan_tcp; image-up → world −Z.
+/// Rings orbit the scan-center on scan_tcp; image-up → world +Z (camera bottom / projector top).
 [[nodiscard]] std::vector<Ur3eHemisphereScanPoint>
 generateHemisphereScanPoints(const Ur3eHemisphereScanParams &params);
 /// Semi Plan grid: same θ layers + apex, but *searchCandidates* φ samples evenly over 360°.

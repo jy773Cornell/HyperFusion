@@ -698,7 +698,7 @@ Ur3eScanWaypointMoveResult ur3eExecuteScanWaypoint(const QString &serverUrl,
             tcp.insert(QStringLiteral("require_perpendicular"), false);
             tcp.insert(QStringLiteral("camera_up_x"), 0.0);
             tcp.insert(QStringLiteral("camera_up_y"), 0.0);
-            tcp.insert(QStringLiteral("camera_up_z"), -1.0);
+            tcp.insert(QStringLiteral("camera_up_z"), 1.0);
         }
         else if (apexLookDown)
         {

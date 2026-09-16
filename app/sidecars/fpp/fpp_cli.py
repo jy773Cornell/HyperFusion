@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 # Offline FPP decode + metric depth (sidecar). Not wired into the GUI yet.
-"""Decode an FPP burst. Default: camera Z (mm) via camera_projector_stereo.yaml."""
+"""Decode an FPP burst. Default: camera Z (mm) via camera_projector_stereo.yaml.
+
+Uses ``dlp_led`` / ``decode_channel`` from pose JSON (or ``--channel``) so red-LED
+bursts decode on R instead of Rec.601 luma.
+"""
 
 from __future__ import annotations
 
@@ -19,16 +23,67 @@ from hyperfusion_fpp.paths import DEFAULT_STEREO_YAML, resolve_stereo_yaml
 from hyperfusion_fpp.undistort import undistort_burst
 
 
+def _parse_led_ma(text: str) -> tuple[int, int, int]:
+    parts = [p.strip() for p in str(text).split(",")]
+    if len(parts) != 3:
+        raise ValueError("--set-led needs red,green,blue mA (e.g. 2400,0,0)")
+    return int(parts[0]), int(parts[1]), int(parts[2])
+
+
+def _backfill_led_json(
+    burst_dir: Path,
+    start: Path,
+    *,
+    red_ma: int,
+    green_ma: int,
+    blue_ma: int,
+    channel: str,
+) -> int:
+    """Write dlp_led + decode_channel into pose JSONs for this burst (offline repair)."""
+    from hyperfusion_fpp.capture import STEP_COUNT, U_ONLY_STEP_COUNT, _burst_stride, _stem_sort_key
+
+    tiffs = sorted(burst_dir.glob("*.tif"), key=_stem_sort_key)
+    tiffs += sorted(p for p in burst_dir.glob("*.tiff") if p not in set(tiffs))
+    offset = next((i for i, p in enumerate(tiffs) if p.name == start.name), None)
+    if offset is None:
+        return 0
+    stride = _burst_stride(tiffs, offset)
+    stride = min(stride, STEP_COUNT if stride >= STEP_COUNT else U_ONLY_STEP_COUNT)
+    n = 0
+    led = {
+        "red_ma": int(red_ma),
+        "green_ma": int(green_ma),
+        "blue_ma": int(blue_ma),
+        "decode_channel": channel,
+    }
+    for path in tiffs[offset : offset + stride]:
+        jpath = path.with_suffix(".json")
+        if not jpath.is_file():
+            continue
+        meta = json.loads(jpath.read_text(encoding="utf-8"))
+        meta["dlp_led"] = led
+        meta["decode_channel"] = channel
+        jpath.write_text(json.dumps(meta, indent=4) + "\n", encoding="utf-8")
+        n += 1
+    return n
+
+
 def _process_burst(
     burst_dir: Path,
     start: Path,
     out_dir: Path,
     stereo_arg: Path | None,
     min_modulation: float,
+    min_phase_quality: float,
+    channel: str,
 ) -> dict:
-    burst = load_burst(burst_dir, start=start)
+    burst = load_burst(burst_dir, start=start, channel=channel)
     undistort_burst(burst)
-    decoded = decode_burst(burst, min_modulation=min_modulation)
+    decoded = decode_burst(
+        burst,
+        min_modulation=min_modulation,
+        min_phase_quality=min_phase_quality,
+    )
     stereo = StereoGeometry.load(Path(stereo_arg)) if stereo_arg is not None else None
     depth = depth_from_decode(decoded, stereo=stereo)
     dest = out_dir / burst_dir.name / start.stem
@@ -37,6 +92,8 @@ def _process_burst(
     summary: dict = {
         "start": start.name,
         "burst_dir": str(burst_dir),
+        "decode_channel": burst.decode_channel,
+        "min_modulation": float(min_modulation),
         "valid_px": int(depth.mask.sum()),
         "mode": depth.mode,
         "stereo": str(stereo_arg) if stereo_arg else None,
@@ -74,10 +131,26 @@ def main() -> int:
     )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument(
+        "--channel",
+        default="auto",
+        help="Decode gray channel: auto|r|g|b|luma (default auto from dlp_led / image).",
+    )
+    parser.add_argument(
         "--min-modulation",
         type=float,
-        default=0.08,
-        help="White-Black threshold. Unlit FOV is dropped.",
+        default=0.15,
+        help="White−Black threshold (default 0.15). Use ~0.08–0.12 if still too sparse.",
+    )
+    parser.add_argument(
+        "--min-phase-quality",
+        type=float,
+        default=0.04,
+        help="Fine-frequency phase quality gate (hypot of quadrature).",
+    )
+    parser.add_argument(
+        "--set-led",
+        default=None,
+        help="Backfill pose JSON dlp_led as red,green,blue mA (e.g. 2400,0,0) then decode.",
     )
     args = parser.parse_args()
 
@@ -85,6 +158,24 @@ def main() -> int:
     jobs = list_burst_jobs(src)
     if not jobs:
         raise FileNotFoundError(f"No FPP burst in {src}")
+
+    if args.set_led is not None:
+        red_ma, green_ma, blue_ma = _parse_led_ma(args.set_led)
+        from hyperfusion_fpp.capture import decode_channel_from_led_ma, _normalize_channel
+
+        ch = _normalize_channel(args.channel)
+        if ch == "auto":
+            ch = decode_channel_from_led_ma(red_ma, green_ma, blue_ma)
+        for burst_dir, start in jobs:
+            n = _backfill_led_json(
+                burst_dir,
+                start,
+                red_ma=red_ma,
+                green_ma=green_ma,
+                blue_ma=blue_ma,
+                channel=ch,
+            )
+            print(json.dumps({"backfill_led": True, "n_json": n, "channel": ch, "burst": str(burst_dir)}))
 
     stereo_path: Path | None = None
     if not args.no_stereo:
@@ -104,6 +195,8 @@ def main() -> int:
             Path(args.out),
             stereo_path,
             args.min_modulation,
+            args.min_phase_quality,
+            args.channel,
         )
         for burst_dir, start in jobs
     ]

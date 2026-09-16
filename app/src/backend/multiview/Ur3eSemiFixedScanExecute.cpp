@@ -151,6 +151,17 @@ bool runWristSweepAtPose(const QString &serverUrl,
                     continue;
                 }
                 std::this_thread::sleep_for(std::chrono::milliseconds(stabilizeMs));
+                if (host.stopRequested && host.stopRequested())
+                {
+                    if (stoppedOut != nullptr)
+                        *stoppedOut = true;
+                    hardwareMoveExact(serverUrl,
+                                      baseJoints,
+                                      QStringLiteral("semi-fixed return-to-pin after sweep abort"),
+                                      nullptr,
+                                      stoppedOut);
+                    return false;
+                }
                 if (host.captureStill && !host.captureStill(plannedTcp, ringIndex, sampleIndex))
                 {
                     // Leave wrists at nominal before aborting so retreat/home is not offset.
@@ -159,6 +170,12 @@ bool runWristSweepAtPose(const QString &serverUrl,
                                       QStringLiteral("semi-fixed return-to-pin after sweep abort"),
                                       nullptr,
                                       stoppedOut);
+                    if (host.stopRequested && host.stopRequested())
+                    {
+                        if (stoppedOut != nullptr)
+                            *stoppedOut = true;
+                        return false;
+                    }
                     if (errorOut != nullptr)
                         *errorOut = QStringLiteral("wrist sweep capture failed");
                     return false;
@@ -979,7 +996,9 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
     }
     const double intervalDeg =
         route.intervalDeg > 0.0 ? route.intervalDeg : 10.0;
-    const int samplesPerRing = semiFixedSampleCount(intervalDeg);
+    const double panRangeDeg =
+        route.panRangeDeg >= 0.0 ? std::min(360.0, route.panRangeDeg) : 360.0;
+    const int samplesPerRing = semiFixedSampleCount(intervalDeg, panRangeDeg);
     const double intervalRad = intervalDeg * kDegToRad;
     const int panDir = route.panDirection >= 0 ? 1 : -1;
     const int stabilizeMs =
@@ -1002,10 +1021,11 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
         host.log(QStringLiteral(
                      "UR3e semi-fixed execute: top still + %1 ring entry(ies), "
                      "full-spin latitudes use one pin, backup pairs go "
-                     "pin1 → home → pin2, pan %2° every %3° "
-                     "(%4 samples/full-spin%5)…")
+                     "pin1 → home → pin2, pan %2%3° every %4° "
+                     "(%5 samples/spin%6)…")
                      .arg(ringCount)
-                     .arg(panDir > 0 ? QStringLiteral("+360") : QStringLiteral("−360"))
+                     .arg(panDir > 0 ? QStringLiteral("+") : QStringLiteral("−"))
+                     .arg(panRangeDeg, 0, 'f', 0)
                      .arg(intervalDeg, 0, 'f', 1)
                      .arg(samplesPerRing)
                      .arg(captureStills ? QStringLiteral(", BFS stills → ") + input.captureDir
@@ -1014,14 +1034,20 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
 
     // Always: MoveIt → top (θ=0 look-down) → photo, then rings (unless a two-stage MVS split).
     // Preview stores rings at [0..N-1] and top at index N (see inferSemiFixedPreviewRings).
-    const auto &hw = hf::hardwareConfig();
+    // GUI Multiview Stage 1 / 2 (pos1 = home/apex, pos2 = rings/DLP spin).
+    const double stageHomeMm = input.stageHomeMm;
+    const double stageSpinMm = input.stageSpinMm;
+    const bool twoStage = std::abs(stageSpinMm - stageHomeMm) > 0.5;
     if (host.moveStage && doTop)
     {
         QString stageErr;
-        if (!host.moveStage(hw.sampleMultiviewApexPositionMm, QStringLiteral("apex"), &stageErr))
+        if (!host.moveStage(stageHomeMm,
+                            QStringLiteral("stage pos 1"),
+                            &stageErr))
         {
             ok = false;
-            errorMessage = stageErr.isEmpty() ? QStringLiteral("Stage apex move failed") : stageErr;
+            errorMessage = stageErr.isEmpty() ? QStringLiteral("Stage home/apex move failed")
+                                              : stageErr;
             finishNow(false, stopRequested());
             return;
         }
@@ -1091,6 +1117,11 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
             Ur3eScanTcpPose planned = top.hasEntryTcp ? top.entryTcp : Ur3eScanTcpPose{};
             if (!host.captureStill(planned, -1, 0))
             {
+                if (stopRequested())
+                {
+                    ur3eStopMotion(input.serverUrl);
+                    goto semi_fixed_done;
+                }
                 ok = false;
                 errorMessage = QStringLiteral("top capture failed");
                 if (host.markRingFailed)
@@ -1142,14 +1173,17 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
             host.log(QStringLiteral("UR3e semi-fixed: top still done."));
     }
 
-    // After the first (apex) still: MVS ring plane, not home — even on apex-only.
-    if (host.moveStage && hw.sampleMultiviewTwoStage() && doTop && !apexRingOnly)
+    // After the first (apex/home) still: MVS / DLP spin plane.
+    if (host.moveStage && twoStage && doTop && !apexRingOnly)
     {
         QString stageErr;
-        if (!host.moveStage(hw.sampleMultiviewPositionMm, QStringLiteral("MVS rings"), &stageErr))
+        if (!host.moveStage(stageSpinMm,
+                            QStringLiteral("stage pos 2"),
+                            &stageErr))
         {
             ok = false;
-            errorMessage = stageErr.isEmpty() ? QStringLiteral("Stage MVS move failed") : stageErr;
+            errorMessage = stageErr.isEmpty() ? QStringLiteral("Stage spin/MVS move failed")
+                                              : stageErr;
             goto semi_fixed_done;
         }
     }
@@ -1551,6 +1585,11 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
                 Ur3eScanTcpPose planned = ring.hasEntryTcp ? ring.entryTcp : Ur3eScanTcpPose{};
                 if (!host.captureStill(planned, ringIndex, sample))
                 {
+                    if (stopRequested())
+                    {
+                        ur3eStopMotion(input.serverUrl);
+                        goto semi_fixed_done;
+                    }
                     ok = false;
                     errorMessage = QStringLiteral("capture failed");
                     markPinFail();

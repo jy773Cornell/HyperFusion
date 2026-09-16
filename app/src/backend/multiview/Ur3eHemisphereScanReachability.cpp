@@ -263,17 +263,17 @@ Ur3eScanTcpPose tcpPoseForHemispherePoint(const Ur3eHemisphereScanPoint &gridPoi
     tcp.toolZMy = centerYM - tcp.yM;
     tcp.toolZMz = centerZM - tcp.zM;
 
-    // Rings: image-up = world −Z.
+    // Rings: image-up = world +Z (calibrated DLP yaw≈180 → camera on bottom / projector on top).
     double upX = 0.0;
     double upY = 0.0;
-    double upZ = -1.0;
+    double upZ = 1.0;
     if (isApexPin)
         homeApexCameraUpWorld(upX, upY, upZ);
     mount.transformVector(upX, upY, upZ);
 
     // Nominal tool +Z = look at scan-center. pin_tcp_tilt_deg is the tip angle of that
     // optical axis away from nominal (TCP pose orientation), not a single-wrist turn.
-    // + tips toward camera-up (ring up = world −Z → more look-down). Cone centers on tilted +Z.
+    // + tips toward camera-up (ring up = world +Z → more look-down). Cone centers on tilted +Z.
     const double tiltDeg = hf::hardwareConfig().ur3e.pinTcpTiltDeg;
     if (!isApexPin && std::abs(tiltDeg) > 1.0e-9)
     {
@@ -394,7 +394,7 @@ Ur3eHemisphereScanPlan evaluateHemisphereScanPlanMoveIt(const QString &serverUrl
             homeApexCameraUpWorld(apexUpX, apexUpY, apexUpZ);
         pose.insert(QStringLiteral("camera_up_x"), isApexPin ? apexUpX : 0.0);
         pose.insert(QStringLiteral("camera_up_y"), isApexPin ? apexUpY : 0.0);
-        pose.insert(QStringLiteral("camera_up_z"), isApexPin ? apexUpZ : -1.0);
+        pose.insert(QStringLiteral("camera_up_z"), isApexPin ? apexUpZ : 1.0);
         pose.insert(QStringLiteral("require_perpendicular"), isApexPin);
 
         poses.append(pose);
@@ -578,7 +578,7 @@ Ur3eHemisphereScanPlan evaluateSemiHemisphereScanPlanMoveIt(
             homeApexCameraUpWorld(apexUpX, apexUpY, apexUpZ);
         pose.insert(QStringLiteral("camera_up_x"), isApexPin ? apexUpX : 0.0);
         pose.insert(QStringLiteral("camera_up_y"), isApexPin ? apexUpY : 0.0);
-        pose.insert(QStringLiteral("camera_up_z"), isApexPin ? apexUpZ : -1.0);
+        pose.insert(QStringLiteral("camera_up_z"), isApexPin ? apexUpZ : 1.0);
         pose.insert(QStringLiteral("require_perpendicular"), isApexPin);
         pose.insert(QStringLiteral("theta_deg"), gridPoints[index].thetaDeg);
         pose.insert(QStringLiteral("phi_deg"), gridPoints[index].phiDeg);

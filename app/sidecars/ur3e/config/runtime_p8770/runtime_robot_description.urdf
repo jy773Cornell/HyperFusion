@@ -203,7 +203,7 @@
   </link>
   <!-- base_joint fixes base_link to the environment -->
   <joint name="base_joint" type="fixed">
-    <origin rpy="3.141593 0.000000 0.000000" xyz="0.000000 0.000000 0.870000"/>
+    <origin rpy="3.141593 0.000000 0.000000" xyz="0.000000 0.000000 0.888000"/>
     <parent link="world"/>
     <child link="base_link"/>
   </joint>
@@ -642,7 +642,7 @@
       <!-- CAD was pan-180° off in tool0 XY → rotate about Z by π. -->
       <origin rpy="0 0 3.141592653589793" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="file:///mnt/d/Pototypy/HyperFusion/app/sidecars/ur3e/urdf/meshes/ur_tool_payload_new.stl" scale="1 1 1"/>
+        <mesh filename="file:///mnt/d/Pototypy/HyperFusion/app/sidecars/ur3e/urdf/meshes/bfs_dlp_payload.stl" scale="1 1 1"/>
       </geometry>
       <material name="hyperfusion_tool_payload_visual">
         <color rgba="0.15 0.85 1.0 0.55"/>
@@ -652,7 +652,7 @@
       <!-- CAD was pan-180° off in tool0 XY → rotate about Z by π. -->
       <origin rpy="0 0 3.141592653589793" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="file:///mnt/d/Pototypy/HyperFusion/app/sidecars/ur3e/urdf/meshes/ur_tool_payload_new.stl" scale="1 1 1"/>
+        <mesh filename="file:///mnt/d/Pototypy/HyperFusion/app/sidecars/ur3e/urdf/meshes/bfs_dlp_payload.stl" scale="1 1 1"/>
       </geometry>
     </collision>
     <inertial>
@@ -681,6 +681,6 @@
   <joint name="tool0-hyperfusion_tcp" type="fixed">
     <parent link="tool0"/>
     <child link="hyperfusion_tcp"/>
-    <origin rpy="-0.03340211 0.01300270 0.00500560" xyz="0.000715 -0.054197 0.073755"/>
+    <origin rpy="-0.44092078 0.00418006 3.14039361" xyz="0.001400 0.031743 0.098538"/>
   </joint>
 </robot>

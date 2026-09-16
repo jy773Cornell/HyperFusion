@@ -40,7 +40,7 @@ def parse_args() -> argparse.Namespace:
         default=3,
         help="Last N bursts in collect order (shots 14–16). Not used in the fit.",
     )
-    p.add_argument("--min-modulation", type=float, default=0.08)
+    p.add_argument("--min-modulation", type=float, default=0.15)
     return p.parse_args()
 
 

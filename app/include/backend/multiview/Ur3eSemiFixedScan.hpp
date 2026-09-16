@@ -47,11 +47,19 @@ struct Ur3eSemiFixedRoute
     QString id;
     QString displayName;
     QString robotCfgFingerprint;
-    /// Photo every this many degrees around shoulder_pan (+360°).
+    /// Photo every this many degrees around shoulder_pan.
     double intervalDeg = 10.0;
+    /// Pan arc length in degrees (0…360). 360 = full spin (legacy Semi default).
+    double panRangeDeg = 360.0;
     /// +1 = positive pan direction, −1 = opposite.
     int panDirection = 1;
     int stabilizeMs = 500;
+    /// JSON kind ``fpp`` (vs ``ur3e_semi_fixed_route`` for Semi).
+    bool isFppPlan = false;
+    /// FPP plans historically carried stage mm in JSON; stage is GUI-owned now.
+    bool haveStagePositions = false;
+    double stageHomeMm = 0.0;
+    double stageDlpMm = 0.0;
     /// Always captured first (θ=0, home pose with Z = ring R). Filled if missing.
     Ur3eSemiFixedRing topPose{};
     bool hasTopPose = false;
@@ -80,7 +88,8 @@ struct Ur3eSemiFixedRouteInfo
 /// If the route has rings, install / replace a non-matching apex with home XY and Z = R.
 void ensureSemiFixedTopPose(Ur3eSemiFixedRoute &route);
 
-/// Named Semi plans beside app.exe (`mvs_semi_scan_plans`, copied from app/preset).
+/// Named Semi plans beside app.exe (`mvs_scan_plans/semi`, from app/preset).
+/// Prefer ``defaultUr3eSemiScanPlansDir()``; this alias remains for call sites.
 [[nodiscard]] QString defaultUr3eSemiScanRoutesDir();
 
 [[nodiscard]] bool saveUr3eSemiFixedRoute(const QString &path,
@@ -120,6 +129,14 @@ struct Ur3eSemiFixedPreviewRing
     QString displayName;
     /// Apex / top still (θ≈0) — drawn as a pin instead of a spin ring.
     bool isTopPose = false;
+    /// FPP: pin at centerXM/YM/ZM (camera TCP), not a horizontal spin circle.
+    bool drawAsPin = false;
+    /// Unit approach direction for pin stick (tool +Z / look axis).
+    double tipDirX = 0.0;
+    double tipDirY = 0.0;
+    double tipDirZ = 1.0;
+    /// Maps to Semi/FPP execute ringIndex (top uses rings.size() when separate).
+    int executeIndex = 0;
     bool noPan = false;
     bool reachabilityKnown = false;
     bool reachable = false;
@@ -131,6 +148,10 @@ inferSemiFixedPreviewRing(const Ur3eSemiFixedRing &ring);
 
 [[nodiscard]] QVector<Ur3eSemiFixedPreviewRing>
 inferSemiFixedPreviewRings(const Ur3eSemiFixedRoute &route);
+
+/// FPP: discrete pins at camera TCP home + pan samples (GUI interval/range).
+[[nodiscard]] QVector<Ur3eSemiFixedPreviewRing>
+inferFppPreviewPins(const Ur3eSemiFixedRoute &route);
 
 /// Geometric Semi rings from scan params (layers × θ) — grey preview before / during Plan.
 [[nodiscard]] QVector<Ur3eSemiFixedPreviewRing>
@@ -144,9 +165,11 @@ previewSemiFixedRingsFromHemispherePlan(const Ur3eHemisphereScanPlan &plan);
 void syncHemisphereParamsFromPlanLatitudes(const Ur3eHemisphereScanPlan &plan,
                                            Ur3eHemisphereScanParams &paramsInOut);
 
-[[nodiscard]] int semiFixedSampleCount(double intervalDeg);
+[[nodiscard]] int semiFixedSampleCount(double intervalDeg, double rangeDeg = 360.0);
 
-/// Imaging samples for one ring: full 360° / interval, or backup arc / interval.
-[[nodiscard]] int semiFixedRingSampleCount(const Ur3eSemiFixedRing &ring, double intervalDeg);
+/// Imaging samples for one ring: panRange / interval, or backup arc / interval.
+[[nodiscard]] int semiFixedRingSampleCount(const Ur3eSemiFixedRing &ring,
+                                           double intervalDeg,
+                                           double rangeDeg = 360.0);
 
 } // namespace hf::ur3e

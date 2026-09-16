@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "backend/HyperFusionConfig.hpp"
+#include "backend/multiview/Ur3eClient.hpp"
 #include "backend/multiview/Ur3eHemisphereScanReachability.hpp"
 
 #include <QString>
@@ -30,12 +32,18 @@ struct CameraIntrinsics
 };
 
 /// OpenCV camera-to-parent rotation R (3×3 row-major) and translation t (metres).
-/// Capture JSON parent is base_link (optical tip hyperfusion_tcp).
+/// Capture JSON parent is base_link; tip is always BFS camera optical (cfg tool_tcp_*).
 struct CameraExtrinsicsRt
 {
     double R[3][3]{};
     double t[3]{};
 };
+
+/// BFS camera optical in base_link: ``base_T_tool0 · tool0_T_camera`` (cfg ``tool_tcp_*``).
+/// Use this for capture JSON even when MoveIt tip ``hyperfusion_tcp`` is remapped to DLP.
+[[nodiscard]] Ur3eScanTcpPose cameraOpticalTcpFromTool0(
+    const Ur3eTcpPose &tool0,
+    const hf::HardwareConfig::Ur3eConfig::ToolTcpMm &cameraTcp);
 
 /// Build OpenGL camera_to_parent from optical TCP (UR rotvec + position).
 [[nodiscard]] Mat4 cameraToWorldOpenGlFromTcp(const Ur3eScanTcpPose &tcp);
@@ -85,6 +93,29 @@ struct CalibrationCaptureExtras
     QString fppStepLabel;
     /// HDMI PSP pattern name shown on the DLP (empty when DLP was not used).
     QString fppPattern;
+    /// DLP LED currents (mA) at capture — decode picks R/G/B vs luma from these.
+    bool haveDlpLed = false;
+    int dlpLedRedMa = 0;
+    int dlpLedGreenMa = 0;
+    int dlpLedBlueMa = 0;
+    /// BFS capture settings at still time (UI / applied). Written as ``bfs_capture``.
+    bool haveBfsCapture = false;
+    QString bfsCameraId;
+    QString bfsExposureMode;
+    QString bfsExposureAuto;
+    double bfsExposureTimeUs = 0.0;
+    QString bfsGainAuto;
+    double bfsGainDb = 0.0;
+    bool bfsGammaEnable = false;
+    double bfsGamma = 0.0;
+    QString bfsBalanceWhiteAuto;
+    QString bfsBalanceRatioSelector;
+    double bfsBalanceRatio = 0.0;
+    bool bfsAcquisitionFrameRateEnable = false;
+    double bfsAcquisitionFrameRateHz = 0.0;
+    int bfsDeviceLinkThroughputLimit = 0;
+    double bfsBlackLevelPercent = 0.0;
+    double bfsEvCompensation = 0.0;
     /// Apex stills: camera t is expressed at the MVS stage stop (sample treated static).
     bool haveOutputStageShift = false;
     double stageCapturePositionMm = 0.0;
@@ -97,7 +128,7 @@ struct CalibrationCaptureExtras
 /// Write one pose JSON next to a still (e.g. 00000.json beside 00000.tif).
 /// Always emits `base_T_flange` (live TF base_link→tool0) when *calib* has flange;
 /// otherwise `base_T_flange: null` and `hand_eye_ready: false`.
-/// *tcp* is optical TCP (hyperfusion_tcp from cfg tool_tcp_* xyz+rpy) — not the hand–eye gripper.
+/// *tcp* must be BFS camera optical (``tool_tcp_*``), never the DLP MoveIt tip.
 [[nodiscard]] bool writeCameraPoseJson(const QString &jsonPath,
                                        const Ur3eScanTcpPose &tcp,
                                        const Mat4 &cameraToWorldOpenGl,

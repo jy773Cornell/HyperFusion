@@ -34,7 +34,14 @@ struct Ur3eScanRouteInfo
 [[nodiscard]] QString ur3eScanRobotCfgFingerprint(const hf::HardwareConfig::Ur3eConfig &ur3e);
 
 [[nodiscard]] QString defaultUr3eScanPlanCachePath();
+/// Root: ``mvs_scan_plans`` beside app.exe (from preset).
+[[nodiscard]] QString defaultUr3eMvsScanPlansRootDir();
+/// Auto planning library: ``mvs_scan_plans/auto``.
 [[nodiscard]] QString defaultUr3eScanRoutesDir();
+/// Semi-fixed library: ``mvs_scan_plans/semi``.
+[[nodiscard]] QString defaultUr3eSemiScanPlansDir();
+/// FPP library: ``mvs_scan_plans/fpp``.
+[[nodiscard]] QString defaultUr3eFppScanPlansDir();
 
 [[nodiscard]] QString defaultUr3eScanRouteDisplayName(const Ur3eHemisphereScanParams &params);
 

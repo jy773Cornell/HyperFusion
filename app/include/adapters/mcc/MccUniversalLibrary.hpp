@@ -16,6 +16,8 @@ public:
 
     bool scanFor1208FsPlus(LighthouseDeviceInfo &deviceInfo, LighthouseError &error) const;
     bool configurePortAOutput(int boardNumber, LighthouseError &error) const;
+    bool setAnalogInputMode(int boardNumber, int inputMode, LighthouseError &error) const;
+    bool analogChannelCount(int boardNumber, int &channelCount, LighthouseError &error) const;
     bool writeAnalogVolts(int boardNumber, int channel, float volts, LighthouseError &error) const;
     bool readAnalogInputVolts(int boardNumber, int channel, float &volts, LighthouseError &error) const;
     bool writeDigitalBit(int boardNumber, int portBit, bool high, LighthouseError &error) const;
@@ -30,6 +32,7 @@ private:
     using ToEngUnitsFn = int (*)(int, int, unsigned short, float *);
     using DBitOutFn = int (*)(int, int, int, unsigned short);
     using DConfigPortFn = int (*)(int, int, int);
+    using AInputModeFn = int (*)(int, int);
 
     bool resolveSymbols(LighthouseError &error);
     std::string formatUlError(int errorCode) const;
@@ -42,6 +45,7 @@ private:
     ToEngUnitsFn toEngUnits_ = nullptr;
     DBitOutFn dBitOut_ = nullptr;
     DConfigPortFn dConfigPort_ = nullptr;
+    AInputModeFn aInputMode_ = nullptr;
     bool loaded_ = false;
 };
 } // namespace mcc

@@ -11,7 +11,7 @@ from .capture import FppBurst
 def illumination_mask(
     burst: FppBurst,
     *,
-    min_modulation: float = 0.08,
+    min_modulation: float = 0.15,
     open_px: int = 3,
     close_px: int = 9,
 ) -> np.ndarray:

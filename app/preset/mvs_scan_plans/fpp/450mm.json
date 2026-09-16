@@ -1,0 +1,186 @@
+{
+
+  "schema": 1,
+
+  "kind": "fpp",
+
+  "id": "450mm",
+
+  "display_name": "450mm",
+
+  "robot_cfg_fingerprint": "",
+
+  "interval_deg": 60.0,
+
+  "pan_range_deg": 360.0,
+
+  "pan_direction": 1,
+
+  "stabilize_ms": 500,
+
+  "notes": {
+
+    "height_mm": 450,
+
+    "home_joints_deg": [
+
+      138.5,
+
+      19.42,
+
+      -150.22,
+
+      40.86,
+
+      89.6,
+
+      41.3
+
+    ],
+
+    "home": "Camera look-down ~450 mm, image-up along workspace +X. One still, no pan. Same as hyperfusion.cfg home_joints_deg.",
+
+    "dlp_joints_deg": [
+
+      145.00,
+
+      10.16,
+
+      -148.77,
+
+      28.54,
+
+      105.66,
+
+      37.03
+
+    ],
+
+    "dlp": "DLP look-down ~450 mm on the long-axis centerline (Y=0), camera image-up along -X. Execute spins this pin using GUI Range and Interval.",
+
+    "scan_tcp": "dlp"
+
+  },
+
+  "top_pose": {
+
+    "id": "home",
+
+    "display_name": "Home (camera 450 mm)",
+
+    "entry_joints_rad": [
+
+      2.4172810140121466,
+
+      0.3389429407372988,
+
+      -2.6218336023458817,
+
+      0.7131415323648831,
+
+      1.5638150097869192,
+
+      0.7208209810736581
+
+    ],
+
+    "entry_tcp": {
+
+      "x_m": -0.2912096188166187,
+
+      "y_m": 0.016916599564630375,
+
+      "z_m": 0.43807819788563457,
+
+      "rx": 0.00027209765743987495,
+
+      "ry": 0.0012866611934695526,
+
+      "rz": -1.571186516797509,
+
+      "tool_z_x": 0.0006456629097852619,
+
+      "tool_z_y": -0.0009924096005445161,
+
+      "tool_z_z": 0.9999992991210502
+
+    },
+
+    "reachable": true,
+
+    "home_path_ok": true,
+
+    "base_sweep_ok": true,
+
+    "backup_coverage_ok": false
+
+  },
+
+  "rings": [
+
+    {
+
+      "id": "dlp_450",
+
+      "display_name": "DLP 450 mm",
+
+      "entry_joints_rad": [
+
+        2.4421603770591442,
+
+        0.177293007543761,
+
+        -2.5965637952368983,
+
+        0.498048318983543,
+
+        1.844160812713298,
+
+        0.6462318794164701
+
+      ],
+
+      "entry_tcp": {
+
+        "x_m": -0.09670005150666033,
+
+        "y_m": -1.3010426069826053e-17,
+
+        "z_m": 0.4380000351558905,
+
+        "rx": 2.419693243883571e-08,
+
+        "ry": 3.4866979973413085e-09,
+
+        "rz": 1.5660209279479933,
+
+        "tool_z_x": 1.7603877855432163e-08,
+
+        "tool_z_y": -1.3235205730856294e-08,
+
+        "tool_z_z": 0.9999999999999998
+
+      },
+
+      "reachable": true,
+
+      "home_path_ok": true,
+
+      "base_sweep_ok": true,
+
+      "backup_coverage_ok": false,
+
+      "backup_union_deg": 0.0,
+
+      "phi_deg": 180.0,
+
+      "theta_deg": 12.127802297511561,
+
+      "no_pan": false
+
+    }
+
+  ]
+
+}
+

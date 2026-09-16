@@ -74,6 +74,8 @@ struct LighthouseControllerPowerStatus
 {
     std::array<float, kLighthouseLampCount> monitorVolts{};
     std::array<bool, kLighthouseLampCount> controllerAlive{};
+    // 8 = single-ended (CH0–CH3 = R1, R2, T1, T2). 4 = differential.
+    int analogChannelCount = 8;
     bool valid = false;
 };
 
@@ -144,9 +146,22 @@ inline bool lighthouseRelayOutputHigh(const bool lampOn)
     return !lampOn;
 }
 
-inline int lighthousePowerMonitorChannelForLamp(const LighthouseLamp lamp)
+// SE: lamp index = AI CH. DIFF pairs SE CH0/1 and CH2/3, so T1 is software CH1 not CH2.
+inline int lighthousePowerMonitorChannelForLamp(const LighthouseLamp lamp,
+                                                const int analogChannelCount = 8)
 {
-    return static_cast<int>(lamp);
+    const int index = static_cast<int>(lamp);
+    if (analogChannelCount >= 8)
+        return index;
+    switch (lamp)
+    {
+    case LighthouseLamp::Reflectance1:
+        return 0;
+    case LighthouseLamp::Transmittance1:
+        return 1;
+    default:
+        return -1;
+    }
 }
 
 inline bool lighthouseControllerIsAlive(const float monitorVolts)
@@ -159,5 +174,6 @@ inline const char *lighthouseWiringDetailsText()
     return "Reflectance 1 and 2 share AO0 intensity (on/off: DIO A0, A1).\n"
            "Transmittance 1 and 2 share AO1 intensity (on/off: DIO A2, A3).\n"
            "Relay active-low (LOW = on, HIGH = off).\n"
-           "DC950 power: AI CH0-CH3 (~5 V = controller alive).";
+           "DC950 power (single-ended): AI CH0=R1, CH1=R2, CH2=T1, CH3=T2 (~5 V = alive).\n"
+           "If analog is differential, T1 on CH2 shows up as Reflectance 2 until SE is selected.";
 }

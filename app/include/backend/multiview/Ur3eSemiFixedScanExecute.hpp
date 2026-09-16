@@ -27,6 +27,9 @@ struct SemiFixedScanExecuteInput
     /// All = top then rings (default). ApexOnly = top only. RingsOnly = skip top.
     bool skipTop = false;
     bool skipRings = false;
+    /// GUI Multiview stage stops (pos1 = home/apex, pos2 = rings/DLP).
+    double stageHomeMm = 1600.0;
+    double stageSpinMm = 1600.0;
 };
 
 struct SemiFixedScanExecuteHost

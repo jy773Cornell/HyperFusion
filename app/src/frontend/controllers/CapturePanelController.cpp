@@ -23,12 +23,13 @@
 #include "frontend/controllers/StagePanelController.hpp"
 #include "frontend/controllers/Ur3ePanelController.hpp"
 #include "frontend/controllers/UiSettingsController.hpp"
+#include "frontend/settings/AppSettingsStore.hpp"
+#include "frontend/widgets/Ur3eHemisphereScanSettingsWidget.hpp"
 #include "frontend/widgets/CaptureSessionSummaryDialog.hpp"
 #include "frontend/widgets/LumoCameraUi.hpp"
 #include "frontend/widgets/MainWindow.hpp"
 #include "frontend/widgets/OperationWaitDialog.hpp"
 #include "frontend/widgets/StreamPaneHelpers.hpp"
-#include "frontend/widgets/Ur3eHemisphereScanSettingsWidget.hpp"
 #include "frontend/widgets/WaterfallDisplayWidget.hpp"
 
 #include <QCheckBox>
@@ -82,6 +83,25 @@ QString formatSpatialResolutionMmPerPixel(const double mmPerPixel) {
         .arg(mmPerPixel * 1000.0, 0, 'f', 2);
 
   return QStringLiteral("%1 mm/pixel").arg(mmPerPixel, 0, 'f', 4);
+}
+
+void multiviewGuiStageMm(MainWindow * /*host*/, double &pos1Mm, double &pos2Mm)
+{
+  // Multiview Stage 1/2 persist via QSettings whenever the GUI spins change.
+  const PersistedUr3eHemisphereScanSettings saved =
+      AppSettingsStore::loadUr3eHemisphereScan();
+  pos1Mm = saved.stagePosition1Mm;
+  pos2Mm = saved.stagePosition2Mm;
+}
+
+/// Same two-stage rule as Multiview finish (GUI Stage 1/2). Do not use cfg
+/// sampleMultiviewTwoStage() here — apex/MVS mm are GUI-owned after Stage spins.
+[[nodiscard]] bool multiviewGuiTwoStage(MainWindow *host)
+{
+  double stage1 = 1600.0;
+  double stage2 = 1700.0;
+  multiviewGuiStageMm(host, stage1, stage2);
+  return std::abs(stage2 - stage1) > 0.5;
 }
 } // namespace
 
@@ -1877,10 +1897,13 @@ QString hf::capture::CapturePanelController::buildScanningProcedureSummary(
     QStringList multiviewLines;
     multiviewLines.push_back(
         QStringLiteral("Multiview RGB: UR3e / BFS hemisphere scan"));
+    double stage1 = 1600.0;
+    double stage2 = 1700.0;
+    multiviewGuiStageMm(host_, stage1, stage2);
     multiviewLines.push_back(
-        QStringLiteral("Stage Multiview apex: %1 mm, MVS stop: %2 mm")
-            .arg(hf::hardwareConfig().sampleMultiviewApexPositionMm, 0, 'f', 1)
-            .arg(hf::hardwareConfig().sampleMultiviewPositionMm, 0, 'f', 1));
+        QStringLiteral("Stage Multiview pos1: %1 mm, pos2: %2 mm")
+            .arg(stage1, 0, 'f', 1)
+            .arg(stage2, 0, 'f', 1));
 
     if (host_->ur3eHemisphereScanSettings_ != nullptr) {
       const auto params = host_->ur3eHemisphereScanSettings_->params();
@@ -4350,11 +4373,16 @@ void hf::capture::CapturePanelController::startRecord() {
                        .arg(modeFolders.join(QStringLiteral(", "))));
 
   if (wantMultiview)
+  {
+    double stage1 = 1600.0;
+    double stage2 = 1700.0;
+    multiviewGuiStageMm(host_, stage1, stage2);
     host_->appendLog(QStringLiteral(
-        "Capture record: after HSI, stage → apex (%1 mm) then MVS stop (%2 mm), then "
+        "Capture record: after HSI, stage → pos1 (%1 mm) then pos2 (%2 mm), then "
         "Continue/Skip Multiview. Preprocessing can start as soon as HSI is saved.")
-                         .arg(hf::hardwareConfig().sampleMultiviewApexPositionMm, 0, 'f', 0)
-                         .arg(hf::hardwareConfig().sampleMultiviewPositionMm, 0, 'f', 0));
+                         .arg(stage1, 0, 'f', 0)
+                         .arg(stage2, 0, 'f', 0));
+  }
 
   host_->appendLog(QStringLiteral("Capture record: session %1 \u2014 "
                                   "per-camera white/bright ref from cfg, "
@@ -4621,15 +4649,18 @@ void hf::capture::CapturePanelController::beginMultiviewCapturePhase() {
   if (captureMultiviewSessionDirectory_.isEmpty() && captureWriterWorker_ != nullptr)
     captureMultiviewSessionDirectory_ = captureWriterWorker_->sessionDirectory();
 
-  const auto &hw = hf::hardwareConfig();
   captureMultiviewNeedRingsLeg_ = false;
   captureMultiviewFramesSoFar_ = 0;
   captureMultiviewPinsSoFar_ = 0;
   captureMultiviewElapsedMsSoFar_ = 0;
-  const double targetMm = hw.sampleMultiviewApexPositionMm;
+  double stage1 = 1600.0;
+  double stage2 = 1700.0;
+  multiviewGuiStageMm(host_, stage1, stage2);
+  (void)stage2;
+  const double targetMm = stage1;
   captureScanPhase_ = CaptureScanPhase::MoveToMultiviewPosition;
   host_->appendLog(
-      QStringLiteral("%1: moving stage to Multiview apex pose %2 mm…")
+      QStringLiteral("%1: moving stage to Multiview stage pos1 %2 mm…")
           .arg(captureSequenceLogPrefix())
           .arg(targetMm, 0, 'f', 2));
   requestCaptureAbsoluteMove(targetMm, CaptureScanPhase::MoveToMultiviewPosition);
@@ -4652,7 +4683,7 @@ void hf::capture::CapturePanelController::startHemisphereMultiviewCaptureAfterSt
   QDir().mkpath(outDir);
 
   const auto &hw = hf::hardwareConfig();
-  const bool twoStage = hw.sampleMultiviewTwoStage();
+  const bool twoStage = multiviewGuiTwoStage(host_);
   hf::ur3e::HemisphereScanExecuteOptions opts;
   opts.captureOutputDir = outDir;
   opts.stabilizeMs = hw.ur3e.scanCaptureStabilizeMs;
@@ -4724,11 +4755,9 @@ void hf::capture::CapturePanelController::onMultiviewCaptureFinished(
   captureMultiviewPinsSoFar_ += successfulPins;
   captureMultiviewElapsedMsSoFar_ += elapsedMs;
 
-  const auto &hw = hf::hardwareConfig();
   bool haveSpinRings = true;
   if (host_->ur3eHemisphereScanSettings_ != nullptr
-      && host_->ur3eHemisphereScanSettings_->scanExecuteMode()
-             == hf::ur3e::Ur3eScanExecuteMode::SemiFixed)
+      && hf::ur3e::isSavedRingRouteMode(host_->ur3eHemisphereScanSettings_->scanExecuteMode()))
   {
     const auto semi = host_->ur3eHemisphereScanSettings_->semiFixedRoute();
     haveSpinRings = false;
@@ -4741,17 +4770,21 @@ void hf::capture::CapturePanelController::onMultiviewCaptureFinished(
       }
     }
   }
-  if (ok && hw.sampleMultiviewTwoStage() && !captureMultiviewNeedRingsLeg_
+  double stage1 = 1600.0;
+  double stage2 = 1700.0;
+  multiviewGuiStageMm(host_, stage1, stage2);
+  const bool twoStage = multiviewGuiTwoStage(host_);
+  if (ok && twoStage && !captureMultiviewNeedRingsLeg_
       && haveSpinRings) {
     captureMultiviewInProgress_ = false;
     captureMultiviewNeedRingsLeg_ = true;
     captureScanPhase_ = CaptureScanPhase::MoveToMultiviewPosition;
     host_->appendLog(
-        QStringLiteral("%1: apex stills done (%2 frame(s)) — moving stage to MVS stop %3 mm…")
+        QStringLiteral("%1: apex stills done (%2 frame(s)) — moving stage to pos2 %3 mm…")
             .arg(captureSequenceLogPrefix())
             .arg(capturedFrameCount)
-            .arg(hw.sampleMultiviewPositionMm, 0, 'f', 2));
-    requestCaptureAbsoluteMove(hw.sampleMultiviewPositionMm,
+            .arg(stage2, 0, 'f', 2));
+    requestCaptureAbsoluteMove(stage2,
                                CaptureScanPhase::MoveToMultiviewPosition);
     updateRecorderStatus();
     return;

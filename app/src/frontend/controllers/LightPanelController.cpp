@@ -392,14 +392,24 @@ void LightPanelController::updatePowerDisplay(const LighthouseControllerPowerSta
 
         const float volts = status.monitorVolts[static_cast<std::size_t>(rowIndex)];
         const bool alive = status.controllerAlive[static_cast<std::size_t>(rowIndex)];
+        const int monitorChannel = lighthousePowerMonitorChannelForLamp(
+            static_cast<LighthouseLamp>(rowIndex), status.analogChannelCount);
         rowUi.powerIndicator->setStyleSheet(
             alive ? QStringLiteral("background-color: #27ae60; border-radius: 7px;")
                   : QStringLiteral("background-color: #c0392b; border-radius: 7px;"));
-        rowUi.powerIndicator->setToolTip(
-            tr("DC950 controller power monitor (AI CH%1): %2 V \u2014 %3")
-                .arg(rowIndex)
-                .arg(static_cast<double>(volts), 0, 'f', 2)
-                .arg(alive ? QStringLiteral("Alive") : QStringLiteral("Off")));
+        if (monitorChannel < 0)
+        {
+            rowUi.powerIndicator->setToolTip(
+                tr("DC950 power monitor is not independent for this lamp in differential analog mode"));
+        }
+        else
+        {
+            rowUi.powerIndicator->setToolTip(
+                tr("DC950 controller power monitor (AI CH%1): %2 V \u2014 %3")
+                    .arg(monitorChannel)
+                    .arg(static_cast<double>(volts), 0, 'f', 2)
+                    .arg(alive ? QStringLiteral("Alive") : QStringLiteral("Off")));
+        }
     }
 
     updateLampUptimeDisplay();

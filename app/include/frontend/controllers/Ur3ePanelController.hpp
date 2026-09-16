@@ -72,7 +72,8 @@ public:
     [[nodiscard]] bool isScanPlanReady() const;
     [[nodiscard]] bool isScanExecuting() const { return scanExecuting_; }
 
-    /// Live optical TCP (base_link / hyperfusion_tcp) when robot is connected.
+    /// Live BFS camera optical in base_link (tool0 ⊗ tool_tcp_*), even when
+    /// MoveIt tip hyperfusion_tcp is the DLP (scan_tcp=dlp).
     /// *calibOut* receives flange tool0 + joints when the sidecar provided them.
     [[nodiscard]] bool tryGetLiveOpticalTcpPose(Ur3eScanTcpPose *out,
                                                 QString *errorMessage = nullptr,

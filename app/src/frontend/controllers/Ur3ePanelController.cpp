@@ -132,6 +132,83 @@ CalibrationCaptureExtras extrasFromLivePose(const Ur3ePoseResult &live)
     return extras;
 }
 
+void fillBfsCaptureExtras(CalibrationCaptureExtras &calib, MainWindow *host)
+{
+    if (host == nullptr || host->bfsPanel() == nullptr)
+        return;
+    const hf::bfs::BfsCameraSettings s = host->bfsPanel()->settingsFromUi();
+    calib.haveBfsCapture = true;
+    calib.bfsCameraId = s.cameraId;
+    calib.bfsExposureMode = s.exposureMode;
+    calib.bfsExposureAuto = s.exposureAuto;
+    calib.bfsExposureTimeUs = s.exposureTimeUs;
+    calib.bfsGainAuto = s.gainAuto;
+    calib.bfsGainDb = s.gainDb;
+    calib.bfsGammaEnable = s.gammaEnable;
+    calib.bfsGamma = s.gamma;
+    calib.bfsBalanceWhiteAuto = s.balanceWhiteAuto;
+    calib.bfsBalanceRatioSelector = s.balanceRatioSelector;
+    calib.bfsBalanceRatio = s.balanceRatio;
+    calib.bfsAcquisitionFrameRateEnable = s.acquisitionFrameRateEnable;
+    calib.bfsAcquisitionFrameRateHz = s.acquisitionFrameRateHz;
+    calib.bfsDeviceLinkThroughputLimit = s.deviceLinkThroughputLimit;
+    calib.bfsBlackLevelPercent = s.blackLevelPercent;
+    calib.bfsEvCompensation = s.evCompensation;
+}
+
+/// Capture JSON / transforms always use BFS camera optical (tool_tcp_*), never the
+/// MoveIt tip when scan_tcp=dlp remaps hyperfusion_tcp to the projector.
+[[nodiscard]] bool resolveCameraOpticalTcp(const Ur3ePoseResult &live,
+                                           const Ur3eScanTcpPose &fallback,
+                                           Ur3eScanTcpPose *out,
+                                           QString *poseSource,
+                                           QString *warnMessage)
+{
+    if (out == nullptr)
+        return false;
+    const auto &ur3e = hf::hardwareConfig().ur3e;
+    if (live.ok && live.hasTool0)
+    {
+        *out = cameraOpticalTcpFromTool0(live.tool0, ur3e.cameraToolTcpMm());
+        if (poseSource != nullptr)
+            *poseSource = QStringLiteral("live_tf_base_tool0_x_camera_tcp");
+        return true;
+    }
+    if (live.ok && !ur3e.usesDlpScanTcp())
+    {
+        // hyperfusion_tcp == camera when scan_tcp=camera.
+        *out = scanTcpFromLivePose(live.pose, fallback);
+        if (poseSource != nullptr)
+            *poseSource = QStringLiteral("live_tf_base_hyperfusion_tcp");
+        if (warnMessage != nullptr)
+        {
+            *warnMessage = QStringLiteral(
+                "live tool0 TF missing — using hyperfusion_tcp (scan_tcp=camera).");
+        }
+        return true;
+    }
+    if (live.ok && ur3e.usesDlpScanTcp())
+    {
+        // Live tip is DLP — cannot use it for camera depth / RGB poses.
+        *out = fallback;
+        if (poseSource != nullptr)
+            *poseSource = QStringLiteral("planned_world_fallback");
+        if (warnMessage != nullptr)
+        {
+            *warnMessage = QStringLiteral(
+                "live tool0 TF missing while scan_tcp=dlp — camera optical unknown; "
+                "wrote planned MoveIt tip (may be DLP). Reconnect so /pose includes tool0.");
+        }
+        return false;
+    }
+    *out = fallback;
+    if (poseSource != nullptr)
+        *poseSource = QStringLiteral("planned_world_fallback");
+    if (warnMessage != nullptr)
+        *warnMessage = QStringLiteral("live TCP unavailable — using planned pose.");
+    return false;
+}
+
 struct OutputPoseShift
 {
     bool apply = false;
@@ -224,11 +301,13 @@ struct OutputPoseShift
 /// After the apex still, park at the MVS ring plane (not the home sensor).
 void parkStageAtMvsAfterExecuteIfUsed(MainWindow *host,
                                       const bool useStage,
-                                      const std::function<bool()> &stillOk)
+                                      const std::function<bool()> &stillOk,
+                                      const double parkMm = -1.0)
 {
     if (!useStage)
         return;
-    const double targetMm = hf::hardwareConfig().sampleMultiviewPositionMm;
+    const double targetMm =
+        parkMm >= 0.0 ? parkMm : hf::hardwareConfig().sampleMultiviewPositionMm;
     QString stageErr;
     if (!waitMoveStageAbsolute(host,
                                targetMm,
@@ -248,6 +327,7 @@ void parkStageAtMvsAfterExecuteIfUsed(MainWindow *host,
 
 [[nodiscard]] OutputPoseShift makeApexStageOutputShift()
 {
+    // Legacy helper — prefer makeStageOutputShiftMm with GUI Stage 1 / 2.
     OutputPoseShift shift;
     const auto &hw = hf::hardwareConfig();
     if (!hw.sampleMultiviewTwoStage())
@@ -256,6 +336,34 @@ void parkStageAtMvsAfterExecuteIfUsed(MainWindow *host,
     hw.sampleMultiviewApexOutputShiftM(shift.xM, shift.yM, shift.zM);
     shift.stageCaptureMm = hw.sampleMultiviewApexPositionMm;
     shift.stageOutputMm = hw.sampleMultiviewPositionMm;
+    return shift;
+}
+
+/// Same axis convention as cfg, but with plan-overridden stage stops (FPP).
+[[nodiscard]] OutputPoseShift makeStageOutputShiftMm(const double captureMm, const double outputMm)
+{
+    OutputPoseShift shift;
+    if (std::abs(outputMm - captureMm) <= 0.5)
+        return shift;
+    shift.apply = true;
+    shift.stageCaptureMm = captureMm;
+    shift.stageOutputMm = outputMm;
+    const double dM = (outputMm - captureMm) * 0.001;
+    switch (hf::hardwareConfig().sampleMultiviewStageAxis)
+    {
+    case hf::HardwareConfig::SampleMultiviewStageAxis::PosX:
+        shift.xM = dM;
+        break;
+    case hf::HardwareConfig::SampleMultiviewStageAxis::NegX:
+        shift.xM = -dM;
+        break;
+    case hf::HardwareConfig::SampleMultiviewStageAxis::PosY:
+        shift.yM = dM;
+        break;
+    case hf::HardwareConfig::SampleMultiviewStageAxis::NegY:
+        shift.yM = -dM;
+        break;
+    }
     return shift;
 }
 
@@ -310,22 +418,42 @@ bool saveOneBfsStillAtPin(Ur3ePanelController *controller,
     Ur3eScanTcpPose tcpForPose = plannedTcp;
     QString poseSource = QStringLiteral("planned_world_fallback");
     const Ur3ePoseResult livePose = ur3eGetTcpPose(serverUrl);
-    if (livePose.ok)
+    QString opticalWarn;
+    const bool opticalOk =
+        resolveCameraOpticalTcp(livePose, plannedTcp, &tcpForPose, &poseSource, &opticalWarn);
+    if (!opticalOk && hf::hardwareConfig().ur3e.usesDlpScanTcp())
     {
-        tcpForPose = scanTcpFromLivePose(livePose.pose, plannedTcp);
-        poseSource = QStringLiteral("live_tf_base_hyperfusion_tcp");
+        if (ok != nullptr)
+            *ok = false;
+        if (errorMessage != nullptr)
+        {
+            *errorMessage =
+                QStringLiteral(
+                    "Camera optical pose unavailable at %1 while scan_tcp=dlp "
+                    "(%2). Need live /pose tool0.")
+                    .arg(skipContext,
+                         opticalWarn.isEmpty() ? QStringLiteral("no tool0 TF") : opticalWarn);
+        }
+        return false;
     }
-    else
+    if (!opticalOk)
     {
         QMetaObject::invokeMethod(
             controller,
-            [host, skipContext]() {
+            [host, skipContext, opticalWarn]() {
                 host->appendLog(
-                    QStringLiteral(
-                        "UR3e scan capture: live base_link→hyperfusion_tcp "
-                        "unavailable at %1 — writing planned world pose "
-                        "(pose_source=planned_world_fallback).")
-                        .arg(skipContext));
+                    QStringLiteral("UR3e scan capture: camera optical unresolved at %1 — %2")
+                        .arg(skipContext, opticalWarn));
+            },
+            Qt::QueuedConnection);
+    }
+    else if (!opticalWarn.isEmpty())
+    {
+        QMetaObject::invokeMethod(
+            controller,
+            [host, skipContext, opticalWarn]() {
+                host->appendLog(
+                    QStringLiteral("UR3e scan capture: %1 (%2)").arg(opticalWarn, skipContext));
             },
             Qt::QueuedConnection);
     }
@@ -384,6 +512,14 @@ bool saveOneBfsStillAtPin(Ur3ePanelController *controller,
                                : QStringLiteral("Black");
         if (calib.fppStepLabel.isEmpty())
             calib.fppStepLabel = QString::fromUtf8(step.label);
+        if (host != nullptr && host->dlpPanel() != nullptr)
+        {
+            const hf::dlp::DlpProjectorSettings led = host->dlpPanel()->currentSettings();
+            calib.haveDlpLed = true;
+            calib.dlpLedRedMa = led.ledRedMa;
+            calib.dlpLedGreenMa = led.ledGreenMa;
+            calib.dlpLedBlueMa = led.ledBlueMa;
+        }
     }
     if (outputShift.apply)
     {
@@ -394,6 +530,7 @@ bool saveOneBfsStillAtPin(Ur3ePanelController *controller,
         calib.outputShiftYM = outputShift.yM;
         calib.outputShiftZM = outputShift.zM;
     }
+    fillBfsCaptureExtras(calib, host);
     if (!calib.haveFlange)
     {
         QMetaObject::invokeMethod(
@@ -490,11 +627,30 @@ bool capturePinStillsMaybeFpp(Ur3ePanelController *controller,
         },
         Qt::QueuedConnection);
 
+    hf::bfs::BfsPanelController *bfs = host->bfsPanel();
+    if (bfs == nullptr)
+    {
+        if (ok != nullptr)
+            *ok = false;
+        if (errorMessage != nullptr)
+            *errorMessage = QStringLiteral("BFS panel unavailable for FPP capture.");
+        return false;
+    }
+
     bool burstOk = true;
+    bool burstAborted = false;
+    const auto keepGoing = [&]() {
+        return !sessionActive || sessionActive();
+    };
+    const auto abortRequested = [&]() { return !keepGoing(); };
+
     for (int step = 0; step < fppSteps; ++step)
     {
-        if (sessionActive && !sessionActive())
+        if (!keepGoing())
+        {
+            burstAborted = true;
             break;
+        }
 
         QString dlpError;
         if (!dlp->showFppScanStepSync(step, &dlpError))
@@ -511,21 +667,24 @@ bool capturePinStillsMaybeFpp(Ur3ePanelController *controller,
             break;
         }
 
-        hf::bfs::BfsPanelController *bfs = host->bfsPanel();
-        if (bfs == nullptr)
+        if (!keepGoing())
         {
-            if (ok != nullptr)
-                *ok = false;
-            if (errorMessage != nullptr)
-                *errorMessage = QStringLiteral("BFS panel unavailable for FPP capture.");
-            burstOk = false;
+            burstAborted = true;
             break;
         }
+
         const std::uint64_t beforeIndex = bfs->lastFrameIndex();
         if (!bfs->waitForNewerFrame(beforeIndex,
                                     hf::dlp::kFppCaptureMinNewFrames,
-                                    hf::dlp::kFppCaptureFrameWaitMs))
+                                    hf::dlp::kFppCaptureFrameWaitMs,
+                                    nullptr,
+                                    abortRequested))
         {
+            if (!keepGoing())
+            {
+                burstAborted = true;
+                break;
+            }
             if (ok != nullptr)
                 *ok = false;
             if (errorMessage != nullptr)
@@ -544,8 +703,15 @@ bool capturePinStillsMaybeFpp(Ur3ePanelController *controller,
         }
         if (!bfs->waitForNewerFrame(bfs->lastFrameIndex(),
                                     hf::dlp::kFppCaptureStabilizeFrames,
-                                    hf::dlp::kFppCaptureStabilizeWaitMs))
+                                    hf::dlp::kFppCaptureStabilizeWaitMs,
+                                    nullptr,
+                                    abortRequested))
         {
+            if (!keepGoing())
+            {
+                burstAborted = true;
+                break;
+            }
             if (ok != nullptr)
                 *ok = false;
             if (errorMessage != nullptr)
@@ -563,8 +729,11 @@ bool capturePinStillsMaybeFpp(Ur3ePanelController *controller,
             break;
         }
 
-        if (sessionActive && !sessionActive())
+        if (!keepGoing())
+        {
+            burstAborted = true;
             break;
+        }
 
         const QString label = QString::fromUtf8(hf::dlp::kFppScanningSteps[step].label);
         if (!saveOneBfsStillAtPin(controller,
@@ -597,7 +766,7 @@ bool capturePinStillsMaybeFpp(Ur3ePanelController *controller,
                         .arg(blankError));
             },
             Qt::QueuedConnection);
-        if (burstOk)
+        if (burstOk && !burstAborted)
         {
             if (ok != nullptr)
                 *ok = false;
@@ -605,6 +774,19 @@ bool capturePinStillsMaybeFpp(Ur3ePanelController *controller,
                 *errorMessage = QStringLiteral("DLP blank after FPP failed: %1").arg(blankError);
             burstOk = false;
         }
+    }
+
+    if (burstAborted)
+    {
+        QMetaObject::invokeMethod(
+            controller,
+            [host, skipContext]() {
+                host->appendLog(
+                    QStringLiteral("UR3e scan capture: FPP burst aborted at %1 (stop).")
+                        .arg(skipContext));
+            },
+            Qt::QueuedConnection);
+        return false;
     }
     return burstOk;
 }
@@ -750,8 +932,7 @@ bool Ur3ePanelController::isSidecarRunning() const
 bool Ur3ePanelController::isScanPlanReady() const
 {
     if (host_ != nullptr && host_->ur3eHemisphereScanSettings_ != nullptr
-        && host_->ur3eHemisphereScanSettings_->scanExecuteMode()
-               == Ur3eScanExecuteMode::SemiFixed)
+        && isSavedRingRouteMode(host_->ur3eHemisphereScanSettings_->scanExecuteMode()))
         return host_->ur3eHemisphereScanSettings_->semiFixedRouteReady();
     return scanPlanReady_ && plannedScanPlan_.reachableCount > 0;
 }
@@ -777,7 +958,19 @@ bool Ur3ePanelController::tryGetLiveOpticalTcpPose(Ur3eScanTcpPose *out,
     if (!livePose.ok)
         return false;
 
-    *out = scanTcpFromLivePose(livePose.pose, Ur3eScanTcpPose{});
+    QString poseSource;
+    QString warn;
+    if (!resolveCameraOpticalTcp(livePose, Ur3eScanTcpPose{}, out, &poseSource, &warn))
+    {
+        if (errorMessage != nullptr)
+        {
+            *errorMessage = warn.isEmpty()
+                                ? QStringLiteral("camera optical TCP unavailable")
+                                : warn;
+        }
+        return false;
+    }
+    (void)poseSource;
     if (calibOut != nullptr)
         *calibOut = extrasFromLivePose(livePose);
     return true;
@@ -1106,6 +1299,9 @@ void Ur3ePanelController::wireSettingsTabConnections()
                     if (host_->ur3eHemisphereScanSettings_->scanExecuteMode()
                         == Ur3eScanExecuteMode::SemiFixed)
                         refreshSemiFixedPreview();
+                    else if (host_->ur3eHemisphereScanSettings_->scanExecuteMode()
+                             == Ur3eScanExecuteMode::Fpp)
+                        refreshSemiFixedPreview();
                     else if (host_->ur3eScanRoutePlanWidget_ != nullptr)
                     {
                         host_->ur3eScanRoutePlanWidget_->clearSemiFixedPreviewRings();
@@ -1371,7 +1567,7 @@ void Ur3ePanelController::updateRobotUi()
     {
         host_->ur3eHemisphereScanSettings_->setPlanEnabled(canStartMotion && !busy_);
         const bool executeReady =
-            host_->ur3eHemisphereScanSettings_->scanExecuteMode() == Ur3eScanExecuteMode::SemiFixed
+            isSavedRingRouteMode(host_->ur3eHemisphereScanSettings_->scanExecuteMode())
                 ? host_->ur3eHemisphereScanSettings_->semiFixedRouteReady()
                 : (scanPlanReady_ && plannedScanPlan_.reachableCount > 0);
         host_->ur3eHemisphereScanSettings_->setExecuteEnabled(canStartMotion && executeReady
@@ -2130,6 +2326,44 @@ void Ur3ePanelController::onLoadPlannedRouteAsSemiFixedRequested(const QString &
         return;
 
     const QString robotFp = ur3eScanRobotCfgFingerprint(hf::hardwareConfig().ur3e);
+    const bool fppMode =
+        host_->ur3eHemisphereScanSettings_->scanExecuteMode() == Ur3eScanExecuteMode::Fpp;
+
+    // FPP (kind "fpp") or Semi (kind "ur3e_semi_fixed_route") — load rings/top/stage.
+    {
+        Ur3eSemiFixedRoute hand;
+        QString handErr;
+        if (loadUr3eSemiFixedRoute(routePath, robotFp, hand, &handErr))
+        {
+            if (fppMode)
+                hand.isFppPlan = true;
+            host_->ur3eHemisphereScanSettings_->setSemiFixedRoute(hand);
+            host_->ur3eHemisphereScanSettings_->setPlannedReachablePins(
+                std::max(1, static_cast<int>(hand.rings.size()) + (hand.hasTopPose ? 1 : 0)));
+            if (fppMode)
+                host_->ur3eHemisphereScanSettings_->rememberFppPlanPath(routePath);
+            else
+                host_->ur3eHemisphereScanSettings_->rememberSemiFixedPlanPath(routePath);
+            refreshSemiFixedPreview();
+            host_->appendLog(
+                QStringLiteral("UR3e %1: loaded \"%2\" → home + %3 ring(s) "
+                               "(spin uses GUI Range/Interval/Direction; stage uses GUI Stage 1/2).")
+                    .arg(fppMode ? QStringLiteral("FPP") : QStringLiteral("semi-fixed"))
+                    .arg(hand.displayName)
+                    .arg(hand.rings.size()));
+            updateRobotUi();
+            if (host_->capturePanel() != nullptr)
+                host_->capturePanel()->syncBfsAndMultiviewRgbCaptureControls();
+            return;
+        }
+        if (fppMode)
+        {
+            host_->appendLog(
+                QStringLiteral("UR3e FPP: plan not loaded — %1").arg(handErr));
+            return;
+        }
+    }
+
     Ur3eHemisphereScanPlan plan;
     Ur3eHemisphereScanParams routeParams;
     QString displayName;
@@ -2144,6 +2378,7 @@ void Ur3ePanelController::onLoadPlannedRouteAsSemiFixedRequested(const QString &
     double intervalDeg =
         host_->ur3eHemisphereScanSettings_->semiFixedRoute().intervalDeg;
     int panDir = host_->ur3eHemisphereScanSettings_->semiFixedRoute().panDirection;
+    double panRangeDeg = host_->ur3eHemisphereScanSettings_->semiFixedRoute().panRangeDeg;
     QFile metaFile(routePath);
     if (metaFile.open(QIODevice::ReadOnly | QIODevice::Text))
     {
@@ -2156,11 +2391,16 @@ void Ur3ePanelController::onLoadPlannedRouteAsSemiFixedRequested(const QString &
                 intervalDeg = root.value(QStringLiteral("imaging_interval_deg")).toDouble(intervalDeg);
             if (root.contains(QStringLiteral("pan_direction")))
                 panDir = root.value(QStringLiteral("pan_direction")).toInt(panDir);
+            if (root.contains(QStringLiteral("pan_range_deg")))
+                panRangeDeg = root.value(QStringLiteral("pan_range_deg")).toDouble(panRangeDeg);
+            else if (root.contains(QStringLiteral("interval_deg")))
+                intervalDeg = root.value(QStringLiteral("interval_deg")).toDouble(intervalDeg);
         }
     }
 
     Ur3eSemiFixedRoute semi = semiFixedRouteFromHemispherePlan(
         plan, robotFp, displayName, intervalDeg, panDir);
+    semi.panRangeDeg = panRangeDeg >= 0.0 ? std::min(360.0, panRangeDeg) : 360.0;
 
     // Layer + θ from plan latitudes (scan_params can be stale / defaults).
     syncHemisphereParamsFromPlanLatitudes(plan, routeParams);
@@ -2177,7 +2417,7 @@ void Ur3ePanelController::onLoadPlannedRouteAsSemiFixedRequested(const QString &
             if (host_->ur3eHemisphereScanSettings_ != nullptr)
             {
                 host_->ur3eHemisphereScanSettings_->applyLoadedSemiPlanSettings(
-                    routeParams, intervalDeg, panDir);
+                    routeParams, intervalDeg, panDir, panRangeDeg);
             }
             refreshSemiFixedPreview();
         }
@@ -2188,11 +2428,14 @@ void Ur3ePanelController::onLoadPlannedRouteAsSemiFixedRequested(const QString &
     scanPlanReady_ = plan.reachableCount > 0;
 
     host_->ur3eHemisphereScanSettings_->applyLoadedSemiPlanSettings(routeParams, intervalDeg,
-                                                                    panDir);
+                                                                    panDir, panRangeDeg);
     host_->ur3eHemisphereScanSettings_->setSemiFixedRoute(semi);
     host_->ur3eHemisphereScanSettings_->setPlannedReachablePins(
         std::max(1, plan.reachableCount));
-    host_->ur3eHemisphereScanSettings_->rememberSemiFixedPlanPath(routePath);
+    if (host_->ur3eHemisphereScanSettings_->scanExecuteMode() == Ur3eScanExecuteMode::Fpp)
+        host_->ur3eHemisphereScanSettings_->rememberFppPlanPath(routePath);
+    else
+        host_->ur3eHemisphereScanSettings_->rememberSemiFixedPlanPath(routePath);
     if (host_->ur3eScanRoutePlanWidget_ != nullptr)
         host_->ur3eScanRoutePlanWidget_->setScanParams(
             host_->ur3eHemisphereScanSettings_->semiPlanParams());
@@ -2234,8 +2477,7 @@ void Ur3ePanelController::tryLoadCachedScanPlan()
 
     // Restore last Semi-fixed GUI selection (mode already restored from QSettings).
     if (host_->ur3eHemisphereScanSettings_->rememberLastPlan()
-        && host_->ur3eHemisphereScanSettings_->scanExecuteMode()
-               == Ur3eScanExecuteMode::SemiFixed)
+        && isSavedRingRouteMode(host_->ur3eHemisphereScanSettings_->scanExecuteMode()))
     {
         const QString semiRoutePath =
             host_->ur3eHemisphereScanSettings_->rememberedSemiFixedRoutePath();
@@ -2260,7 +2502,9 @@ void Ur3ePanelController::tryLoadCachedScanPlan()
         }
 
         const QString planPath =
-            host_->ur3eHemisphereScanSettings_->rememberedSemiFixedPlanPath();
+            host_->ur3eHemisphereScanSettings_->scanExecuteMode() == Ur3eScanExecuteMode::Fpp
+                ? host_->ur3eHemisphereScanSettings_->rememberedFppPlanPath()
+                : host_->ur3eHemisphereScanSettings_->rememberedSemiFixedPlanPath();
         if (!planPath.isEmpty() && QFile::exists(planPath))
         {
             onLoadPlannedRouteAsSemiFixedRequested(planPath);
@@ -2372,7 +2616,8 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
         || !robotConnected_ || serverManager_ == nullptr || scanExecuting_)
         return false;
 
-    if (host_->ur3eHemisphereScanSettings_->scanExecuteMode() == Ur3eScanExecuteMode::SemiFixed)
+    if (host_->ur3eHemisphereScanSettings_->scanExecuteMode() == Ur3eScanExecuteMode::SemiFixed
+        || host_->ur3eHemisphereScanSettings_->scanExecuteMode() == Ur3eScanExecuteMode::Fpp)
         return startSemiFixedScanExecute(options);
 
     if (!scanPlanReady_ || plannedScanPlan_.reachableCount == 0)
@@ -2486,8 +2731,9 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
     const QString serverUrl = serverManager_->serverUrl();
     const bool driveStage = options.pinSet == HemisphereScanPinSet::All;
     const bool useStage = driveStage && stageConnectedForScan(host_);
-    const auto &hwCfg = hf::hardwareConfig();
-    const bool twoStage = hwCfg.sampleMultiviewTwoStage();
+    const double stageHomeMm = host_->ur3eHemisphereScanSettings_->stagePosition1Mm();
+    const double stageSpinMm = host_->ur3eHemisphereScanSettings_->stagePosition2Mm();
+    const bool twoStage = std::abs(stageSpinMm - stageHomeMm) > 0.5;
     QString captureNote = captureStills ? QStringLiteral(", BFS stills → ") + captureDir
                                         : QStringLiteral(", motion-only");
     if (captureStills && host_->dlpPanel() != nullptr && host_->dlpPanel()->isConnected())
@@ -2501,19 +2747,19 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
     {
         if (twoStage)
         {
-            captureNote += QStringLiteral(", stage apex %1 mm then MVS %2 mm")
-                               .arg(hwCfg.sampleMultiviewApexPositionMm, 0, 'f', 0)
-                               .arg(hwCfg.sampleMultiviewPositionMm, 0, 'f', 0);
+            captureNote += QStringLiteral(", stage %1→%2 mm")
+                               .arg(stageHomeMm, 0, 'f', 0)
+                               .arg(stageSpinMm, 0, 'f', 0);
         }
         else
         {
             captureNote += QStringLiteral(", stage %1 mm")
-                               .arg(hwCfg.sampleMultiviewPositionMm, 0, 'f', 0);
+                               .arg(stageSpinMm, 0, 'f', 0);
         }
     }
     else if (driveStage)
     {
-        captureNote += QStringLiteral(", stage not connected (sample_multiview_* ignored)");
+        captureNote += QStringLiteral(", stage not connected (GUI Stage 1/2 ignored)");
     }
     host_->appendLog(
         QStringLiteral("UR3e scan execute: %1 reachable point(s), top-ring-first clockwise sweep "
@@ -2547,7 +2793,7 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
         const bool applyApexShiftAlways = options.applyApexStageOutputShift;
         OutputPoseShift outputShift;
         if (applyApexShiftAlways || (useStage && twoStage))
-            outputShift = makeApexStageOutputShift();
+            outputShift = makeStageOutputShiftMm(stageHomeMm, stageSpinMm);
 
         scanExecuteThread_ = std::thread([this,
                                           serverUrl,
@@ -2562,7 +2808,10 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                                           appendTransformsJson,
                                           outputShift,
                                           applyApexShiftAlways,
-                                          useStage]() {
+                                          useStage,
+                                          stageHomeMm,
+                                          stageSpinMm,
+                                          twoStage]() {
             int executed = 0;
             int skipped = 0;
             int captured = startFrameIndex;
@@ -2583,6 +2832,9 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
             const auto sessionActive = [this, sessionId]() {
                 return !shutdownRequested_.load(std::memory_order_acquire)
                        && sessionId == scanExecuteSessionId_.load(std::memory_order_acquire);
+            };
+            const auto captureContinue = [this, &sessionActive]() {
+                return sessionActive() && !stopRequested_.load(std::memory_order_acquire);
             };
 
             const auto finishWithCapture = [this, &transformsDoc, captureStills, captureDir,
@@ -2657,7 +2909,7 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                     &ok,
                     &errorMessage,
                     QStringLiteral("pin %1").arg(pointIndex),
-                    sessionActive,
+                    captureContinue,
                     shiftForPin);
             };
 
@@ -2688,8 +2940,7 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
 
             bool returnHomeAfterScan = true;
             const auto scanStartedAt = std::chrono::steady_clock::now();
-            const auto &hw = hf::hardwareConfig();
-            const bool twoStageMove = useStage && hw.sampleMultiviewTwoStage();
+            const bool twoStageMove = useStage && twoStage;
             bool needMvsStageMove = twoStageMove;
             const auto stageSessionOk = [this, &sessionActive]() {
                 return sessionActive() && !stopRequested_.load(std::memory_order_acquire);
@@ -2708,10 +2959,9 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                         break;
                     }
                 }
-                const double firstStageMm = orderHasApex ? hw.sampleMultiviewApexPositionMm
-                                                         : hw.sampleMultiviewPositionMm;
+                const double firstStageMm = orderHasApex ? stageHomeMm : stageSpinMm;
                 const QString firstLabel =
-                    orderHasApex ? QStringLiteral("apex") : QStringLiteral("MVS rings");
+                    orderHasApex ? QStringLiteral("stage pos 1") : QStringLiteral("stage pos 2");
                 QString stageErr;
                 if (!waitMoveStageAbsolute(host_, firstStageMm, firstLabel, stageSessionOk, &stageErr))
                 {
@@ -2785,8 +3035,8 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                 {
                     QString stageErr;
                     if (!waitMoveStageAbsolute(host_,
-                                               hw.sampleMultiviewPositionMm,
-                                               QStringLiteral("MVS rings"),
+                                               stageSpinMm,
+                                               QStringLiteral("stage pos 2"),
                                                stageSessionOk,
                                                &stageErr))
                     {
@@ -3192,8 +3442,8 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
             {
                 QString stageErr;
                 if (!waitMoveStageAbsolute(host_,
-                                           hw.sampleMultiviewPositionMm,
-                                           QStringLiteral("MVS rings"),
+                                           stageSpinMm,
+                                           QStringLiteral("stage pos 2"),
                                            stageSessionOk,
                                            &stageErr)
                     && ok)
@@ -3301,7 +3551,9 @@ void Ur3ePanelController::refreshSemiFixedPreview()
     if (host_ == nullptr || host_->ur3eHemisphereScanSettings_ == nullptr
         || host_->ur3eScanRoutePlanWidget_ == nullptr)
         return;
-    if (host_->ur3eHemisphereScanSettings_->scanExecuteMode() != Ur3eScanExecuteMode::SemiFixed)
+    if (host_->ur3eHemisphereScanSettings_->scanExecuteMode()
+        != Ur3eScanExecuteMode::SemiFixed
+        && host_->ur3eHemisphereScanSettings_->scanExecuteMode() != Ur3eScanExecuteMode::Fpp)
         return;
 
     QVector<Ur3eSemiFixedPreviewRing> rings;
@@ -3310,9 +3562,11 @@ void Ur3ePanelController::refreshSemiFixedPreview()
     if (host_->ur3eScanRoutePlanWidget_ != nullptr)
         host_->ur3eScanRoutePlanWidget_->setScanParams(params);
     const Ur3eSemiFixedRoute route = host_->ur3eHemisphereScanSettings_->semiFixedRoute();
+    const bool fppMode =
+        host_->ur3eHemisphereScanSettings_->scanExecuteMode() == Ur3eScanExecuteMode::Fpp;
     // Canned default top is always injected; only real planned/added rings skip params.
-    if (!route.rings.isEmpty())
-        rings = inferSemiFixedPreviewRings(route);
+    if (!route.rings.isEmpty() || (fppMode && route.hasTopPose))
+        rings = fppMode ? inferFppPreviewPins(route) : inferSemiFixedPreviewRings(route);
     else if (!plannedScanPlan_.points.empty())
         rings = previewSemiFixedRingsFromHemispherePlan(plannedScanPlan_);
     else
@@ -3397,26 +3651,31 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
     const QString serverUrl = serverManager_->serverUrl();
     const bool driveStage = options.pinSet == HemisphereScanPinSet::All;
     const bool useStage = driveStage && stageConnectedForScan(host_);
-    const auto &hwSemi = hf::hardwareConfig();
+    const bool fppMode =
+        host_->ur3eHemisphereScanSettings_->scanExecuteMode() == Ur3eScanExecuteMode::Fpp;
+    const double stageHomeMm = host_->ur3eHemisphereScanSettings_->stagePosition1Mm();
+    const double stageSpinMm = host_->ur3eHemisphereScanSettings_->stagePosition2Mm();
+    const bool twoStageGui = std::abs(stageSpinMm - stageHomeMm) > 0.5;
     if (useStage)
     {
-        if (hwSemi.sampleMultiviewTwoStage())
+        if (twoStageGui)
         {
-            host_->appendLog(QStringLiteral(
-                                 "UR3e semi-fixed: stage apex %1 mm then MVS %2 mm")
-                                 .arg(hwSemi.sampleMultiviewApexPositionMm, 0, 'f', 0)
-                                 .arg(hwSemi.sampleMultiviewPositionMm, 0, 'f', 0));
+            host_->appendLog(QStringLiteral("UR3e %1: stage %2→%3 mm (GUI Stage 1 / 2)")
+                                 .arg(fppMode ? QStringLiteral("FPP") : QStringLiteral("semi-fixed"))
+                                 .arg(stageHomeMm, 0, 'f', 0)
+                                 .arg(stageSpinMm, 0, 'f', 0));
         }
         else
         {
-            host_->appendLog(QStringLiteral("UR3e semi-fixed: stage %1 mm")
-                                 .arg(hwSemi.sampleMultiviewPositionMm, 0, 'f', 0));
+            host_->appendLog(QStringLiteral("UR3e %1: stage %2 mm")
+                                 .arg(fppMode ? QStringLiteral("FPP") : QStringLiteral("semi-fixed"))
+                                 .arg(stageSpinMm, 0, 'f', 0));
         }
     }
     else if (driveStage)
     {
         host_->appendLog(QStringLiteral(
-            "UR3e semi-fixed: stage not connected (sample_multiview_* ignored)"));
+            "UR3e Multiview: stage not connected (GUI Stage 1 / 2 ignored)"));
     }
     stopRequested_.store(false, std::memory_order_release);
     scanExecuting_ = true;
@@ -3430,7 +3689,7 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
             route.intervalDeg > 0.0 ? route.intervalDeg : 10.0;
         int ringSamples = 0;
         for (const Ur3eSemiFixedRing &ring : route.rings)
-            ringSamples += semiFixedRingSampleCount(ring, intervalDeg);
+            ringSamples += semiFixedRingSampleCount(ring, intervalDeg, route.panRangeDeg);
         const bool skipTop = options.pinSet == HemisphereScanPinSet::RingsOnly;
         const bool skipRings = options.pinSet == HemisphereScanPinSet::ApexOnly;
         const bool apexRingOnly =
@@ -3477,15 +3736,32 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
         const bool skipTop = options.pinSet == HemisphereScanPinSet::RingsOnly;
         const bool skipRings = options.pinSet == HemisphereScanPinSet::ApexOnly;
         const bool applyApexShiftAlways = options.applyApexStageOutputShift;
+        // Express all burst poses as if the sample stayed at stage pos 2
+        // (stage static): translate home-stage camera TCP by (pos2 − pos1).
         OutputPoseShift outputShift;
-        if (applyApexShiftAlways || (useStage && hwSemi.sampleMultiviewTwoStage()))
-            outputShift = makeApexStageOutputShift();
+        if (useStage && (applyApexShiftAlways || twoStageGui))
+            outputShift = makeStageOutputShiftMm(stageHomeMm, stageSpinMm);
+        else if (applyApexShiftAlways)
+            outputShift = makeStageOutputShiftMm(stageHomeMm, stageSpinMm);
+
+        if (outputShift.apply && captureStills)
+        {
+            host_->appendLog(
+                QStringLiteral(
+                    "UR3e FPP/MVS: home-burst poses += (%1, %2, %3) m "
+                    "(stage %4→%5 mm, sample-static / arm-relative frame)")
+                    .arg(outputShift.xM, 0, 'f', 4)
+                    .arg(outputShift.yM, 0, 'f', 4)
+                    .arg(outputShift.zM, 0, 'f', 4)
+                    .arg(outputShift.stageCaptureMm, 0, 'f', 0)
+                    .arg(outputShift.stageOutputMm, 0, 'f', 0));
+        }
 
         scanExecuteThread_ = std::thread([this, serverUrl, route, sessionId, captureDir,
                                           captureStills, stabilizeMs, wristSweep,
                                           startFrameIndex, appendTransformsJson, skipTop,
                                           skipRings, outputShift, applyApexShiftAlways,
-                                          useStage]() {
+                                          useStage, stageHomeMm, stageSpinMm]() {
             int captured = startFrameIndex;
             TransformsJsonDocument transformsDoc;
 
@@ -3493,15 +3769,18 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
                 return !shutdownRequested_.load(std::memory_order_acquire)
                        && sessionId == scanExecuteSessionId_.load(std::memory_order_acquire);
             };
+            const auto captureContinue = [this, &sessionActive]() {
+                return sessionActive() && !stopRequested_.load(std::memory_order_acquire);
+            };
 
             const auto finishWithCapture = [this, &transformsDoc, captureStills, captureDir,
                                             &captured, appendTransformsJson, useStage,
-                                            &sessionActive](
+                                            &sessionActive, stageSpinMm](
                                                bool finishOk, const QString &finishError,
                                                int executedCount, bool stopped,
                                                int /*capturedFromExec*/,
                                                qint64 elapsedMs) {
-                parkStageAtMvsAfterExecuteIfUsed(host_, useStage, sessionActive);
+                parkStageAtMvsAfterExecuteIfUsed(host_, useStage, sessionActive, stageSpinMm);
                 if (captureStills && !transformsDoc.frames.empty())
                 {
                     QString writeError;
@@ -3548,7 +3827,7 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
                                                 nullptr,
                                                 nullptr,
                                                 skipContext,
-                                                sessionActive,
+                                                captureContinue,
                                                 shiftForPin);
             };
 
@@ -3561,6 +3840,8 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
             input.wristSweep = wristSweep;
             input.skipTop = skipTop;
             input.skipRings = skipRings;
+            input.stageHomeMm = stageHomeMm;
+            input.stageSpinMm = stageSpinMm;
 
             SemiFixedScanExecuteHost hostHooks;
             hostHooks.sessionActive = sessionActive;

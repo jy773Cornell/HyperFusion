@@ -123,8 +123,9 @@ inline constexpr int kFppScanningDwellMs = 600;
 inline constexpr int kFppCaptureMinNewFrames = 2;
 /// Extra BFS frames after the first new frame so the projected pattern can settle.
 inline constexpr int kFppCaptureStabilizeFrames = 5;
-inline constexpr int kFppCaptureFrameWaitMs = 2000;
-inline constexpr int kFppCaptureStabilizeWaitMs = 4000;
+/// Wait budgets must cover long Timed exposures (dark fruit). ~5 frames × exposure ≤ settle wait.
+inline constexpr int kFppCaptureFrameWaitMs = 15000;
+inline constexpr int kFppCaptureStabilizeWaitMs = 20000;
 
 inline int clampLedMilliamp(int ma, int maxMa)
 {

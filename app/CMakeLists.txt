@@ -480,7 +480,7 @@ if(WIN32)
         VS_RESOURCE_COMPILE_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/resources")
 endif()
 
-# Ship app/preset (hyperfusion.cfg, gsam_plans, mvs_semi_scan_plans, …) beside app.exe.
+# Ship app/preset (hyperfusion.cfg, gsam_plans, mvs_scan_plans, …) beside app.exe.
 set(HF_PRESET_DIR "${CMAKE_CURRENT_SOURCE_DIR}/preset")
 if(EXISTS "${HF_PRESET_DIR}")
     add_custom_command(

@@ -367,9 +367,74 @@ QString defaultUr3eScanPlanCachePath()
         .filePath(QStringLiteral("ur3e_last_scan_plan.json"));
 }
 
+namespace
+{
+QString firstExistingDir(const QStringList &candidates, const QString &fallback)
+{
+    for (const QString &path : candidates)
+    {
+        if (!path.isEmpty() && QDir(path).exists())
+            return path;
+    }
+    return fallback;
+}
+
+QString besideExe(const QString &rel)
+{
+    return QDir(QCoreApplication::applicationDirPath()).filePath(rel);
+}
+
+QString fromPreset(const QString &rel)
+{
+#ifdef HF_APP_SOURCE_DIR
+    return QDir(QString::fromUtf8(HF_APP_SOURCE_DIR)).filePath(QStringLiteral("preset/") + rel);
+#else
+    Q_UNUSED(rel);
+    return {};
+#endif
+}
+} // namespace
+
+QString defaultUr3eMvsScanPlansRootDir()
+{
+    const QString rel = QStringLiteral("mvs_scan_plans");
+    const QString exeRoot = besideExe(rel);
+    const QString presetRoot = fromPreset(rel);
+    return firstExistingDir({exeRoot, presetRoot}, exeRoot);
+}
+
 QString defaultUr3eScanRoutesDir()
 {
-    return QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("ur3e_scan_routes"));
+    const QString rel = QStringLiteral("mvs_scan_plans/auto");
+    const QString preferred = besideExe(rel);
+    return firstExistingDir(
+        {preferred, fromPreset(rel),
+         besideExe(QStringLiteral("ur3e_scan_routes")),
+         fromPreset(QStringLiteral("ur3e_scan_routes"))},
+        preferred);
+}
+
+QString defaultUr3eSemiScanPlansDir()
+{
+    const QString rel = QStringLiteral("mvs_scan_plans/semi");
+    const QString preferred = besideExe(rel);
+    return firstExistingDir(
+        {preferred, fromPreset(rel),
+         besideExe(QStringLiteral("mvs_semi_scan_plans")),
+         fromPreset(QStringLiteral("mvs_semi_scan_plans")),
+         besideExe(QStringLiteral("ur3e_semi_scan_routes"))},
+        preferred);
+}
+
+QString defaultUr3eFppScanPlansDir()
+{
+    const QString rel = QStringLiteral("mvs_scan_plans/fpp");
+    const QString preferred = besideExe(rel);
+    return firstExistingDir(
+        {preferred, fromPreset(rel),
+         besideExe(QStringLiteral("mvs_semi_scan_plans/fpp")),
+         fromPreset(QStringLiteral("mvs_semi_scan_plans/fpp"))},
+        preferred);
 }
 
 QString defaultUr3eScanRouteDisplayName(const Ur3eHemisphereScanParams &params)

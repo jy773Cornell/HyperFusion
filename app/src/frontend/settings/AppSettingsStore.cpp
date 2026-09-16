@@ -1,5 +1,7 @@
 #include "frontend/settings/AppSettingsStore.hpp"
 
+#include "backend/HyperFusionConfig.hpp"
+
 #include <QSettings>
 
 #include <algorithm>
@@ -163,6 +165,12 @@ PersistedUr3eScanModePanelSettings loadScanModePanel(QSettings &settings,
     panel.imagingIntervalDeg =
         settings.value(prefix + QStringLiteral("imagingIntervalDeg"), defaults.imagingIntervalDeg)
             .toDouble();
+    panel.panRangeDeg =
+        settings.value(prefix + QStringLiteral("panRangeDeg"), defaults.panRangeDeg).toDouble();
+    if (!(panel.panRangeDeg >= 0.0))
+        panel.panRangeDeg = 0.0;
+    if (panel.panRangeDeg > 360.0)
+        panel.panRangeDeg = 360.0;
     panel.panDirection =
         settings.value(prefix + QStringLiteral("panDirection"), defaults.panDirection).toInt();
     if (panel.panDirection >= 0)
@@ -189,13 +197,16 @@ void saveScanModePanel(QSettings &settings,
     settings.setValue(prefix + QStringLiteral("wristSweepWrist2"), panel.wristSweepWrist2);
     settings.setValue(prefix + QStringLiteral("wristSweepWrist3"), panel.wristSweepWrist3);
     settings.setValue(prefix + QStringLiteral("imagingIntervalDeg"), panel.imagingIntervalDeg);
+    settings.setValue(prefix + QStringLiteral("panRangeDeg"), panel.panRangeDeg);
     settings.setValue(prefix + QStringLiteral("panDirection"), panel.panDirection);
 }
 
 void mirrorActivePanelAliases(PersistedUr3eHemisphereScanSettings &scan)
 {
     const PersistedUr3eScanModePanelSettings &panel =
-        scan.scanExecuteMode == 1 ? scan.semiPanel : scan.autoPanel;
+        scan.scanExecuteMode == 2
+            ? scan.fppPanel
+            : (scan.scanExecuteMode == 1 ? scan.semiPanel : scan.autoPanel);
     scan.sphereRadiusMm = panel.sphereRadiusMm;
     scan.horizontalPoints = panel.horizontalPoints;
     scan.verticalPoints = panel.verticalPoints;
@@ -207,8 +218,11 @@ void mirrorActivePanelAliases(PersistedUr3eHemisphereScanSettings &scan)
     scan.wristSweepWrist1 = panel.wristSweepWrist1;
     scan.wristSweepWrist2 = panel.wristSweepWrist2;
     scan.wristSweepWrist3 = panel.wristSweepWrist3;
-    scan.semiFixedIntervalDeg = scan.semiPanel.imagingIntervalDeg;
-    scan.semiFixedPanDirection = scan.semiPanel.panDirection;
+    scan.semiFixedIntervalDeg =
+        scan.scanExecuteMode == 2 ? scan.fppPanel.imagingIntervalDeg
+                                  : scan.semiPanel.imagingIntervalDeg;
+    scan.semiFixedPanDirection =
+        scan.scanExecuteMode == 2 ? scan.fppPanel.panDirection : scan.semiPanel.panDirection;
 }
 } // namespace
 
@@ -222,7 +236,7 @@ PersistedUr3eHemisphereScanSettings AppSettingsStore::loadUr3eHemisphereScan()
                                .value(QStringLiteral("ur3e/hemisphereScan/scanExecuteMode"),
                                       defaults.scanExecuteMode)
                                .toInt();
-    if (scan.scanExecuteMode != 0 && scan.scanExecuteMode != 1)
+    if (scan.scanExecuteMode != 0 && scan.scanExecuteMode != 1 && scan.scanExecuteMode != 2)
         scan.scanExecuteMode = 0;
 
     const bool hasSplitAuto =
@@ -308,6 +322,21 @@ PersistedUr3eHemisphereScanSettings AppSettingsStore::loadUr3eHemisphereScan()
             scan.semiPanel.horizontalPoints = std::max(1, scan.semiPanel.verticalPoints);
     }
 
+    const bool hasSplitFpp =
+        settings.contains(QStringLiteral("ur3e/hemisphereScan/fpp/imagingIntervalDeg"))
+        || settings.contains(QStringLiteral("ur3e/hemisphereScan/fpp/panRangeDeg"));
+    if (hasSplitFpp)
+    {
+        scan.fppPanel = loadScanModePanel(settings, QStringLiteral("ur3e/hemisphereScan/fpp/"),
+                                          defaults.fppPanel);
+    }
+    else
+    {
+        scan.fppPanel = scan.semiPanel;
+        scan.fppPanel.panRangeDeg = 360.0;
+        scan.fppPanel.wristSweepEnabled = false;
+    }
+
     scan.lastAutoRoutePath =
         settings
             .value(QStringLiteral("ur3e/hemisphereScan/lastAutoRoutePath"),
@@ -318,11 +347,39 @@ PersistedUr3eHemisphereScanSettings AppSettingsStore::loadUr3eHemisphereScan()
             .value(QStringLiteral("ur3e/hemisphereScan/lastSemiFixedPlanPath"),
                    defaults.lastSemiFixedPlanPath)
             .toString();
+    scan.lastFppPlanPath =
+        settings
+            .value(QStringLiteral("ur3e/hemisphereScan/lastFppPlanPath"), defaults.lastFppPlanPath)
+            .toString();
     scan.lastSemiFixedRoutePath =
         settings
             .value(QStringLiteral("ur3e/hemisphereScan/lastSemiFixedRoutePath"),
                    defaults.lastSemiFixedRoutePath)
             .toString();
+
+    // Stage stops: QSettings first; optional one-time seed from hyperfusion.cfg.
+    const bool hasGuiStage =
+        settings.contains(QStringLiteral("ur3e/hemisphereScan/stagePosition1Mm"))
+        || settings.contains(QStringLiteral("ur3e/hemisphereScan/stagePosition2Mm"));
+    if (hasGuiStage)
+    {
+        scan.stagePosition1Mm =
+            settings
+                .value(QStringLiteral("ur3e/hemisphereScan/stagePosition1Mm"),
+                       defaults.stagePosition1Mm)
+                .toDouble();
+        scan.stagePosition2Mm =
+            settings
+                .value(QStringLiteral("ur3e/hemisphereScan/stagePosition2Mm"),
+                       defaults.stagePosition2Mm)
+                .toDouble();
+    }
+    else
+    {
+        const auto &hw = hf::hardwareConfig();
+        scan.stagePosition1Mm = hw.sampleMultiviewApexPositionMm;
+        scan.stagePosition2Mm = hw.sampleMultiviewPositionMm;
+    }
 
     mirrorActivePanelAliases(scan);
     return scan;
@@ -331,7 +388,7 @@ PersistedUr3eHemisphereScanSettings AppSettingsStore::loadUr3eHemisphereScan()
 void AppSettingsStore::saveUr3eHemisphereScan(const PersistedUr3eHemisphereScanSettings &scanIn)
 {
     PersistedUr3eHemisphereScanSettings scan = scanIn;
-    if (scan.scanExecuteMode != 0 && scan.scanExecuteMode != 1)
+    if (scan.scanExecuteMode != 0 && scan.scanExecuteMode != 1 && scan.scanExecuteMode != 2)
         scan.scanExecuteMode = 0;
     mirrorActivePanelAliases(scan);
 
@@ -339,6 +396,7 @@ void AppSettingsStore::saveUr3eHemisphereScan(const PersistedUr3eHemisphereScanS
     settings.setValue(QStringLiteral("ur3e/hemisphereScan/scanExecuteMode"), scan.scanExecuteMode);
     saveScanModePanel(settings, QStringLiteral("ur3e/hemisphereScan/auto/"), scan.autoPanel);
     saveScanModePanel(settings, QStringLiteral("ur3e/hemisphereScan/semi/"), scan.semiPanel);
+    saveScanModePanel(settings, QStringLiteral("ur3e/hemisphereScan/fpp/"), scan.fppPanel);
 
     // Keep legacy flat keys synced to the active mode (older readers / debugging).
     settings.setValue(QStringLiteral("ur3e/hemisphereScan/sphereRadiusMm"), scan.sphereRadiusMm);
@@ -361,8 +419,13 @@ void AppSettingsStore::saveUr3eHemisphereScan(const PersistedUr3eHemisphereScanS
                       scan.lastAutoRoutePath);
     settings.setValue(QStringLiteral("ur3e/hemisphereScan/lastSemiFixedPlanPath"),
                       scan.lastSemiFixedPlanPath);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/lastFppPlanPath"), scan.lastFppPlanPath);
     settings.setValue(QStringLiteral("ur3e/hemisphereScan/lastSemiFixedRoutePath"),
                       scan.lastSemiFixedRoutePath);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/stagePosition1Mm"),
+                      scan.stagePosition1Mm);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/stagePosition2Mm"),
+                      scan.stagePosition2Mm);
 }
 
 PersistedBfsCameraSettings AppSettingsStore::loadBfsCameraSettings()

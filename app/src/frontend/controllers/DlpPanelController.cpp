@@ -248,6 +248,11 @@ DlpProjectorSettings DlpPanelController::settingsFromUi() const
     return host_->dlpProjectorSettings_->currentSettings();
 }
 
+DlpProjectorSettings DlpPanelController::currentSettings() const
+{
+    return settingsFromUi();
+}
+
 void DlpPanelController::onRefreshClicked()
 {
     if (worker_ == nullptr)

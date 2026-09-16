@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--input", type=Path, default=DEFAULT_INPUT, help="checkerboard/ or one burst / parent of multiview_*")
     p.add_argument("--board", type=Path, default=DEFAULT_BOARD)
     p.add_argument("--out", type=Path, default=None, help="Overlay folder (default: <input>/board_check)")
-    p.add_argument("--min-modulation", type=float, default=0.08)
+    p.add_argument("--min-modulation", type=float, default=0.15)
     return p.parse_args()
 
 

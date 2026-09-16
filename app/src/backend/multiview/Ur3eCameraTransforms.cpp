@@ -1,4 +1,5 @@
 ﻿// Optical-TCP pose → nerfstudio-style transforms.json (Capture Multiview RGB).
+// Capture poses are always BFS camera optical (cfg tool_tcp_*), even when MoveIt tips on DLP.
 
 #include "backend/multiview/Ur3eCameraTransforms.hpp"
 
@@ -8,6 +9,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 
+#include <algorithm>
 #include <cmath>
 
 namespace hf::ur3e {
@@ -140,7 +142,110 @@ QJsonObject baseTFlangeJson(const CalibrationCaptureExtras &calib) {
   return flange;
 }
 
+/// URDF / tf2 fixed RPY: R = Rz(yaw) * Ry(pitch) * Rx(roll).
+void rpyDegToMatrix(const double rollDeg, const double pitchDeg, const double yawDeg,
+                    double R[3][3]) {
+  const double roll = rollDeg * (3.14159265358979323846 / 180.0);
+  const double pitch = pitchDeg * (3.14159265358979323846 / 180.0);
+  const double yaw = yawDeg * (3.14159265358979323846 / 180.0);
+  const double cr = std::cos(roll);
+  const double sr = std::sin(roll);
+  const double cp = std::cos(pitch);
+  const double sp = std::sin(pitch);
+  const double cy = std::cos(yaw);
+  const double sy = std::sin(yaw);
+  R[0][0] = cy * cp;
+  R[0][1] = cy * sp * sr - sy * cr;
+  R[0][2] = cy * sp * cr + sy * sr;
+  R[1][0] = sy * cp;
+  R[1][1] = sy * sp * sr + cy * cr;
+  R[1][2] = sy * sp * cr - cy * sr;
+  R[2][0] = -sp;
+  R[2][1] = cp * sr;
+  R[2][2] = cp * cr;
+}
+
+void matrixToRotVec(const double R[3][3], double &rx, double &ry, double &rz) {
+  const double m00 = R[0][0];
+  const double m01 = R[0][1];
+  const double m02 = R[0][2];
+  const double m10 = R[1][0];
+  const double m11 = R[1][1];
+  const double m12 = R[1][2];
+  const double m20 = R[2][0];
+  const double m21 = R[2][1];
+  const double m22 = R[2][2];
+  const double cosAngle = std::clamp(0.5 * (m00 + m11 + m22 - 1.0), -1.0, 1.0);
+  const double angle = std::acos(cosAngle);
+  if (angle < 1.0e-12) {
+    rx = 0.0;
+    ry = 0.0;
+    rz = 0.0;
+    return;
+  }
+  if (std::abs(3.14159265358979323846 - angle) < 1.0e-6) {
+    // Near π: pick a stable axis from the diagonal.
+    double axis[3] = {std::sqrt(std::max(0.0, (m00 + 1.0) * 0.5)),
+                      std::sqrt(std::max(0.0, (m11 + 1.0) * 0.5)),
+                      std::sqrt(std::max(0.0, (m22 + 1.0) * 0.5))};
+    if (m01 < 0.0)
+      axis[1] = -axis[1];
+    if (m02 < 0.0)
+      axis[2] = -axis[2];
+    const double n =
+        std::sqrt(axis[0] * axis[0] + axis[1] * axis[1] + axis[2] * axis[2]);
+    if (n > 1.0e-12) {
+      rx = axis[0] / n * angle;
+      ry = axis[1] / n * angle;
+      rz = axis[2] / n * angle;
+    } else {
+      rx = angle;
+      ry = 0.0;
+      rz = 0.0;
+    }
+    return;
+  }
+  const double inv = 0.5 / std::sin(angle);
+  rx = (m21 - m12) * inv * angle;
+  ry = (m02 - m20) * inv * angle;
+  rz = (m10 - m01) * inv * angle;
+}
+
 } // namespace
+
+Ur3eScanTcpPose cameraOpticalTcpFromTool0(
+    const Ur3eTcpPose &tool0,
+    const hf::HardwareConfig::Ur3eConfig::ToolTcpMm &cameraTcp) {
+  double Rf[3][3]{};
+  rotVecToMatrix(tool0.rx, tool0.ry, tool0.rz, Rf);
+  double Rc[3][3]{};
+  rpyDegToMatrix(cameraTcp.rollDeg, cameraTcp.pitchDeg, cameraTcp.yawDeg, Rc);
+
+  // base_T_cam = base_T_tool0 · tool0_T_camera
+  double R[3][3]{};
+  for (int row = 0; row < 3; ++row) {
+    for (int col = 0; col < 3; ++col)
+      R[row][col] =
+          Rf[row][0] * Rc[0][col] + Rf[row][1] * Rc[1][col] + Rf[row][2] * Rc[2][col];
+  }
+  const double tx = cameraTcp.xMm * 0.001;
+  const double ty = cameraTcp.yMm * 0.001;
+  const double tz = cameraTcp.zMm * 0.001;
+  const double t0[3] = {tool0.x, tool0.y, tool0.z};
+  const double t[3] = {Rf[0][0] * tx + Rf[0][1] * ty + Rf[0][2] * tz + t0[0],
+                       Rf[1][0] * tx + Rf[1][1] * ty + Rf[1][2] * tz + t0[1],
+                       Rf[2][0] * tx + Rf[2][1] * ty + Rf[2][2] * tz + t0[2]};
+
+  Ur3eScanTcpPose out{};
+  out.xM = t[0];
+  out.yM = t[1];
+  out.zM = t[2];
+  matrixToRotVec(R, out.rxRad, out.ryRad, out.rzRad);
+  out.toolZMx = R[0][2];
+  out.toolZMy = R[1][2];
+  out.toolZMz = R[2][2];
+  return out;
+}
 
 CameraExtrinsicsRt cameraExtrinsicsOpenCvFromTcp(const Ur3eScanTcpPose &tcp) {
   CameraExtrinsicsRt out{};
@@ -210,18 +315,22 @@ bool writeTransformsJson(const QString &directory,
       QStringLiteral("note"),
       haveFocal
           ? QStringLiteral(
-                "Frames use optical TCP hyperfusion_tcp in base_link "
-                "(live TF; includes tool_tcp_*). Intrinsics from "
-                "hyperfusion.cfg; "
-                "extrinsics R/t are OpenCV camera-to-base_link.")
+                "Frames use BFS camera optical in base_link "
+                "(base_T_tool0 · tool_tcp_*). MoveIt tip may be DLP when "
+                "scan_tcp=dlp; capture poses stay on the camera. "
+                "Extrinsics R/t are OpenCV camera-to-base_link.")
           : QStringLiteral(
-                "Frames use optical TCP hyperfusion_tcp in base_link "
-                "(live TF; includes tool_tcp_*). Set bfs_camera_fx/fy (and "
-                "cx/cy) "
-                "in hyperfusion.cfg for full intrinsics; extrinsics R/t are "
-                "OpenCV camera-to-base_link."));
+                "Frames use BFS camera optical in base_link "
+                "(base_T_tool0 · tool_tcp_*). Set bfs_camera_fx/fy (and "
+                "cx/cy) in hyperfusion.cfg for full intrinsics; extrinsics "
+                "R/t are OpenCV camera-to-base_link."));
   root.insert(QStringLiteral("parent_frame"), QStringLiteral("base_link"));
-  root.insert(QStringLiteral("frame"), QStringLiteral("hyperfusion_tcp"));
+  root.insert(QStringLiteral("frame"), QStringLiteral("camera_optical"));
+  root.insert(QStringLiteral("optical_tip"), QStringLiteral("camera"));
+  root.insert(QStringLiteral("moveit_tip"),
+              hf::hardwareConfig().ur3e.usesDlpScanTcp()
+                  ? QStringLiteral("dlp")
+                  : QStringLiteral("camera"));
   root.insert(QStringLiteral("intrinsics"), intrinsicsToJson(doc.intrinsics));
   if (doc.intrinsics.width > 0)
     root.insert(QStringLiteral("w"), doc.intrinsics.width);
@@ -332,16 +441,23 @@ bool writeCameraPoseJson(const QString &jsonPath, const Ur3eScanTcpPose &tcp,
   root.insert(QStringLiteral("file_path"), imageFileName);
   root.insert(QStringLiteral("coordinate_convention"),
               QStringLiteral("opengl"));
-  root.insert(QStringLiteral("frame"), QStringLiteral("hyperfusion_tcp"));
+  root.insert(QStringLiteral("frame"), QStringLiteral("camera_optical"));
+  root.insert(QStringLiteral("optical_tip"), QStringLiteral("camera"));
+  root.insert(QStringLiteral("moveit_tip"),
+              hf::hardwareConfig().ur3e.usesDlpScanTcp()
+                  ? QStringLiteral("dlp")
+                  : QStringLiteral("camera"));
   root.insert(QStringLiteral("parent_frame"), QStringLiteral("base_link"));
   root.insert(QStringLiteral("units"), QStringLiteral("metres"));
   root.insert(QStringLiteral("pose_source"), poseSource);
   root.insert(
       QStringLiteral("note"),
       QStringLiteral(
-          "Optical TCP hyperfusion_tcp in base_link (cfg tool_tcp_* xyz+rpy). "
-          "base_T_flange is live TF base_link→tool0 (hand–eye gripper pose). "
-          "Do not use hyperfusion_tcp as the gripper for calibrateHandEye."));
+          "BFS camera optical in base_link = live tool0 ⊗ cfg tool_tcp_* "
+          "(xyz+rpy). Always camera — even when MoveIt tip hyperfusion_tcp "
+          "is remapped to dlp_tcp_* (scan_tcp=dlp). base_T_flange is live TF "
+          "base_link→tool0 (hand–eye gripper). Do not use this tip as the "
+          "gripper for calibrateHandEye."));
 
   QJsonObject position;
   position.insert(QStringLiteral("x_m"), tcp.xM);
@@ -401,13 +517,74 @@ bool writeCameraPoseJson(const QString &jsonPath, const Ur3eScanTcpPose &tcp,
   else
     root.insert(QStringLiteral("base_T_flange"), QJsonValue::Null);
 
-  if (calib != nullptr && calib->fppStepIndex >= 0)
+    if (calib != nullptr && calib->fppStepIndex >= 0)
   {
     root.insert(QStringLiteral("fpp_step_index"), calib->fppStepIndex);
     if (!calib->fppStepLabel.isEmpty())
       root.insert(QStringLiteral("fpp_step_label"), calib->fppStepLabel);
     if (!calib->fppPattern.isEmpty())
       root.insert(QStringLiteral("fpp_pattern"), calib->fppPattern);
+  }
+
+  if (calib != nullptr && calib->haveDlpLed)
+  {
+    QJsonObject led;
+    led.insert(QStringLiteral("red_ma"), calib->dlpLedRedMa);
+    led.insert(QStringLiteral("green_ma"), calib->dlpLedGreenMa);
+    led.insert(QStringLiteral("blue_ma"), calib->dlpLedBlueMa);
+    const int r = calib->dlpLedRedMa;
+    const int g = calib->dlpLedGreenMa;
+    const int b = calib->dlpLedBlueMa;
+    const int mx = std::max({r, g, b});
+    QString channel = QStringLiteral("luma");
+    if (mx >= 50)
+    {
+      const int second = (r == mx) ? std::max(g, b) : (g == mx) ? std::max(r, b) : std::max(r, g);
+      if (second * 2 <= mx)
+      {
+        if (r == mx)
+          channel = QStringLiteral("r");
+        else if (g == mx)
+          channel = QStringLiteral("g");
+        else
+          channel = QStringLiteral("b");
+      }
+    }
+    led.insert(QStringLiteral("decode_channel"), channel);
+    root.insert(QStringLiteral("dlp_led"), led);
+    root.insert(QStringLiteral("decode_channel"), channel);
+  }
+
+  if (calib != nullptr && calib->haveBfsCapture)
+  {
+    QJsonObject bfs;
+    if (!calib->bfsCameraId.isEmpty())
+      bfs.insert(QStringLiteral("camera_id"), calib->bfsCameraId);
+    if (!calib->bfsExposureMode.isEmpty())
+      bfs.insert(QStringLiteral("exposure_mode"), calib->bfsExposureMode);
+    if (!calib->bfsExposureAuto.isEmpty())
+      bfs.insert(QStringLiteral("exposure_auto"), calib->bfsExposureAuto);
+    bfs.insert(QStringLiteral("exposure_time_us"), calib->bfsExposureTimeUs);
+    if (!calib->bfsGainAuto.isEmpty())
+      bfs.insert(QStringLiteral("gain_auto"), calib->bfsGainAuto);
+    bfs.insert(QStringLiteral("gain_db"), calib->bfsGainDb);
+    bfs.insert(QStringLiteral("gamma_enable"), calib->bfsGammaEnable);
+    bfs.insert(QStringLiteral("gamma"), calib->bfsGamma);
+    if (!calib->bfsBalanceWhiteAuto.isEmpty())
+      bfs.insert(QStringLiteral("balance_white_auto"), calib->bfsBalanceWhiteAuto);
+    if (!calib->bfsBalanceRatioSelector.isEmpty())
+      bfs.insert(QStringLiteral("balance_ratio_selector"), calib->bfsBalanceRatioSelector);
+    bfs.insert(QStringLiteral("balance_ratio"), calib->bfsBalanceRatio);
+    bfs.insert(QStringLiteral("acquisition_frame_rate_enable"),
+               calib->bfsAcquisitionFrameRateEnable);
+    bfs.insert(QStringLiteral("acquisition_frame_rate_hz"), calib->bfsAcquisitionFrameRateHz);
+    bfs.insert(QStringLiteral("device_link_throughput_limit"),
+               calib->bfsDeviceLinkThroughputLimit);
+    bfs.insert(QStringLiteral("black_level_percent"), calib->bfsBlackLevelPercent);
+    bfs.insert(QStringLiteral("ev_compensation"), calib->bfsEvCompensation);
+    bfs.insert(QStringLiteral("note"),
+               QStringLiteral("BFS UI / applied settings at still capture time."));
+    root.insert(QStringLiteral("bfs_capture"), bfs);
   }
 
   if (calib != nullptr && calib->haveOutputStageShift)
@@ -421,9 +598,9 @@ bool writeCameraPoseJson(const QString &jsonPath, const Ur3eScanTcpPose &tcp,
     shift.insert(QStringLiteral("z_m"), calib->outputShiftZM);
     stage.insert(QStringLiteral("output_translation_m"), shift);
     stage.insert(QStringLiteral("note"),
-                 QStringLiteral("Camera t / extrinsics translated from apex stage pose "
-                                "to sample_multiview_position_mm (sample-static / MVS frame). "
-                                "FPP undoes output_translation_m to recover room TF."));
+                 QStringLiteral("Camera t / extrinsics translated so the sample looks fixed at "
+                                "output_position_mm (stage static); equivalent to arm motion "
+                                "only. FPP undoes output_translation_m to recover room TF."));
     root.insert(QStringLiteral("stage_output"), stage);
   }
 

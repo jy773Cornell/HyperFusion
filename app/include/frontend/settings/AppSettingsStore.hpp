@@ -64,22 +64,30 @@ struct PersistedUr3eScanModePanelSettings
     bool wristSweepWrist1 = false;
     bool wristSweepWrist2 = true;
     bool wristSweepWrist3 = false;
-    /// Semi imaging interval (°); ignored in Auto.
+    /// Semi / FPP imaging interval (°); ignored in Auto.
     double imagingIntervalDeg = 10.0;
-    /// Semi pan direction (+1 / −1); ignored in Auto.
+    /// FPP pan arc (° 0…360); Semi keeps 360.
+    double panRangeDeg = 360.0;
+    /// Semi / FPP pan direction (+1 / −1); ignored in Auto.
     int panDirection = 1;
 };
 
 struct PersistedUr3eHemisphereScanSettings
 {
-    /// 0 = Auto planning, 1 = Semi-fixed
+    /// 0 = Auto planning, 1 = Semi-fixed, 2 = FPP
     int scanExecuteMode = 0;
     PersistedUr3eScanModePanelSettings autoPanel{};
     PersistedUr3eScanModePanelSettings semiPanel{};
+    PersistedUr3eScanModePanelSettings fppPanel{};
+    /// Multiview stage stops (GUI). Pos1 = home/apex burst; pos2 = rings/DLP spin.
+    double stagePosition1Mm = 1600.0;
+    double stagePosition2Mm = 1700.0;
     /// Last selected Auto named-route JSON path (combo selection).
     QString lastAutoRoutePath;
-    /// Last selected Semi plan JSON path (mvs_semi_scan_plans).
+    /// Last selected Semi plan JSON path (mvs_scan_plans/semi).
     QString lastSemiFixedPlanPath;
+    /// Last selected FPP plan JSON path (mvs_scan_plans/fpp).
+    QString lastFppPlanPath;
     /// Last loaded/saved Semi-fixed route JSON path (legacy rings list).
     QString lastSemiFixedRoutePath;
 

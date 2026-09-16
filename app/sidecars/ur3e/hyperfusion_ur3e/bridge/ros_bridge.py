@@ -1588,8 +1588,9 @@ class Ur3eRosBridge:
   def _update_pose_from_tf_unlocked(self, timeout_s: float = 5.0) -> None:
     """Refresh self._pose as base_link-frame optical TCP (UR rotvec).
 
-    Depth / capture JSON use robot base as origin with tip hyperfusion_tcp
-    (tool_tcp_* offset). Independent of tray/world mount height.
+    Depth / capture JSON use robot base as origin. Capture optical tip is always
+    BFS camera (cfg tool_tcp_*) composed as tool0⊗camera_tcp in the desktop app —
+    even when this MoveIt tip link is remapped to dlp_tcp_* (scan_tcp=dlp).
     """
     self._pose = self._lookup_base_link_pose_unlocked("hyperfusion_tcp", timeout_s)
 

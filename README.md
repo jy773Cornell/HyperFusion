@@ -45,7 +45,6 @@ Designed for research and high-throughput phenotyping, HyperFusion integrates li
 | **SWIR3 + NI Frame Grabber** | SWIR hyperspectral line-scan camera                  |
 | **Zaber Linear Stage**       | Precision sample translation for push-broom scanning |
 | **MCC USB-1208**             | Reflectance and transmittance illumination control   |
-| **UR3e Robot**               | Reserved for future robotic sample handling          |
 
 ---
 

@@ -31,6 +31,8 @@ public:
     void shutdownSync();
     void wireSettingsTabConnections();
     [[nodiscard]] bool isConnected() const;
+    /// Snapshot of Multiview DLP UI settings (LED mA, device id).
+    [[nodiscard]] DlpProjectorSettings currentSettings() const;
     /// One FPP sequence step on the EVM (blocks). For pin capture, not the GUI loop.
     [[nodiscard]] bool showFppScanStepSync(int stepIndex, QString *errorOut = nullptr);
     [[nodiscard]] bool blankSync(QString *errorOut = nullptr);

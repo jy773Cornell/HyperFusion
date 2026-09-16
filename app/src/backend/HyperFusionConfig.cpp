@@ -153,10 +153,16 @@ bool resolveSampleStagePositions(const SampleStagePositionDraft &draft,
         resolved.insert(QStringLiteral("sample_multiview_position_mm"),
                         resolved.value(QStringLiteral("sample_3d_scanning_position_mm")));
     }
-    ok = require(QStringLiteral("sample_multiview_position_mm"),
-                 config.sampleMultiviewPositionMm,
-                 QStringLiteral("sample_multiview_position_mm"))
-         && ok;
+    // Optional legacy keys (Multiview Stage 1/2 are GUI-owned). Defaults 1600.
+    if (resolved.contains(QStringLiteral("sample_multiview_position_mm")))
+    {
+        ok = require(QStringLiteral("sample_multiview_position_mm"),
+                     config.sampleMultiviewPositionMm,
+                     QStringLiteral("sample_multiview_position_mm"))
+             && ok;
+    }
+    else
+        config.sampleMultiviewPositionMm = 1600.0;
     if (!resolved.contains(QStringLiteral("sample_multiview_apex_position_mm")))
         config.sampleMultiviewApexPositionMm = config.sampleMultiviewPositionMm;
     else
@@ -1415,7 +1421,9 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
             }
             else if (key == QStringLiteral("semi_scan_plans_subdir"))
             {
-                config.ur3e.semiScanPlansSubdir = value.trimmed();
+                // Deprecated: plans live under mvs_scan_plans/{auto,semi,fpp}.
+                warnings.push_back(QStringLiteral(
+                    "semi_scan_plans_subdir is ignored — use mvs_scan_plans/auto|semi|fpp"));
             }
             else if (key == QStringLiteral("remember_last_scan_plan"))
             {
@@ -1648,11 +1656,8 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "sample_scanning_starting_position_fx10e_mm = 840\n"
         << "sample_scanning_starting_position_swir3_mm = sample_scanning_starting_position_fx10e_mm - distance_dual_camera_mm\n"
         << "temp_stop_position_mm = 500\n"
-        << "# Apex still (θ=0). Then stage moves to sample_multiview_position_mm for rings.\n"
-        << "sample_multiview_apex_position_mm = 1600\n"
-        << "# MVS ring-pin stop. Apex camera JSON is remapped here (sample treated as static).\n"
-        << "sample_multiview_position_mm = 1600\n"
-        << "# +stage travel in base_link for apex→MVS output translation (x, -x, y, -y).\n"
+        << "# Multiview Stage 1/2 are GUI (QSettings). Optional legacy seed keys omitted.\n"
+        << "# +stage travel in base_link for home→spin output translation (x, -x, y, -y).\n"
         << "sample_multiview_stage_axis = x\n"
         << "\n"
         << "[scanning_settings]\n"

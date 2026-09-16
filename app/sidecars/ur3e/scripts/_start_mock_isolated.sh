@@ -34,18 +34,18 @@ exec ./venv/bin/python -m hyperfusion_ur3e.sidecar.server \
   --tool-payload-radius-mm 60 \
   --tool-payload-shape mesh \
   --tool-payload-mesh-file bfs_dlp_payload.stl \
-  --tool-tcp-x-mm 0.372 \
-  --tool-tcp-y-mm 57.104 \
-  --tool-tcp-z-mm 27.4994 \
-  --tool-tcp-roll-deg 25 \
-  --tool-tcp-pitch-deg 0 \
-  --tool-tcp-yaw-deg 0 \
+  --tool-tcp-x-mm 1.400 \
+  --tool-tcp-y-mm 31.743 \
+  --tool-tcp-z-mm 98.538 \
+  --tool-tcp-roll-deg -25.2629 \
+  --tool-tcp-pitch-deg 0.2395 \
+  --tool-tcp-yaw-deg 179.9313 \
   --use-mock-hardware \
   --ros-distro jazzy \
   --ur-type ur3e \
   --prestart-driver \
   --initial-joint-deg "${INIT_DEG}" \
-  --ceiling-mount-height-mm 870 \
+  --ceiling-mount-height-mm 888 \
   --mount-roll-deg 180 \
   --mount-pitch-deg 0 \
   --mount-yaw-deg 0 \
@@ -54,5 +54,5 @@ exec ./venv/bin/python -m hyperfusion_ur3e.sidecar.server \
   --workspace-boundary-enabled \
   --workspace-length-mm 900 \
   --workspace-width-mm 600 \
-  --workspace-height-mm 720 \
+  --workspace-height-mm 788 \
   --workspace-ceiling-clearance-mm 40

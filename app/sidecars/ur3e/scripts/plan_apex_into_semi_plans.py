@@ -112,8 +112,8 @@ def main() -> int:
         type=Path,
         default=Path(__file__).resolve().parents[3]
         / "preset"
-        / "mvs_semi_scan_plans"
-        / "fpp_scanning",
+        / "mvs_scan_plans"
+        / "fpp",
     )
     parser.add_argument("--connect-timeout-s", type=float, default=900.0)
     args = parser.parse_args()
@@ -185,8 +185,8 @@ def main() -> int:
                 Path(__file__).resolve().parents[3]
                 / "build"
                 / "Release"
-                / "mvs_semi_scan_plans"
-                / "fpp_scanning"
+                / "mvs_scan_plans"
+                / "fpp"
                 / path.name
             )
             if rel.parent.is_dir():

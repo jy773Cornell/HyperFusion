@@ -95,7 +95,7 @@ def _decode_axis(
 def decode_psp_burst(
     burst: FppBurst,
     *,
-    min_modulation: float = 0.08,
+    min_modulation: float = 0.15,
     min_phase_quality: float = 0.04,
 ):
     from .decode import DecodeResult

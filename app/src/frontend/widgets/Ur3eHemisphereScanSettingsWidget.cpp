@@ -59,29 +59,20 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
                         static_cast<int>(hf::ur3e::Ur3eScanExecuteMode::AutoHemisphere));
     modeCombo_->addItem(QStringLiteral("Semi-fixed"),
                         static_cast<int>(hf::ur3e::Ur3eScanExecuteMode::SemiFixed));
+    modeCombo_->addItem(QStringLiteral("FPP"),
+                        static_cast<int>(hf::ur3e::Ur3eScanExecuteMode::Fpp));
     modeCombo_->setToolTip(
         QStringLiteral("Auto: MoveIt hemisphere grid + wrist sweep.\n"
-                       "Semi-fixed: Plan finds base-sweep OK ring entries (own folder); "
-                       "Execute pans each ring (no collision on spin) + wrist."));
+                       "Semi-fixed: Plan finds base-sweep OK ring entries; "
+                       "Execute pans each ring + wrist.\n"
+                       "FPP: load a saved hand-crafted plan only; Execute pans "
+                       "Range° at Interval (camera lens tip)."));
     form->addRow(QStringLiteral("Mode"), modeCombo_);
 
-    scanTcpCombo_ = new QComboBox(group);
-    scanTcpCombo_->addItem(QStringLiteral("Camera lens"),
-                           static_cast<int>(hf::HardwareConfig::Ur3eConfig::ScanTcpKind::Camera));
-    scanTcpCombo_->addItem(QStringLiteral("DLP lens"),
-                           static_cast<int>(hf::HardwareConfig::Ur3eConfig::ScanTcpKind::Dlp));
-    scanTcpCombo_->setToolTip(
-        QStringLiteral("MoveIt tip (hyperfusion_tcp). Camera = BFS Tsai; "
-                       "DLP = projector lens in tool0.\n"
-                       "Disconnect / Connect after switching so the URDF rematerializes."));
-    form->addRow(QStringLiteral("Scan tip"), scanTcpCombo_);
-    connect(scanTcpCombo_,
-            qOverload<int>(&QComboBox::currentIndexChanged),
-            this,
-            &Ur3eHemisphereScanSettingsWidget::onScanTcpChanged);
-    applyScanTcpFromConfig();
+    // Scan tip UI removed — always Camera lens MoveIt tip. DLP TCP offsets stay in cfg.
+    forceCameraScanTcp();
 
-    // --- Auto section ---
+    // --- Auto / shared section ---
     autoSection_ = new QWidget(group);
     auto *autoForm = new QFormLayout(autoSection_);
     autoForm->setContentsMargins(0, 0, 0, 0);
@@ -116,6 +107,38 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
     sphereRadiusSpin_->setSuffix(QStringLiteral(" mm"));
     sphereRadiusSpin_->setValue(500.0);
     autoForm->addRow(QStringLiteral("Radius"), sphereRadiusSpin_);
+    radiusFormLabel_ = qobject_cast<QLabel *>(autoForm->labelForField(sphereRadiusSpin_));
+
+    fppRangeSpin_ = new QDoubleSpinBox(autoSection_);
+    fppRangeSpin_->setRange(0.0, 360.0);
+    fppRangeSpin_->setDecimals(0);
+    fppRangeSpin_->setSingleStep(10.0);
+    fppRangeSpin_->setSuffix(QStringLiteral(" °"));
+    fppRangeSpin_->setValue(360.0);
+    fppRangeSpin_->setToolTip(
+        QStringLiteral("Shoulder-pan arc to cover on each ring (0…360°). "
+                       "Photos every Interval along this arc."));
+
+    semiFixedIntervalSpin_ = new QDoubleSpinBox(autoSection_);
+    semiFixedIntervalSpin_->setRange(1.0, 90.0);
+    semiFixedIntervalSpin_->setDecimals(1);
+    semiFixedIntervalSpin_->setSingleStep(1.0);
+    semiFixedIntervalSpin_->setSuffix(QStringLiteral(" °"));
+    semiFixedIntervalSpin_->setValue(10.0);
+    semiFixedIntervalSpin_->setToolTip(
+        QStringLiteral("Photo every this many degrees of shoulder_pan around each ring."));
+
+    // FPP: Range + Interval on one row.
+    rangeIntervalRow_ = new QWidget(autoSection_);
+    auto *rangeIntervalLayout = new QHBoxLayout(rangeIntervalRow_);
+    rangeIntervalLayout->setContentsMargins(0, 0, 0, 0);
+    rangeIntervalLayout->setSpacing(6);
+    rangeIntervalLayout->addWidget(fppRangeSpin_, 1);
+    rangeIntervalLayout->addWidget(semiFixedIntervalSpin_, 1);
+    rangeIntervalRow_->setVisible(false);
+    autoForm->addRow(QStringLiteral("Range / Interval"), rangeIntervalRow_);
+    rangeIntervalFormLabel_ =
+        qobject_cast<QLabel *>(autoForm->labelForField(rangeIntervalRow_));
 
     horizontalPointsSpin_ = new QSpinBox(autoSection_);
     horizontalPointsSpin_->setRange(1, 360);
@@ -125,28 +148,17 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
     verticalPointsSpin_->setRange(1, 180);
     verticalPointsSpin_->setValue(5);
 
-    auto *gridRow = new QWidget(autoSection_);
-    auto *gridLayout = new QHBoxLayout(gridRow);
+    gridRow_ = new QWidget(autoSection_);
+    auto *gridLayout = new QHBoxLayout(gridRow_);
     gridLayout->setContentsMargins(0, 0, 0, 0);
     gridLayout->setSpacing(6);
     gridLayout->addWidget(horizontalPointsSpin_);
-    auto *gridTimes = new QLabel(QStringLiteral("×"), gridRow);
-    gridTimes->setAlignment(Qt::AlignCenter);
-    gridLayout->addWidget(gridTimes);
+    gridTimesLabel_ = new QLabel(QStringLiteral("×"), gridRow_);
+    gridTimesLabel_->setAlignment(Qt::AlignCenter);
+    gridLayout->addWidget(gridTimesLabel_);
     gridLayout->addWidget(verticalPointsSpin_);
-    // Semi mode: imaging interval replaces vertical pin count in the same slot.
-    semiFixedIntervalSpin_ = new QDoubleSpinBox(gridRow);
-    semiFixedIntervalSpin_->setRange(1.0, 90.0);
-    semiFixedIntervalSpin_->setDecimals(1);
-    semiFixedIntervalSpin_->setSingleStep(1.0);
-    semiFixedIntervalSpin_->setSuffix(QStringLiteral(" °"));
-    semiFixedIntervalSpin_->setValue(10.0);
-    semiFixedIntervalSpin_->setToolTip(
-        QStringLiteral("Photo every this many degrees of shoulder_pan around each ring."));
-    semiFixedIntervalSpin_->setVisible(false);
-    gridLayout->addWidget(semiFixedIntervalSpin_);
-    autoForm->addRow(QStringLiteral("Grid"), gridRow);
-    gridFormLabel_ = qobject_cast<QLabel *>(autoForm->labelForField(gridRow));
+    autoForm->addRow(QStringLiteral("Grid"), gridRow_);
+    gridFormLabel_ = qobject_cast<QLabel *>(autoForm->labelForField(gridRow_));
 
     thetaMinSpin_ = new QDoubleSpinBox(autoSection_);
     thetaMinSpin_->setRange(0.0, 90.0);
@@ -162,22 +174,24 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
     thetaMaxSpin_->setSuffix(QStringLiteral(" °"));
     thetaMaxSpin_->setValue(90.0);
 
-    auto *thetaRow = new QWidget(autoSection_);
-    auto *thetaLayout = new QHBoxLayout(thetaRow);
+    thetaRow_ = new QWidget(autoSection_);
+    auto *thetaLayout = new QHBoxLayout(thetaRow_);
     thetaLayout->setContentsMargins(0, 0, 0, 0);
     thetaLayout->setSpacing(6);
     thetaLayout->addWidget(thetaMinSpin_);
-    auto *thetaDash = new QLabel(QStringLiteral("–"), thetaRow);
+    auto *thetaDash = new QLabel(QStringLiteral("–"), thetaRow_);
     thetaDash->setAlignment(Qt::AlignCenter);
     thetaLayout->addWidget(thetaDash);
     thetaLayout->addWidget(thetaMaxSpin_);
-    autoForm->addRow(QStringLiteral("Theta"), thetaRow);
+    autoForm->addRow(QStringLiteral("Theta"), thetaRow_);
+    thetaFormLabel_ = qobject_cast<QLabel *>(autoForm->labelForField(thetaRow_));
 
     wristSweepEnabledCheck_ = new QCheckBox(QStringLiteral("On"), autoSection_);
     wristSweepEnabledCheck_->setToolTip(
         QStringLiteral("After each pin, permute selected wrists for multiview stills "
                        "(collision skips). Center pose is always included."));
     autoForm->addRow(QStringLiteral("Sweep"), wristSweepEnabledCheck_);
+    sweepFormLabel_ = qobject_cast<QLabel *>(autoForm->labelForField(wristSweepEnabledCheck_));
 
     wristSweepStepSpin_ = new QDoubleSpinBox(autoSection_);
     wristSweepStepSpin_->setRange(0.5, 45.0);
@@ -190,31 +204,60 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
     wristSweepStepsSpin_->setRange(1, 12);
     wristSweepStepsSpin_->setValue(1);
 
-    auto *wristStepRow = new QWidget(autoSection_);
-    auto *wristStepLayout = new QHBoxLayout(wristStepRow);
+    wristStepRow_ = new QWidget(autoSection_);
+    auto *wristStepLayout = new QHBoxLayout(wristStepRow_);
     wristStepLayout->setContentsMargins(0, 0, 0, 0);
     wristStepLayout->setSpacing(6);
     wristStepLayout->addWidget(wristSweepStepSpin_, 1);
-    auto *wristStepsLabel = new QLabel(QStringLiteral("±"), wristStepRow);
+    auto *wristStepsLabel = new QLabel(QStringLiteral("±"), wristStepRow_);
     wristStepsLabel->setAlignment(Qt::AlignCenter);
     wristStepLayout->addWidget(wristStepsLabel);
     wristStepLayout->addWidget(wristSweepStepsSpin_, 1);
-    autoForm->addRow(QStringLiteral("Step / ±"), wristStepRow);
+    autoForm->addRow(QStringLiteral("Step / ±"), wristStepRow_);
+    wristStepFormLabel_ = qobject_cast<QLabel *>(autoForm->labelForField(wristStepRow_));
 
     wrist1Check_ = new QCheckBox(QStringLiteral("w1"), autoSection_);
     wrist2Check_ = new QCheckBox(QStringLiteral("w2"), autoSection_);
     wrist3Check_ = new QCheckBox(QStringLiteral("w3"), autoSection_);
     wrist2Check_->setChecked(true);
     wrist3Check_->setChecked(false);
-    auto *wristAxesRow = new QWidget(autoSection_);
-    auto *wristAxesLayout = new QHBoxLayout(wristAxesRow);
+    wristAxesRow_ = new QWidget(autoSection_);
+    auto *wristAxesLayout = new QHBoxLayout(wristAxesRow_);
     wristAxesLayout->setContentsMargins(0, 0, 0, 0);
     wristAxesLayout->setSpacing(8);
     wristAxesLayout->addWidget(wrist1Check_);
     wristAxesLayout->addWidget(wrist2Check_);
     wristAxesLayout->addWidget(wrist3Check_);
     wristAxesLayout->addStretch(1);
-    autoForm->addRow(QStringLiteral("Axes"), wristAxesRow);
+    autoForm->addRow(QStringLiteral("Axes"), wristAxesRow_);
+    wristAxesFormLabel_ = qobject_cast<QLabel *>(autoForm->labelForField(wristAxesRow_));
+
+    stagePosition1Spin_ = new QDoubleSpinBox(autoSection_);
+    stagePosition1Spin_->setRange(0.0, 5000.0);
+    stagePosition1Spin_->setDecimals(0);
+    stagePosition1Spin_->setSingleStep(10.0);
+    stagePosition1Spin_->setSuffix(QStringLiteral(" mm"));
+    stagePosition1Spin_->setValue(1600.0);
+    stagePosition1Spin_->setToolTip(
+        QStringLiteral("Stage position 1: home / apex burst (sample-static reference uses pos 2)."));
+
+    stagePosition2Spin_ = new QDoubleSpinBox(autoSection_);
+    stagePosition2Spin_->setRange(0.0, 5000.0);
+    stagePosition2Spin_->setDecimals(0);
+    stagePosition2Spin_->setSingleStep(10.0);
+    stagePosition2Spin_->setSuffix(QStringLiteral(" mm"));
+    stagePosition2Spin_->setValue(1700.0);
+    stagePosition2Spin_->setToolTip(
+        QStringLiteral("Stage position 2: rings / DLP spin plane. Equal to pos 1 = single-stage."));
+
+    stageRow_ = new QWidget(autoSection_);
+    auto *stageLayout = new QHBoxLayout(stageRow_);
+    stageLayout->setContentsMargins(0, 0, 0, 0);
+    stageLayout->setSpacing(6);
+    stageLayout->addWidget(stagePosition1Spin_, 1);
+    stageLayout->addWidget(stagePosition2Spin_, 1);
+    autoForm->addRow(QStringLiteral("Stage 1 / 2"), stageRow_);
+    stageFormLabel_ = qobject_cast<QLabel *>(autoForm->labelForField(stageRow_));
 
     imageEstimateLabel_ = new QLabel(autoSection_);
     imageEstimateLabel_->setWordWrap(false);
@@ -224,7 +267,7 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
 
     form->addRow(autoSection_);
 
-    // --- Semi-fixed section ---
+    // --- Semi-fixed / FPP section (Direction only; Images estimate lives above) ---
     semiFixedSection_ = new QWidget(group);
     auto *semiForm = new QFormLayout(semiFixedSection_);
     semiForm->setContentsMargins(0, 0, 0, 0);
@@ -234,8 +277,8 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
     semiForm->setVerticalSpacing(4);
 
     semiFixedDirectionCombo_ = new QComboBox(semiFixedSection_);
-    semiFixedDirectionCombo_->addItem(QStringLiteral("+360° (positive pan)"), 1);
-    semiFixedDirectionCombo_->addItem(QStringLiteral("−360° (negative pan)"), -1);
+    semiFixedDirectionCombo_->addItem(QStringLiteral("+ (positive pan)"), 1);
+    semiFixedDirectionCombo_->addItem(QStringLiteral("− (negative pan)"), -1);
     semiForm->addRow(QStringLiteral("Direction"), semiFixedDirectionCombo_);
 
     // Legacy widgets kept for API compatibility; not shown (top Route row loads Semi plans).
@@ -253,10 +296,6 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
     semiFixedSaveBtn_->setVisible(false);
     semiFixedLoadFileBtn_ = new QPushButton(semiFixedSection_);
     semiFixedLoadFileBtn_->setVisible(false);
-
-    semiFixedEstimateLabel_ = new QLabel(semiFixedSection_);
-    semiFixedEstimateLabel_->setStyleSheet(QStringLiteral("color: #444;"));
-    semiForm->addRow(QStringLiteral("Images"), semiFixedEstimateLabel_);
 
     form->addRow(semiFixedSection_);
 
@@ -303,7 +342,9 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
                 const QString path = routeCombo_->currentData().toString();
                 if (path.isEmpty())
                     return;
-                if (scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::SemiFixed)
+                if (scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::Fpp)
+                    rememberFppPlanPath(path);
+                else if (scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::SemiFixed)
                     rememberSemiFixedPlanPath(path);
                 else
                     rememberAutoRoutePath(path);
@@ -318,12 +359,23 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
                 updateImageEstimateLabel();
                 emit semiFixedRouteChanged();
             });
+    connect(fppRangeSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            [this](double) {
+                syncSemiFixedRouteFromUi();
+                saveToSettings();
+                updateImageEstimateLabel();
+                emit semiFixedRouteChanged();
+            });
     connect(semiFixedDirectionCombo_, qOverload<int>(&QComboBox::currentIndexChanged), this,
             [this](int) {
                 syncSemiFixedRouteFromUi();
                 saveToSettings();
                 emit semiFixedRouteChanged();
             });
+    connect(stagePosition1Spin_, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            [this](double) { saveToSettings(); });
+    connect(stagePosition2Spin_, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            [this](double) { saveToSettings(); });
     connect(semiFixedAddBtn_, &QPushButton::clicked, this,
             &Ur3eHemisphereScanSettingsWidget::onAddSemiFixedRingClicked);
     connect(semiFixedRemoveBtn_, &QPushButton::clicked, this,
@@ -332,7 +384,6 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
             &Ur3eHemisphereScanSettingsWidget::onSaveSemiFixedRouteClicked);
     connect(semiFixedLoadFileBtn_, &QPushButton::clicked, this,
             &Ur3eHemisphereScanSettingsWidget::onLoadSemiFixedRouteFileClicked);
-    // Top Route row loads Semi plans; hidden semiFixedPlanRouteCombo_ is unused.
 
     semiFixedRoute_.id = QStringLiteral("semi_fixed");
     semiFixedRoute_.displayName = QStringLiteral("Semi-fixed");
@@ -353,9 +404,11 @@ hf::ur3e::Ur3eScanExecuteMode Ur3eHemisphereScanSettingsWidget::scanExecuteMode(
     if (modeCombo_ == nullptr)
         return hf::ur3e::Ur3eScanExecuteMode::AutoHemisphere;
     const int v = modeCombo_->currentData().toInt();
-    return v == static_cast<int>(hf::ur3e::Ur3eScanExecuteMode::SemiFixed)
-               ? hf::ur3e::Ur3eScanExecuteMode::SemiFixed
-               : hf::ur3e::Ur3eScanExecuteMode::AutoHemisphere;
+    if (v == static_cast<int>(hf::ur3e::Ur3eScanExecuteMode::SemiFixed))
+        return hf::ur3e::Ur3eScanExecuteMode::SemiFixed;
+    if (v == static_cast<int>(hf::ur3e::Ur3eScanExecuteMode::Fpp))
+        return hf::ur3e::Ur3eScanExecuteMode::Fpp;
+    return hf::ur3e::Ur3eScanExecuteMode::AutoHemisphere;
 }
 
 hf::ur3e::Ur3eSemiFixedRoute Ur3eHemisphereScanSettingsWidget::semiFixedRoute() const
@@ -363,6 +416,13 @@ hf::ur3e::Ur3eSemiFixedRoute Ur3eHemisphereScanSettingsWidget::semiFixedRoute() 
     hf::ur3e::Ur3eSemiFixedRoute route = semiFixedRoute_;
     if (semiFixedIntervalSpin_ != nullptr)
         route.intervalDeg = semiFixedIntervalSpin_->value();
+    if (fppRangeSpin_ != nullptr
+        && scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::Fpp)
+        route.panRangeDeg = fppRangeSpin_->value();
+    else if (!(route.panRangeDeg >= 0.0))
+        route.panRangeDeg = 360.0;
+    else if (route.panRangeDeg > 360.0)
+        route.panRangeDeg = 360.0;
     if (semiFixedDirectionCombo_ != nullptr)
     {
         const int dir = semiFixedDirectionCombo_->currentData().toInt();
@@ -375,6 +435,16 @@ hf::ur3e::Ur3eSemiFixedRoute Ur3eHemisphereScanSettingsWidget::semiFixedRoute() 
     return route;
 }
 
+double Ur3eHemisphereScanSettingsWidget::stagePosition1Mm() const
+{
+    return stagePosition1Spin_ != nullptr ? stagePosition1Spin_->value() : 1600.0;
+}
+
+double Ur3eHemisphereScanSettingsWidget::stagePosition2Mm() const
+{
+    return stagePosition2Spin_ != nullptr ? stagePosition2Spin_->value() : 1700.0;
+}
+
 void Ur3eHemisphereScanSettingsWidget::setSemiFixedRoute(const hf::ur3e::Ur3eSemiFixedRoute &route)
 {
     semiFixedRoute_ = route;
@@ -384,6 +454,13 @@ void Ur3eHemisphereScanSettingsWidget::setSemiFixedRoute(const hf::ur3e::Ur3eSem
     {
         const QSignalBlocker b(semiFixedIntervalSpin_);
         semiFixedIntervalSpin_->setValue(route.intervalDeg > 0.0 ? route.intervalDeg : 10.0);
+    }
+    if (fppRangeSpin_ != nullptr)
+    {
+        const QSignalBlocker b(fppRangeSpin_);
+        const double range =
+            route.panRangeDeg >= 0.0 ? std::min(360.0, route.panRangeDeg) : 360.0;
+        fppRangeSpin_->setValue(range);
     }
     if (semiFixedDirectionCombo_ != nullptr)
     {
@@ -426,17 +503,26 @@ void Ur3eHemisphereScanSettingsWidget::onScanModeChanged()
 {
     // Combo already shows the new mode; spins still hold the mode we are leaving.
     PersistedUr3eHemisphereScanSettings saved = AppSettingsStore::loadUr3eHemisphereScan();
-    const bool leavingSemi = saved.scanExecuteMode == 1;
-    if (leavingSemi)
-        saved.semiPanel = captureModePanelFromUi(true);
+    const int leaving = saved.scanExecuteMode;
+    const PersistedUr3eScanModePanelSettings leavingPanel = captureModePanelFromUi();
+    if (leaving == 2)
+        saved.fppPanel = leavingPanel;
+    else if (leaving == 1)
+        saved.semiPanel = leavingPanel;
     else
-        saved.autoPanel = captureModePanelFromUi(false);
+        saved.autoPanel = leavingPanel;
 
     saved.scanExecuteMode = static_cast<int>(scanExecuteMode());
     AppSettingsStore::saveUr3eHemisphereScan(saved);
 
-    const bool enteringSemi = scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::SemiFixed;
-    applyModePanelToUi(enteringSemi ? saved.semiPanel : saved.autoPanel, enteringSemi);
+    const hf::ur3e::Ur3eScanExecuteMode mode = scanExecuteMode();
+    const bool ringMode = hf::ur3e::isSavedRingRouteMode(mode);
+    const PersistedUr3eScanModePanelSettings &enterPanel =
+        mode == hf::ur3e::Ur3eScanExecuteMode::Fpp
+            ? saved.fppPanel
+            : (mode == hf::ur3e::Ur3eScanExecuteMode::SemiFixed ? saved.semiPanel
+                                                               : saved.autoPanel);
+    applyModePanelToUi(enterPanel, ringMode);
 
     syncModeUi();
     saveToSettings();
@@ -444,53 +530,132 @@ void Ur3eHemisphereScanSettingsWidget::onScanModeChanged()
     emit paramsChanged();
 }
 
+void Ur3eHemisphereScanSettingsWidget::setFormFieldVisible(QWidget *field, const bool visible)
+{
+    if (field == nullptr)
+        return;
+    field->setVisible(visible);
+}
+
 void Ur3eHemisphereScanSettingsWidget::syncModeUi()
 {
-    const bool autoMode = scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::AutoHemisphere;
-    // Shared grid + wrist UI for both modes (Semi remaps V → imaging interval).
+    const hf::ur3e::Ur3eScanExecuteMode mode = scanExecuteMode();
+    const bool autoMode = mode == hf::ur3e::Ur3eScanExecuteMode::AutoHemisphere;
+    const bool semiMode = mode == hf::ur3e::Ur3eScanExecuteMode::SemiFixed;
+    const bool fppMode = mode == hf::ur3e::Ur3eScanExecuteMode::Fpp;
+    const bool ringMode = semiMode || fppMode;
+
     if (autoSection_ != nullptr)
         autoSection_->setVisible(true);
     if (semiFixedSection_ != nullptr)
-        semiFixedSection_->setVisible(!autoMode);
+        semiFixedSection_->setVisible(ringMode);
+
+    setFormFieldVisible(sphereRadiusSpin_, !fppMode);
+    if (radiusFormLabel_ != nullptr)
+        radiusFormLabel_->setVisible(!fppMode);
+
+    // FPP: Range + Interval on one row. Semi: Interval sits in the Layer grid row.
+    if (rangeIntervalRow_ != nullptr)
+        rangeIntervalRow_->setVisible(fppMode);
+    if (rangeIntervalFormLabel_ != nullptr)
+        rangeIntervalFormLabel_->setVisible(fppMode);
+    if (fppRangeSpin_ != nullptr)
+        fppRangeSpin_->setVisible(fppMode);
+
+    if (semiFixedIntervalSpin_ != nullptr)
+    {
+        if (fppMode && rangeIntervalRow_ != nullptr)
+        {
+            if (auto *lay = qobject_cast<QHBoxLayout *>(rangeIntervalRow_->layout()))
+            {
+                if (semiFixedIntervalSpin_->parentWidget() != rangeIntervalRow_)
+                    lay->addWidget(semiFixedIntervalSpin_, 1);
+            }
+            semiFixedIntervalSpin_->setVisible(true);
+        }
+        else if (semiMode && gridRow_ != nullptr)
+        {
+            if (auto *lay = qobject_cast<QHBoxLayout *>(gridRow_->layout()))
+            {
+                if (semiFixedIntervalSpin_->parentWidget() != gridRow_)
+                    lay->addWidget(semiFixedIntervalSpin_);
+            }
+            semiFixedIntervalSpin_->setVisible(true);
+        }
+        else
+        {
+            semiFixedIntervalSpin_->setVisible(false);
+        }
+    }
+
+    if (horizontalPointsSpin_ != nullptr)
+        horizontalPointsSpin_->setVisible(autoMode || semiMode);
     if (verticalPointsSpin_ != nullptr)
         verticalPointsSpin_->setVisible(autoMode);
-    if (semiFixedIntervalSpin_ != nullptr)
-        semiFixedIntervalSpin_->setVisible(!autoMode);
+    if (gridTimesLabel_ != nullptr)
+        gridTimesLabel_->setVisible(autoMode);
+    if (gridRow_ != nullptr)
+        gridRow_->setVisible(autoMode || semiMode);
     if (gridFormLabel_ != nullptr)
     {
-        gridFormLabel_->setText(autoMode ? QStringLiteral("Grid")
-                                         : QStringLiteral("Layer × interval"));
+        if (semiMode)
+            gridFormLabel_->setText(QStringLiteral("Layer × interval"));
+        else
+            gridFormLabel_->setText(QStringLiteral("Grid"));
+        gridFormLabel_->setVisible(autoMode || semiMode);
     }
     if (horizontalPointsSpin_ != nullptr)
     {
         horizontalPointsSpin_->setToolTip(
             autoMode ? QStringLiteral("Horizontal (φ) pin count per latitude.")
                      : QStringLiteral("Number of latitude rings (layers) between theta min–max."));
-        if (!autoMode)
+        if (semiMode)
             horizontalPointsSpin_->setRange(1, 180);
         else
             horizontalPointsSpin_->setRange(1, 360);
     }
+
+    setFormFieldVisible(thetaRow_, !fppMode);
+    if (thetaFormLabel_ != nullptr)
+        thetaFormLabel_->setVisible(!fppMode);
+
+    setFormFieldVisible(wristSweepEnabledCheck_, !fppMode);
+    if (sweepFormLabel_ != nullptr)
+        sweepFormLabel_->setVisible(!fppMode);
+    setFormFieldVisible(wristStepRow_, !fppMode);
+    if (wristStepFormLabel_ != nullptr)
+        wristStepFormLabel_->setVisible(!fppMode);
+    setFormFieldVisible(wristAxesRow_, !fppMode);
+    if (wristAxesFormLabel_ != nullptr)
+        wristAxesFormLabel_->setVisible(!fppMode);
+
+    if (stageRow_ != nullptr)
+        stageRow_->setVisible(true);
+    if (stageFormLabel_ != nullptr)
+        stageFormLabel_->setVisible(true);
+
     if (imageEstimateLabel_ != nullptr)
-        imageEstimateLabel_->setVisible(autoMode);
-    if (semiFixedEstimateLabel_ != nullptr)
-        semiFixedEstimateLabel_->setVisible(!autoMode);
+        imageEstimateLabel_->setVisible(true);
     if (routeCombo_ != nullptr)
     {
         routeCombo_->setToolTip(
             autoMode
-                ? QStringLiteral("Saved Auto routes in ur3e_scan_routes (cfg must match).")
-                : QStringLiteral("Saved Semi plans in mvs_semi_scan_plans (cfg must match)."));
+                ? QStringLiteral("Saved Auto routes in mvs_scan_plans/auto (cfg must match).")
+                : fppMode
+                      ? QStringLiteral(
+                            "Saved FPP plans in mvs_scan_plans/fpp (cfg must match).")
+                      : QStringLiteral(
+                            "Saved Semi plans in mvs_scan_plans/semi (cfg must match)."));
     }
     if (loadRouteBtn_ != nullptr)
     {
         loadRouteBtn_->setToolTip(
             autoMode ? QStringLiteral("Load the selected Auto route.")
-                     : QStringLiteral("Load the selected Semi plan → ring entries."));
+                     : QStringLiteral("Load the selected plan → ring entries."));
     }
     if (planBtn_ != nullptr)
     {
-        planBtn_->setVisible(true);
+        planBtn_->setVisible(!fppMode);
         planBtn_->setText(QStringLiteral("Plan"));
         planBtn_->setToolTip(
             autoMode
@@ -498,7 +663,7 @@ void Ur3eHemisphereScanSettingsWidget::syncModeUi()
                       "Generate the scan grid and check each pose with MoveIt IK + collision.")
                 : QStringLiteral(
                       "Semi Plan: MoveIt IK + base-link pan-circle check; keep first 3 "
-                      "sweep-OK pins per ring. Saves to mvs_semi_scan_plans."));
+                      "sweep-OK pins per ring. Saves to mvs_scan_plans/semi."));
     }
     refreshAvailableRoutes();
     updateImageEstimateLabel();
@@ -508,6 +673,11 @@ void Ur3eHemisphereScanSettingsWidget::syncSemiFixedRouteFromUi()
 {
     if (semiFixedIntervalSpin_ != nullptr)
         semiFixedRoute_.intervalDeg = semiFixedIntervalSpin_->value();
+    if (fppRangeSpin_ != nullptr
+        && scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::Fpp)
+        semiFixedRoute_.panRangeDeg = fppRangeSpin_->value();
+    else if (scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::SemiFixed)
+        semiFixedRoute_.panRangeDeg = 360.0;
     if (semiFixedDirectionCombo_ != nullptr)
     {
         const int dir = semiFixedDirectionCombo_->currentData().toInt();
@@ -582,7 +752,7 @@ void Ur3eHemisphereScanSettingsWidget::onSaveSemiFixedRouteClicked()
     semiFixedRoute_.robotCfgFingerprint =
         hf::ur3e::ur3eScanRobotCfgFingerprint(hf::hardwareConfig().ur3e);
 
-    const QString dir = hf::ur3e::defaultUr3eSemiScanRoutesDir();
+    const QString dir = hf::ur3e::defaultUr3eSemiScanPlansDir();
     QDir().mkpath(dir);
     const QString path = QDir(dir).filePath(id + QStringLiteral(".json"));
     QString err;
@@ -593,7 +763,7 @@ void Ur3eHemisphereScanSettingsWidget::onSaveSemiFixedRouteClicked()
 
 void Ur3eHemisphereScanSettingsWidget::onLoadSemiFixedRouteFileClicked()
 {
-    const QString dir = hf::ur3e::defaultUr3eSemiScanRoutesDir();
+    const QString dir = hf::ur3e::defaultUr3eSemiScanPlansDir();
     QDir().mkpath(dir);
     const QString path = QFileDialog::getOpenFileName(
         this,
@@ -625,7 +795,7 @@ void Ur3eHemisphereScanSettingsWidget::onLoadPlannedAsSemiFixedClicked()
 
 void Ur3eHemisphereScanSettingsWidget::applyModePanelToUi(
     const PersistedUr3eScanModePanelSettings &panel,
-    const bool semiMode)
+    const bool ringMode)
 {
     const QSignalBlocker blockRadius(sphereRadiusSpin_);
     const QSignalBlocker blockHorizontal(horizontalPointsSpin_);
@@ -639,6 +809,7 @@ void Ur3eHemisphereScanSettingsWidget::applyModePanelToUi(
     const QSignalBlocker blockW2(wrist2Check_);
     const QSignalBlocker blockW3(wrist3Check_);
     const QSignalBlocker blockInterval(semiFixedIntervalSpin_);
+    const QSignalBlocker blockRange(fppRangeSpin_);
     const QSignalBlocker blockDir(semiFixedDirectionCombo_);
 
     if (sphereRadiusSpin_ != nullptr)
@@ -663,10 +834,12 @@ void Ur3eHemisphereScanSettingsWidget::applyModePanelToUi(
         wrist2Check_->setChecked(panel.wristSweepWrist2);
     if (wrist3Check_ != nullptr)
         wrist3Check_->setChecked(panel.wristSweepWrist3);
-    if (semiMode)
+    if (ringMode)
     {
         if (semiFixedIntervalSpin_ != nullptr)
             semiFixedIntervalSpin_->setValue(panel.imagingIntervalDeg);
+        if (fppRangeSpin_ != nullptr)
+            fppRangeSpin_->setValue(panel.panRangeDeg);
         if (semiFixedDirectionCombo_ != nullptr)
         {
             const int dirIdx = semiFixedDirectionCombo_->findData(panel.panDirection);
@@ -679,7 +852,7 @@ void Ur3eHemisphereScanSettingsWidget::applyModePanelToUi(
 }
 
 PersistedUr3eScanModePanelSettings
-Ur3eHemisphereScanSettingsWidget::captureModePanelFromUi(const bool /*semiMode*/) const
+Ur3eHemisphereScanSettingsWidget::captureModePanelFromUi() const
 {
     PersistedUr3eScanModePanelSettings panel;
     panel.sphereRadiusMm = sphereRadiusSpin_ != nullptr ? sphereRadiusSpin_->value() : 500.0;
@@ -696,6 +869,7 @@ Ur3eHemisphereScanSettingsWidget::captureModePanelFromUi(const bool /*semiMode*/
     panel.wristSweepWrist3 = wrist.wrist3;
     panel.imagingIntervalDeg =
         semiFixedIntervalSpin_ != nullptr ? semiFixedIntervalSpin_->value() : 10.0;
+    panel.panRangeDeg = fppRangeSpin_ != nullptr ? fppRangeSpin_->value() : 360.0;
     int pan = semiFixedDirectionCombo_ != nullptr ? semiFixedDirectionCombo_->currentData().toInt()
                                                   : 1;
     panel.panDirection = pan >= 0 ? 1 : -1;
@@ -711,37 +885,63 @@ void Ur3eHemisphereScanSettingsWidget::loadFromSettings()
     if (modeIdx >= 0)
         modeCombo_->setCurrentIndex(modeIdx);
 
-    const bool semiMode = scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::SemiFixed;
-    applyModePanelToUi(semiMode ? saved.semiPanel : saved.autoPanel, semiMode);
+    const hf::ur3e::Ur3eScanExecuteMode mode = scanExecuteMode();
+    const bool ringMode = hf::ur3e::isSavedRingRouteMode(mode);
+    const PersistedUr3eScanModePanelSettings &panel =
+        mode == hf::ur3e::Ur3eScanExecuteMode::Fpp
+            ? saved.fppPanel
+            : (mode == hf::ur3e::Ur3eScanExecuteMode::SemiFixed ? saved.semiPanel
+                                                               : saved.autoPanel);
+    applyModePanelToUi(panel, ringMode);
+
+    if (stagePosition1Spin_ != nullptr)
+    {
+        const QSignalBlocker b(stagePosition1Spin_);
+        stagePosition1Spin_->setValue(saved.stagePosition1Mm);
+    }
+    if (stagePosition2Spin_ != nullptr)
+    {
+        const QSignalBlocker b(stagePosition2Spin_);
+        stagePosition2Spin_->setValue(saved.stagePosition2Mm);
+    }
 }
 
 void Ur3eHemisphereScanSettingsWidget::saveToSettings() const
 {
     PersistedUr3eHemisphereScanSettings saved = AppSettingsStore::loadUr3eHemisphereScan();
     saved.scanExecuteMode = static_cast<int>(scanExecuteMode());
-    const bool semiMode = scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::SemiFixed;
-    const PersistedUr3eScanModePanelSettings panel = captureModePanelFromUi(semiMode);
-    if (semiMode)
+    const hf::ur3e::Ur3eScanExecuteMode mode = scanExecuteMode();
+    const PersistedUr3eScanModePanelSettings panel = captureModePanelFromUi();
+    saved.stagePosition1Mm = stagePosition1Mm();
+    saved.stagePosition2Mm = stagePosition2Mm();
+    if (mode == hf::ur3e::Ur3eScanExecuteMode::Fpp)
+    {
+        saved.fppPanel = panel;
+    }
+    else if (mode == hf::ur3e::Ur3eScanExecuteMode::SemiFixed)
     {
         saved.semiPanel = panel;
     }
     else
     {
-        // Keep Semi interval/pan when Auto is active (interval spin may be hidden).
         const double keepInterval = saved.semiPanel.imagingIntervalDeg;
         const int keepPan = saved.semiPanel.panDirection;
+        const double keepRange = saved.fppPanel.panRangeDeg;
         saved.autoPanel = panel;
         saved.autoPanel.imagingIntervalDeg = keepInterval;
         saved.autoPanel.panDirection = keepPan;
         saved.semiPanel.imagingIntervalDeg = keepInterval;
         saved.semiPanel.panDirection = keepPan;
+        saved.fppPanel.panRangeDeg = keepRange;
     }
     if (routeCombo_ != nullptr)
     {
         const QString path = routeCombo_->currentData().toString();
         if (!path.isEmpty())
         {
-            if (semiMode)
+            if (mode == hf::ur3e::Ur3eScanExecuteMode::Fpp)
+                saved.lastFppPlanPath = path;
+            else if (mode == hf::ur3e::Ur3eScanExecuteMode::SemiFixed)
                 saved.lastSemiFixedPlanPath = path;
             else
                 saved.lastAutoRoutePath = path;
@@ -768,6 +968,15 @@ void Ur3eHemisphereScanSettingsWidget::rememberSemiFixedPlanPath(const QString &
     AppSettingsStore::saveUr3eHemisphereScan(saved);
 }
 
+void Ur3eHemisphereScanSettingsWidget::rememberFppPlanPath(const QString &path)
+{
+    if (path.trimmed().isEmpty())
+        return;
+    PersistedUr3eHemisphereScanSettings saved = AppSettingsStore::loadUr3eHemisphereScan();
+    saved.lastFppPlanPath = path;
+    AppSettingsStore::saveUr3eHemisphereScan(saved);
+}
+
 void Ur3eHemisphereScanSettingsWidget::rememberSemiFixedRoutePath(const QString &path)
 {
     if (path.trimmed().isEmpty())
@@ -785,6 +994,11 @@ QString Ur3eHemisphereScanSettingsWidget::rememberedAutoRoutePath() const
 QString Ur3eHemisphereScanSettingsWidget::rememberedSemiFixedPlanPath() const
 {
     return AppSettingsStore::loadUr3eHemisphereScan().lastSemiFixedPlanPath;
+}
+
+QString Ur3eHemisphereScanSettingsWidget::rememberedFppPlanPath() const
+{
+    return AppSettingsStore::loadUr3eHemisphereScan().lastFppPlanPath;
 }
 
 QString Ur3eHemisphereScanSettingsWidget::rememberedSemiFixedRoutePath() const
@@ -857,6 +1071,11 @@ hf::ur3e::Ur3eHemisphereScanParams Ur3eHemisphereScanSettingsWidget::semiPlanPar
 hf::ur3e::Ur3eWristSweepParams Ur3eHemisphereScanSettingsWidget::wristSweepParams() const
 {
     hf::ur3e::Ur3eWristSweepParams wrist;
+    if (scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::Fpp)
+    {
+        wrist.enabled = false;
+        return wrist;
+    }
     wrist.enabled = wristSweepEnabledCheck_ != nullptr && wristSweepEnabledCheck_->isChecked();
     wrist.stepDeg = wristSweepStepSpin_ != nullptr ? wristSweepStepSpin_->value() : 3.0;
     wrist.stepsEachWay = wristSweepStepsSpin_ != nullptr ? wristSweepStepsSpin_->value() : 1;
@@ -911,15 +1130,22 @@ void Ur3eHemisphereScanSettingsWidget::setParams(const hf::ur3e::Ur3eHemisphereS
 void Ur3eHemisphereScanSettingsWidget::applyLoadedSemiPlanSettings(
     const hf::ur3e::Ur3eHemisphereScanParams &params,
     const double intervalDeg,
-    const int panDirection)
+    const int panDirection,
+    const double panRangeDeg)
 {
     // setParams maps Semi Layer ← verticalPoints and writes θ / radius.
     setParams(params);
 
     const QSignalBlocker blockInterval(semiFixedIntervalSpin_);
+    const QSignalBlocker blockRange(fppRangeSpin_);
     const QSignalBlocker blockDir(semiFixedDirectionCombo_);
     if (semiFixedIntervalSpin_ != nullptr)
         semiFixedIntervalSpin_->setValue(intervalDeg > 0.0 ? intervalDeg : 10.0);
+    if (fppRangeSpin_ != nullptr)
+    {
+        const double range = panRangeDeg >= 0.0 ? std::min(360.0, panRangeDeg) : 360.0;
+        fppRangeSpin_->setValue(range);
+    }
     if (semiFixedDirectionCombo_ != nullptr)
     {
         const int idx = semiFixedDirectionCombo_->findData(panDirection >= 0 ? 1 : -1);
@@ -928,6 +1154,8 @@ void Ur3eHemisphereScanSettingsWidget::applyLoadedSemiPlanSettings(
     }
     semiFixedRoute_.intervalDeg =
         semiFixedIntervalSpin_ != nullptr ? semiFixedIntervalSpin_->value() : 10.0;
+    semiFixedRoute_.panRangeDeg =
+        fppRangeSpin_ != nullptr ? fppRangeSpin_->value() : 360.0;
     semiFixedRoute_.panDirection = panDirection >= 0 ? 1 : -1;
     updateImageEstimateLabel();
     saveToSettings();
@@ -962,28 +1190,71 @@ void Ur3eHemisphereScanSettingsWidget::refreshAvailableRoutes()
     if (routeCombo_ == nullptr)
         return;
 
-    const bool semiMode = scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::SemiFixed;
+    const hf::ur3e::Ur3eScanExecuteMode mode = scanExecuteMode();
     const PersistedUr3eHemisphereScanSettings saved = AppSettingsStore::loadUr3eHemisphereScan();
-    const QString preferred =
-        semiMode
-            ? (!saved.lastSemiFixedPlanPath.isEmpty() ? saved.lastSemiFixedPlanPath
-                                                      : routeCombo_->currentData().toString())
-            : (!saved.lastAutoRoutePath.isEmpty() ? saved.lastAutoRoutePath
-                                                  : routeCombo_->currentData().toString());
+    QString preferred;
+    QString dir;
+    QString emptyLabel;
+    if (mode == hf::ur3e::Ur3eScanExecuteMode::Fpp)
+    {
+        preferred = !saved.lastFppPlanPath.isEmpty() ? saved.lastFppPlanPath
+                                                     : routeCombo_->currentData().toString();
+        dir = hf::ur3e::defaultUr3eFppScanPlansDir();
+        emptyLabel = QStringLiteral("(no plans in mvs_scan_plans/fpp)");
+
+        const QSignalBlocker block(routeCombo_);
+        routeCombo_->clear();
+        const QString robotFp = hf::ur3e::ur3eScanRobotCfgFingerprint(hf::hardwareConfig().ur3e);
+        const auto routes = hf::ur3e::listUr3eSemiFixedRoutesMatchingCfg(dir, robotFp);
+        if (routes.isEmpty())
+        {
+            routeCombo_->addItem(emptyLabel, QString());
+            if (loadRouteBtn_ != nullptr)
+                loadRouteBtn_->setEnabled(false);
+            return;
+        }
+        int selectIndex = 0;
+        for (int i = 0; i < routes.size(); ++i)
+        {
+            const hf::ur3e::Ur3eSemiFixedRouteInfo &route = routes[i];
+            routeCombo_->addItem(route.displayName, route.path);
+            routeCombo_->setItemData(
+                routeCombo_->count() - 1,
+                QStringLiteral("%1\n%2").arg(route.displayName, route.path),
+                Qt::ToolTipRole);
+            if (!preferred.isEmpty() && route.path == preferred)
+                selectIndex = i;
+        }
+        routeCombo_->setCurrentIndex(selectIndex);
+        if (loadRouteBtn_ != nullptr)
+            loadRouteBtn_->setEnabled(routeCombo_->isEnabled()
+                                      && !routeCombo_->currentData().toString().isEmpty());
+        return;
+    }
+    else if (mode == hf::ur3e::Ur3eScanExecuteMode::SemiFixed)
+    {
+        preferred = !saved.lastSemiFixedPlanPath.isEmpty() ? saved.lastSemiFixedPlanPath
+                                                           : routeCombo_->currentData().toString();
+        dir = hf::ur3e::defaultUr3eSemiScanPlansDir();
+        emptyLabel = QStringLiteral("(no plans in mvs_scan_plans/semi)");
+    }
+    else
+    {
+        preferred = !saved.lastAutoRoutePath.isEmpty() ? saved.lastAutoRoutePath
+                                                       : routeCombo_->currentData().toString();
+        dir = hf::ur3e::defaultUr3eScanRoutesDir();
+        emptyLabel = QStringLiteral("(no plans in mvs_scan_plans/auto)");
+    }
 
     const QSignalBlocker block(routeCombo_);
     routeCombo_->clear();
 
     const QString robotFp = hf::ur3e::ur3eScanRobotCfgFingerprint(hf::hardwareConfig().ur3e);
-    const QString dir = semiMode ? hf::ur3e::defaultUr3eSemiScanRoutesDir()
-                                 : hf::ur3e::defaultUr3eScanRoutesDir();
     const auto routes = hf::ur3e::listUr3eScanRoutesMatchingCfg(dir, robotFp);
 
     if (routes.isEmpty())
     {
-        routeCombo_->addItem(semiMode ? QStringLiteral("(no Semi plans in mvs_semi_scan_plans)")
-                                      : QStringLiteral("(no Auto routes — Semi plans are under Mode: Semi-fixed)"),
-                             QString());
+        routeCombo_->addItem(emptyLabel, QString());
         if (loadRouteBtn_ != nullptr)
             loadRouteBtn_->setEnabled(false);
         return;
@@ -1013,7 +1284,13 @@ void Ur3eHemisphereScanSettingsWidget::onLoadRouteClicked()
     const QString path = routeCombo_->currentData().toString();
     if (path.isEmpty())
         return;
-    if (scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::SemiFixed)
+    const hf::ur3e::Ur3eScanExecuteMode mode = scanExecuteMode();
+    if (mode == hf::ur3e::Ur3eScanExecuteMode::Fpp)
+    {
+        rememberFppPlanPath(path);
+        emit loadPlannedRouteAsSemiFixedRequested(path);
+    }
+    else if (mode == hf::ur3e::Ur3eScanExecuteMode::SemiFixed)
     {
         rememberSemiFixedPlanPath(path);
         emit loadPlannedRouteAsSemiFixedRequested(path);
@@ -1025,34 +1302,22 @@ void Ur3eHemisphereScanSettingsWidget::onLoadRouteClicked()
     }
 }
 
-void Ur3eHemisphereScanSettingsWidget::applyScanTcpFromConfig()
+void Ur3eHemisphereScanSettingsWidget::forceCameraScanTcp()
 {
-    const auto kind = hf::hardwareConfig().ur3e.scanTcp;
-    if (scanTcpCombo_ == nullptr)
-        return;
-    QSignalBlocker block(scanTcpCombo_);
-    const int idx = scanTcpCombo_->findData(static_cast<int>(kind));
-    scanTcpCombo_->setCurrentIndex(idx >= 0 ? idx : 0);
-}
-
-void Ur3eHemisphereScanSettingsWidget::onScanTcpChanged()
-{
-    if (scanTcpCombo_ == nullptr)
-        return;
     hf::HardwareConfig cfg = hf::hardwareConfig();
-    cfg.ur3e.scanTcp = static_cast<hf::HardwareConfig::Ur3eConfig::ScanTcpKind>(
-        scanTcpCombo_->currentData().toInt());
+    if (cfg.ur3e.scanTcp == hf::HardwareConfig::Ur3eConfig::ScanTcpKind::Camera)
+        return;
+    cfg.ur3e.scanTcp = hf::HardwareConfig::Ur3eConfig::ScanTcpKind::Camera;
     hf::setHardwareConfig(cfg);
     emit scanTcpChanged();
-    onParameterChanged();
 }
 
 void Ur3eHemisphereScanSettingsWidget::setParamsEnabled(const bool enabled)
 {
-    if (scanTcpCombo_ != nullptr)
-        scanTcpCombo_->setEnabled(enabled);
     if (sphereRadiusSpin_ != nullptr)
         sphereRadiusSpin_->setEnabled(enabled);
+    if (fppRangeSpin_ != nullptr)
+        fppRangeSpin_->setEnabled(enabled);
     if (horizontalPointsSpin_ != nullptr)
         horizontalPointsSpin_->setEnabled(enabled);
     if (verticalPointsSpin_ != nullptr)
@@ -1069,6 +1334,10 @@ void Ur3eHemisphereScanSettingsWidget::setParamsEnabled(const bool enabled)
         semiFixedIntervalSpin_->setEnabled(enabled);
     if (semiFixedDirectionCombo_ != nullptr)
         semiFixedDirectionCombo_->setEnabled(enabled);
+    if (stagePosition1Spin_ != nullptr)
+        stagePosition1Spin_->setEnabled(enabled);
+    if (stagePosition2Spin_ != nullptr)
+        stagePosition2Spin_->setEnabled(enabled);
     if (semiFixedAddBtn_ != nullptr)
         semiFixedAddBtn_->setEnabled(enabled);
     if (semiFixedRemoveBtn_ != nullptr)
@@ -1126,10 +1395,11 @@ void Ur3eHemisphereScanSettingsWidget::syncWristSweepEnabledState()
 
 void Ur3eHemisphereScanSettingsWidget::updateImageEstimateLabel()
 {
-    if (scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::SemiFixed)
+    if (imageEstimateLabel_ == nullptr)
+        return;
+
+    if (hf::ur3e::isSavedRingRouteMode(scanExecuteMode()))
     {
-        if (semiFixedEstimateLabel_ == nullptr)
-            return;
         syncSemiFixedRouteFromUi();
         const hf::ur3e::Ur3eWristSweepParams wrist = wristSweepParams();
         const int perSample = wrist.imagesPerPin();
@@ -1142,7 +1412,7 @@ void Ur3eHemisphereScanSettingsWidget::updateImageEstimateLabel()
         if (apexOnly)
         {
             const qint64 total = static_cast<qint64>(perSample);
-            semiFixedEstimateLabel_->setText(
+            imageEstimateLabel_->setText(
                 QStringLiteral("%1/pose × 1 apex = %2").arg(perSample).arg(total));
             return;
         }
@@ -1150,13 +1420,17 @@ void Ur3eHemisphereScanSettingsWidget::updateImageEstimateLabel()
         const double intervalDeg = semiFixedRoute_.intervalDeg > 0.0
                                        ? semiFixedRoute_.intervalDeg
                                        : 10.0;
+        const double rangeDeg =
+            scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::Fpp
+                ? (fppRangeSpin_ != nullptr ? fppRangeSpin_->value() : 360.0)
+                : 360.0;
         qint64 ringPins = 0;
         int ringEntries = 0;
         if (semiFixedRoute_.rings.isEmpty())
         {
             ringEntries = std::max(1, layers);
             ringPins = static_cast<qint64>(ringEntries)
-                       * hf::ur3e::semiFixedSampleCount(intervalDeg);
+                       * hf::ur3e::semiFixedSampleCount(intervalDeg, rangeDeg);
         }
         else
         {
@@ -1164,34 +1438,32 @@ void Ur3eHemisphereScanSettingsWidget::updateImageEstimateLabel()
             {
                 if (ring.noPan || std::abs(ring.thetaDeg) < 0.75)
                     continue;
-                ringPins += hf::ur3e::semiFixedRingSampleCount(ring, intervalDeg);
+                ringPins += hf::ur3e::semiFixedRingSampleCount(ring, intervalDeg, rangeDeg);
                 ++ringEntries;
             }
         }
         const qint64 total = static_cast<qint64>(perSample) * (1 + ringPins);
         if (semiFixedRoute_.rings.isEmpty())
         {
-            semiFixedEstimateLabel_->setText(
+            imageEstimateLabel_->setText(
                 QStringLiteral("%1/pose × (1 apex + %2/ring × %3 layers) = %4")
                     .arg(perSample)
-                    .arg(hf::ur3e::semiFixedSampleCount(intervalDeg))
+                    .arg(hf::ur3e::semiFixedSampleCount(intervalDeg, rangeDeg))
                     .arg(ringEntries)
                     .arg(total));
         }
         else
         {
-            semiFixedEstimateLabel_->setText(
-                QStringLiteral("%1/pose × (1 apex + %2 ring pins @ %3°) = %4")
+            imageEstimateLabel_->setText(
+                QStringLiteral("%1/pose × (1 apex + %2 ring pins @ %3° / %4°) = %5")
                     .arg(perSample)
                     .arg(ringPins)
                     .arg(intervalDeg, 0, 'f', 1)
+                    .arg(rangeDeg, 0, 'f', 0)
                     .arg(total));
         }
         return;
     }
-
-    if (imageEstimateLabel_ == nullptr)
-        return;
 
     const hf::ur3e::Ur3eWristSweepParams wrist = wristSweepParams();
     const int perPin = wrist.imagesPerPin();
