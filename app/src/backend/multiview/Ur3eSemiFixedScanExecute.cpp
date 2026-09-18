@@ -976,21 +976,33 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
         ensureSemiFixedTopPose(apexProbe);
         if (apexProbe.topPose.entryJointsRad.size() != 6)
         {
-            if (host.log)
-                host.log(QStringLiteral(
-                    "UR3e semi-fixed: no saved apex joints — planning home pose at Z=R…"));
-            QString apexErr;
-            if (!planApexJointsOnRingSphere(input.serverUrl, apexProbe.topPose, &apexErr))
+            if (route.isFppPlan)
             {
+                apexProbe.topPose.entryJointsRad = configuredHomeJointsRad();
+                route.topPose = apexProbe.topPose;
+                route.hasTopPose = true;
                 if (host.log)
-                    host.log(QStringLiteral("UR3e semi-fixed: apex plan failed — %1")
-                                 .arg(apexErr));
-                doTop = false;
+                    host.log(QStringLiteral(
+                        "UR3e FPP: apex uses cfg home joints (home XY, 450 mm)."));
             }
             else
             {
-                route.topPose = apexProbe.topPose;
-                route.hasTopPose = true;
+                if (host.log)
+                    host.log(QStringLiteral(
+                        "UR3e semi-fixed: no saved apex joints — planning home pose at Z=R…"));
+                QString apexErr;
+                if (!planApexJointsOnRingSphere(input.serverUrl, apexProbe.topPose, &apexErr))
+                {
+                    if (host.log)
+                        host.log(QStringLiteral("UR3e semi-fixed: apex plan failed — %1")
+                                     .arg(apexErr));
+                    doTop = false;
+                }
+                else
+                {
+                    route.topPose = apexProbe.topPose;
+                    route.hasTopPose = true;
+                }
             }
         }
     }
@@ -1032,21 +1044,16 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
                                         : QStringLiteral(", motion-only")));
     }
 
-    // Always: MoveIt → top (θ=0 look-down) → photo, then rings (unless a two-stage MVS split).
+    // Always: MoveIt → top (θ=0 look-down) → photo, then rings.
     // Preview stores rings at [0..N-1] and top at index N (see inferSemiFixedPreviewRings).
-    // GUI Multiview Stage 1 / 2 (pos1 = home/apex, pos2 = rings/DLP spin).
-    const double stageHomeMm = input.stageHomeMm;
-    const double stageSpinMm = input.stageSpinMm;
-    const bool twoStage = std::abs(stageSpinMm - stageHomeMm) > 0.5;
-    if (host.moveStage && doTop)
+    const double stageMm = input.stageMm;
+    if (host.moveStage)
     {
         QString stageErr;
-        if (!host.moveStage(stageHomeMm,
-                            QStringLiteral("stage pos 1"),
-                            &stageErr))
+        if (!host.moveStage(stageMm, QStringLiteral("stage"), &stageErr))
         {
             ok = false;
-            errorMessage = stageErr.isEmpty() ? QStringLiteral("Stage home/apex move failed")
+            errorMessage = stageErr.isEmpty() ? QStringLiteral("Stage move failed")
                                               : stageErr;
             finishNow(false, stopRequested());
             return;
@@ -1073,12 +1080,20 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
         if (host.setActiveRing)
             host.setActiveRing(topPreviewIndex);
         if (host.log)
-            host.log(QStringLiteral("UR3e semi-fixed: MoveIt → apex at ring R (θ=0)…"));
+        {
+            host.log(route.isFppPlan
+                         ? QStringLiteral(
+                               "UR3e FPP: MoveIt → apex (home XY, %1 mm, no pan)…")
+                               .arg(route.apexHeightM > 0.01 ? route.apexHeightM * 1000.0
+                                                             : 450.0,
+                                    0, 'f', 0)
+                         : QStringLiteral("UR3e semi-fixed: MoveIt → apex at ring R (θ=0)…"));
+        }
 
         QString moveErr;
         bool stopped = false;
         const Ur3eScanTcpPose *tcpPtr = top.hasEntryTcp ? &top.entryTcp : nullptr;
-        // Top / θ=0: home XY + orientation, Z = ring R — no pin-pose cone.
+        // Top / θ=0: FPP = home XY at working distance; Semi = home XY, Z = ring R. No pin-pose cone.
         if (!moveItToJoints(input.serverUrl, top.entryJointsRad, tcpPtr, &moveErr, &stopped,
                             false))
         {
@@ -1173,21 +1188,6 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
             host.log(QStringLiteral("UR3e semi-fixed: top still done."));
     }
 
-    // After the first (apex/home) still: MVS / DLP spin plane.
-    if (host.moveStage && twoStage && doTop && !apexRingOnly)
-    {
-        QString stageErr;
-        if (!host.moveStage(stageSpinMm,
-                            QStringLiteral("stage pos 2"),
-                            &stageErr))
-        {
-            ok = false;
-            errorMessage = stageErr.isEmpty() ? QStringLiteral("Stage spin/MVS move failed")
-                                              : stageErr;
-            goto semi_fixed_done;
-        }
-    }
-
     if (!input.skipRings)
     for (int ringIndex = 0; ringIndex < ringCount; ++ringIndex)
     {
@@ -1229,11 +1229,22 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
                 hopNote = QStringLiteral(" (via-home: elbow family ≠ home)");
             else if (ring.baseSweepOk && !hasLastEntryBranch)
                 hopNote = QStringLiteral(" (simple path)");
-            host.log(QStringLiteral("UR3e semi-fixed [%1/%2] MoveIt → ring “%3”%4…")
-                         .arg(ringIndex + 1)
-                         .arg(ringCount)
-                         .arg(ring.displayName)
-                         .arg(hopNote));
+            if (route.isFppPlan)
+            {
+                host.log(QStringLiteral(
+                             "UR3e FPP [%1/%2] hardware hop → ring “%3” (taught pose)…")
+                             .arg(ringIndex + 1)
+                             .arg(ringCount)
+                             .arg(ring.displayName));
+            }
+            else
+            {
+                host.log(QStringLiteral("UR3e semi-fixed [%1/%2] MoveIt → ring “%3”%4…")
+                             .arg(ringIndex + 1)
+                             .arg(ringCount)
+                             .arg(ring.displayName)
+                             .arg(hopNote));
+            }
         }
 
         QString moveErr;
@@ -1248,8 +1259,16 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
             && !elbowFlipVsHome;
         const std::vector<double> *unwindPtr =
             hasLastEntryBranch ? &lastEntryBranch : nullptr;
+        // FPP pins are hand-taught. MoveIt OMPL/Pilz reject home→DLP when wrist_3
+        // must travel ~180° (221° home vs 37° DLP) even though both poses are valid.
         const bool hopOk =
-            simple360
+            route.isFppPlan
+                ? hardwareMoveExact(input.serverUrl,
+                                    ring.entryJointsRad,
+                                    QStringLiteral("FPP ring entry"),
+                                    &moveErr,
+                                    &stopped)
+            : simple360
                 ? moveItToJoints(input.serverUrl, ring.entryJointsRad, tcpPtr, &moveErr,
                                  &stopped, false)
                 : moveItToRingEntryViaHome(input.serverUrl,

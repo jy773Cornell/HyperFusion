@@ -1,67 +1,58 @@
-# HyperFusion FPP decoder (offline)
+# HyperFusion FPP decoder + MVS depth fusion (offline)
 
-Decode one **26-frame HDMI PSP burst** (u then v, 1 / 8 / 80 period sines, 4 shifts) to projector **(u, v)** maps. Legacy 14-frame (u only) folders still decode. The projected patch is **smaller than the BFS FOV** — pixels outside the lit region are masked (NaN).
+Decode **26-frame HDMI PSP bursts** to metric camera-Z, then fuse to a cleaned dense cloud.
 
-- **Metric geometry (tilted checkerboard):** `fpp_cal/calibrate_fpp_geometry.py`
-- **White-frame QA:** `fpp_cal/check_fpp_board.py`
-- **Sample decode:** this sidecar (`fpp_cli.py`) — default uses stereo YAML for **camera Z in mm**
-- **Geometry captures:** `fpp_cal/checkerboard/` (`00000`–`00015`)
+## Pipeline
 
-## Burst (same order as the app)
+```
+{datafolder}/multiview/          raw #####.tif + .json  (unchanged)
+  processed/
+    metadata.json                stage timings + paths
+    decode/<stem>/fpp_*.npy      per-pin decode
+    fusion/
+      dense_point_cloud.ply      ← only geometry output
+      summary.json
+```
 
-| # | `fpp_pattern` | Role |
-|---|----------------|------|
-| 0 | Black | Ambient |
-| 1 | `PSP white` | White / albedo |
-| 2–5 | `PSP sine 1` 0/90/180/270 | 1-period sine (unique column) |
-| 6–9 | `PSP sine 8` 0/90/180/270 | 8-period sine (mid unwrap) |
-| 10–13 | `PSP sine 80` 0/90/180/270 | 80-period sine **u** (fine column) |
-| 14–17 | `PSP sine v 1` 0/90/180/270 | 1-period sine **v** (unique row) |
-| 18–21 | `PSP sine v 8` 0/90/180/270 | 8-period sine **v** |
-| 22–25 | `PSP sine v 80` 0/90/180/270 | 80-period sine **v** (fine row) |
-
-HDMI only. Projected PNGs live in `app/calibration/multiview/fpp_cal/patterns/psp/` (1280×720). JSON names must stay `PSP*` so decode uses the sine TPU path.
-
-JSON from Execute (`fpp_pattern`, `fpp_step_index`, camera K / extrinsics) is used when present. Filename order is the fallback.
-
-USB TPG / splash-hybrid folders are not decoded. Recapture with FPP HDMI.
+Stages: decode → tray crop → filter → confidence → pose refine → consistency → densify → ROI/SOR/ROR.
 
 ## Setup
 
 ```powershell
 cd app\sidecars\fpp
 .\setup_venv.ps1
-.\.venv\Scripts\Activate.ps1
+# classical fusion deps (open3d) also:
+cd depth_fusion
+.\setup_venv.ps1
 ```
 
-Or use the multiview calib venv (`app/calibration/multiview/.venv`) after `pip install -r scripts/requirements.txt`.
-
-## Calibrate (tilted checkerboard → millimetres)
-
-Do **not** use an empty tray. Board pitch is **18 mm** (`bfs_cal/board.yaml`). Captures live in `fpp_cal/checkerboard/` as `00000`–`00015` (13 fit + 3 hold-out).
-
-```powershell
-cd app\calibration\multiview
-.\.venv\Scripts\python fpp_cal\check_fpp_board.py --input fpp_cal\checkerboard
-.\.venv\Scripts\python fpp_cal\calibrate_fpp_geometry.py --holdout 3
-```
-
-Writes `fpp_cal/results/camera_projector_stereo.yaml`. That stereo is reused at every later robot pose.
-
-## Decode a sample burst (metric depth)
+## Run (recommended)
 
 ```powershell
 cd app\sidecars\fpp
-..\..\calibration\multiview\.venv\Scripts\python fpp_cli.py `
-  --input D:\path\to\multiview_object_burst `
-  --out D:\path\to\out
+.\.venv\Scripts\python.exe fpp_mvs_cli.py `
+  --input D:\Data_JY\...\Nagara_DM_Cluster_1_T
 ```
 
-Requires `fpp_cal/results/camera_projector_stereo.yaml` (or `--stereo path`). Outputs:
+Accepts the cluster root or its `multiview/` folder. Skips automatically if pose JSON has no `fpp_pattern`.
 
-- `fpp_depth.npy` / `fpp_depth.png` — camera Z in **millimetres**
-- projector maps + mask
+App auto-runs this after an FPP MVS capture when `fpp_mvs_auto_process = true` in `hyperfusion.cfg`.
 
-Override stereo path: `--stereo path\to.yaml` · projector-u only: `--no-stereo`.
+## Other CLIs
 
-Not wired into the GUI yet — Capture still only writes the burst; run this CLI offline.
+| Script | Role |
+|--------|------|
+| `fpp_mvs_cli.py` | **Full** decode + dense cloud → `processed/` |
+| `fpp_cli.py` | Decode only (`--flat` for `processed/decode` layout) |
+| `depth_fusion/fpp_mesh_refine/run_fpp_mesh_refine.py` | Fusion only (given an existing decode tree) |
+| `depth_fusion/fuse_tsdf.py` | Simple TSDF CLI |
+
+## Calibrate (tilted checkerboard → millimetres)
+
+```powershell
+cd app\calibration\multiview
+.\.venv\Scripts\python dlp_cal\check_fpp_board.py --input dlp_cal\checkerboard
+.\.venv\Scripts\python dlp_cal\calibrate_fpp_geometry.py --holdout 3
+```
+
+Writes `dlp_cal/results/camera_projector_stereo.yaml`.

@@ -232,31 +232,21 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
     autoForm->addRow(QStringLiteral("Axes"), wristAxesRow_);
     wristAxesFormLabel_ = qobject_cast<QLabel *>(autoForm->labelForField(wristAxesRow_));
 
-    stagePosition1Spin_ = new QDoubleSpinBox(autoSection_);
-    stagePosition1Spin_->setRange(0.0, 5000.0);
-    stagePosition1Spin_->setDecimals(0);
-    stagePosition1Spin_->setSingleStep(10.0);
-    stagePosition1Spin_->setSuffix(QStringLiteral(" mm"));
-    stagePosition1Spin_->setValue(1600.0);
-    stagePosition1Spin_->setToolTip(
-        QStringLiteral("Stage position 1: home / apex burst (sample-static reference uses pos 2)."));
-
-    stagePosition2Spin_ = new QDoubleSpinBox(autoSection_);
-    stagePosition2Spin_->setRange(0.0, 5000.0);
-    stagePosition2Spin_->setDecimals(0);
-    stagePosition2Spin_->setSingleStep(10.0);
-    stagePosition2Spin_->setSuffix(QStringLiteral(" mm"));
-    stagePosition2Spin_->setValue(1700.0);
-    stagePosition2Spin_->setToolTip(
-        QStringLiteral("Stage position 2: rings / DLP spin plane. Equal to pos 1 = single-stage."));
+    stagePositionSpin_ = new QDoubleSpinBox(autoSection_);
+    stagePositionSpin_->setRange(0.0, 5000.0);
+    stagePositionSpin_->setDecimals(0);
+    stagePositionSpin_->setSingleStep(10.0);
+    stagePositionSpin_->setSuffix(QStringLiteral(" mm"));
+    stagePositionSpin_->setValue(1600.0);
+    stagePositionSpin_->setToolTip(
+        QStringLiteral("Sample-stage stop for the whole Multiview / FPP scan."));
 
     stageRow_ = new QWidget(autoSection_);
     auto *stageLayout = new QHBoxLayout(stageRow_);
     stageLayout->setContentsMargins(0, 0, 0, 0);
     stageLayout->setSpacing(6);
-    stageLayout->addWidget(stagePosition1Spin_, 1);
-    stageLayout->addWidget(stagePosition2Spin_, 1);
-    autoForm->addRow(QStringLiteral("Stage 1 / 2"), stageRow_);
+    stageLayout->addWidget(stagePositionSpin_, 1);
+    autoForm->addRow(QStringLiteral("Stage"), stageRow_);
     stageFormLabel_ = qobject_cast<QLabel *>(autoForm->labelForField(stageRow_));
 
     imageEstimateLabel_ = new QLabel(autoSection_);
@@ -372,9 +362,7 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
                 saveToSettings();
                 emit semiFixedRouteChanged();
             });
-    connect(stagePosition1Spin_, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
-            [this](double) { saveToSettings(); });
-    connect(stagePosition2Spin_, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+    connect(stagePositionSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
             [this](double) { saveToSettings(); });
     connect(semiFixedAddBtn_, &QPushButton::clicked, this,
             &Ur3eHemisphereScanSettingsWidget::onAddSemiFixedRingClicked);
@@ -435,14 +423,9 @@ hf::ur3e::Ur3eSemiFixedRoute Ur3eHemisphereScanSettingsWidget::semiFixedRoute() 
     return route;
 }
 
-double Ur3eHemisphereScanSettingsWidget::stagePosition1Mm() const
+double Ur3eHemisphereScanSettingsWidget::stagePositionMm() const
 {
-    return stagePosition1Spin_ != nullptr ? stagePosition1Spin_->value() : 1600.0;
-}
-
-double Ur3eHemisphereScanSettingsWidget::stagePosition2Mm() const
-{
-    return stagePosition2Spin_ != nullptr ? stagePosition2Spin_->value() : 1700.0;
+    return stagePositionSpin_ != nullptr ? stagePositionSpin_->value() : 1600.0;
 }
 
 void Ur3eHemisphereScanSettingsWidget::setSemiFixedRoute(const hf::ur3e::Ur3eSemiFixedRoute &route)
@@ -894,15 +877,10 @@ void Ur3eHemisphereScanSettingsWidget::loadFromSettings()
                                                                : saved.autoPanel);
     applyModePanelToUi(panel, ringMode);
 
-    if (stagePosition1Spin_ != nullptr)
+    if (stagePositionSpin_ != nullptr)
     {
-        const QSignalBlocker b(stagePosition1Spin_);
-        stagePosition1Spin_->setValue(saved.stagePosition1Mm);
-    }
-    if (stagePosition2Spin_ != nullptr)
-    {
-        const QSignalBlocker b(stagePosition2Spin_);
-        stagePosition2Spin_->setValue(saved.stagePosition2Mm);
+        const QSignalBlocker b(stagePositionSpin_);
+        stagePositionSpin_->setValue(saved.stagePositionMm);
     }
 }
 
@@ -912,8 +890,7 @@ void Ur3eHemisphereScanSettingsWidget::saveToSettings() const
     saved.scanExecuteMode = static_cast<int>(scanExecuteMode());
     const hf::ur3e::Ur3eScanExecuteMode mode = scanExecuteMode();
     const PersistedUr3eScanModePanelSettings panel = captureModePanelFromUi();
-    saved.stagePosition1Mm = stagePosition1Mm();
-    saved.stagePosition2Mm = stagePosition2Mm();
+    saved.stagePositionMm = stagePositionMm();
     if (mode == hf::ur3e::Ur3eScanExecuteMode::Fpp)
     {
         saved.fppPanel = panel;
@@ -1334,10 +1311,8 @@ void Ur3eHemisphereScanSettingsWidget::setParamsEnabled(const bool enabled)
         semiFixedIntervalSpin_->setEnabled(enabled);
     if (semiFixedDirectionCombo_ != nullptr)
         semiFixedDirectionCombo_->setEnabled(enabled);
-    if (stagePosition1Spin_ != nullptr)
-        stagePosition1Spin_->setEnabled(enabled);
-    if (stagePosition2Spin_ != nullptr)
-        stagePosition2Spin_->setEnabled(enabled);
+    if (stagePositionSpin_ != nullptr)
+        stagePositionSpin_->setEnabled(enabled);
     if (semiFixedAddBtn_ != nullptr)
         semiFixedAddBtn_->setEnabled(enabled);
     if (semiFixedRemoveBtn_ != nullptr)

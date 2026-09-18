@@ -79,9 +79,8 @@ struct PersistedUr3eHemisphereScanSettings
     PersistedUr3eScanModePanelSettings autoPanel{};
     PersistedUr3eScanModePanelSettings semiPanel{};
     PersistedUr3eScanModePanelSettings fppPanel{};
-    /// Multiview stage stops (GUI). Pos1 = home/apex burst; pos2 = rings/DLP spin.
-    double stagePosition1Mm = 1600.0;
-    double stagePosition2Mm = 1700.0;
+    /// Multiview / FPP sample-stage stop (GUI, mm).
+    double stagePositionMm = 1600.0;
     /// Last selected Auto named-route JSON path (combo selection).
     QString lastAutoRoutePath;
     /// Last selected Semi plan JSON path (mvs_scan_plans/semi).
@@ -148,6 +147,8 @@ public:
 
     static PersistedCapturePosition loadCapturePosition();
     static void saveCapturePosition(const PersistedCapturePosition &position);
+    /// Capture save folder if it exists; otherwise Documents. Never the exe/cwd.
+    static QString suggestedCaptureSaveStartDir();
 
     static PersistedStageConnection loadStageConnection();
     static void saveStageConnection(const PersistedStageConnection &connection);

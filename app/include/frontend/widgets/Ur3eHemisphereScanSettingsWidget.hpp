@@ -34,9 +34,8 @@ public:
     [[nodiscard]] hf::ur3e::Ur3eHemisphereScanParams semiPlanParams() const;
     [[nodiscard]] hf::ur3e::Ur3eWristSweepParams wristSweepParams() const;
     [[nodiscard]] hf::ur3e::Ur3eSemiFixedRoute semiFixedRoute() const;
-    /// Multiview stage: pos1 = home/apex, pos2 = rings/DLP spin (mm).
-    [[nodiscard]] double stagePosition1Mm() const;
-    [[nodiscard]] double stagePosition2Mm() const;
+    /// Multiview / FPP sample-stage stop (mm).
+    [[nodiscard]] double stagePositionMm() const;
     void setSemiFixedRoute(const hf::ur3e::Ur3eSemiFixedRoute &route);
     [[nodiscard]] bool semiFixedRouteReady() const;
     [[nodiscard]] bool rememberLastPlan() const;
@@ -145,8 +144,7 @@ private:
     QCheckBox *wrist3Check_ = nullptr;
     QWidget *wristAxesRow_ = nullptr;
     QWidget *stageRow_ = nullptr;
-    QDoubleSpinBox *stagePosition1Spin_ = nullptr;
-    QDoubleSpinBox *stagePosition2Spin_ = nullptr;
+    QDoubleSpinBox *stagePositionSpin_ = nullptr;
     QLabel *imageEstimateLabel_ = nullptr;
 
     QComboBox *semiFixedPlanRouteCombo_ = nullptr;

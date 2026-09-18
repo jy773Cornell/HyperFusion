@@ -17,6 +17,8 @@
 #include "backend/camera/processing/Gsam2ServerManager.hpp"
 #include "backend/camera/processing/GsamPlan.hpp"
 #include "backend/camera/processing/HfFusionWorker.hpp"
+#include "backend/camera/processing/FppMvsWorker.hpp"
+#include "backend/camera/processing/FppMvsRunner.hpp"
 #include "frontend/controllers/BfsPanelController.hpp"
 #include "frontend/controllers/CameraPanelController.hpp"
 #include "frontend/controllers/LightPanelController.hpp"
@@ -85,23 +87,9 @@ QString formatSpatialResolutionMmPerPixel(const double mmPerPixel) {
   return QStringLiteral("%1 mm/pixel").arg(mmPerPixel, 0, 'f', 4);
 }
 
-void multiviewGuiStageMm(MainWindow * /*host*/, double &pos1Mm, double &pos2Mm)
+[[nodiscard]] double multiviewGuiStageMm()
 {
-  // Multiview Stage 1/2 persist via QSettings whenever the GUI spins change.
-  const PersistedUr3eHemisphereScanSettings saved =
-      AppSettingsStore::loadUr3eHemisphereScan();
-  pos1Mm = saved.stagePosition1Mm;
-  pos2Mm = saved.stagePosition2Mm;
-}
-
-/// Same two-stage rule as Multiview finish (GUI Stage 1/2). Do not use cfg
-/// sampleMultiviewTwoStage() here — apex/MVS mm are GUI-owned after Stage spins.
-[[nodiscard]] bool multiviewGuiTwoStage(MainWindow *host)
-{
-  double stage1 = 1600.0;
-  double stage2 = 1700.0;
-  multiviewGuiStageMm(host, stage1, stage2);
-  return std::abs(stage2 - stage1) > 0.5;
+    return AppSettingsStore::loadUr3eHemisphereScan().stagePositionMm;
 }
 } // namespace
 
@@ -137,6 +125,13 @@ void CapturePanelController::initializeWorkers() {
   });
   hfFusionWorker_->start();
 
+  fppMvsWorker_ = std::make_unique<FppMvsWorker>();
+  fppMvsWorker_->setStatusListener([this]() {
+    QMetaObject::invokeMethod(
+        this, [this]() { updateRecorderControls(); }, Qt::QueuedConnection);
+  });
+  fppMvsWorker_->start();
+
   gsam2ServerManager_ =
       std::make_unique<hf::processing::Gsam2ServerManager>(host_);
   connect(gsam2ServerManager_.get(),
@@ -165,6 +160,10 @@ void CapturePanelController::shutdownWorkers() {
     captureWriterWorker_->stop();
   if (capturePostProcessorWorker_ != nullptr)
     capturePostProcessorWorker_->stop();
+  if (hfFusionWorker_ != nullptr)
+    hfFusionWorker_->stop();
+  if (fppMvsWorker_ != nullptr)
+    fppMvsWorker_->stop();
   if (gsam2ServerManager_ != nullptr)
     gsam2ServerManager_->stopServer();
 }
@@ -996,6 +995,7 @@ void hf::capture::CapturePanelController::updateRecorderControls() {
       capturePostProcessorWorker_->queueStatus().outstandingTotal() > 0;
   const bool fusionWorkerActive =
       hfFusionWorker_ != nullptr && hfFusionWorker_->isBusy();
+  // FPP MVS decode/fusion is fire-and-forget: do not block Record / next scan.
   const bool backgroundJobActive = postProcessActive || fusionWorkerActive;
 
   const bool captureHardwareReady = stageConnected && anyCameraConnected;
@@ -1344,6 +1344,9 @@ void hf::capture::CapturePanelController::updateRecorderStatus() {
       capturePostProcessorWorker_->queueStatus().outstandingTotal() > 0;
   const bool fusionWorkerActive =
       hfFusionWorker_ != nullptr && hfFusionWorker_->isBusy();
+  const bool fppMvsWorkerActive =
+      fppMvsWorker_ != nullptr && fppMvsWorker_->isBusy();
+  // HSI post-process / spectral fusion block Record; FPP MVS does not.
   const bool backgroundJobActive = postProcessActive || fusionWorkerActive;
 
   if (captureRecorderMode_ == CaptureRecorderMode::Idle) {
@@ -1358,7 +1361,10 @@ void hf::capture::CapturePanelController::updateRecorderStatus() {
     }
 
     setIndicator(QStringLiteral("#2ecc71"));
-    host_->captureRecorderStatusLabel_->setText(tr("Ready"));
+    host_->captureRecorderStatusLabel_->setText(
+        fppMvsWorkerActive
+            ? tr("Ready (FPP MVS processing in background\u2026)")
+            : tr("Ready"));
     clearRecorderCameraStatusLabels();
     return;
   }
@@ -1509,9 +1515,7 @@ void hf::capture::CapturePanelController::updateRecorderStatus() {
     }
     break;
   case CaptureScanPhase::MoveToMultiviewPosition:
-    phaseDetail = captureMultiviewNeedRingsLeg_
-                      ? tr("moving to MVS ring stage pose\u2026")
-                      : tr("moving to Multiview apex stage pose\u2026");
+    phaseDetail = tr("moving to Multiview stage pose\u2026");
     break;
   }
 
@@ -1897,13 +1901,9 @@ QString hf::capture::CapturePanelController::buildScanningProcedureSummary(
     QStringList multiviewLines;
     multiviewLines.push_back(
         QStringLiteral("Multiview RGB: UR3e / BFS hemisphere scan"));
-    double stage1 = 1600.0;
-    double stage2 = 1700.0;
-    multiviewGuiStageMm(host_, stage1, stage2);
+    const double stageMm = multiviewGuiStageMm();
     multiviewLines.push_back(
-        QStringLiteral("Stage Multiview pos1: %1 mm, pos2: %2 mm")
-            .arg(stage1, 0, 'f', 1)
-            .arg(stage2, 0, 'f', 1));
+        QStringLiteral("Stage Multiview: %1 mm").arg(stageMm, 0, 'f', 1));
 
     if (host_->ur3eHemisphereScanSettings_ != nullptr) {
       const auto params = host_->ur3eHemisphereScanSettings_->params();
@@ -2074,7 +2074,6 @@ void hf::capture::CapturePanelController::finishRecordAfterSkippingMultiview() {
       "Capture record: Multiview skipped by operator — keeping "
       "hyperspectral data only."));
   captureMultiviewAwaitingOperatorConfirm_ = false;
-  captureMultiviewNeedRingsLeg_ = false;
   captureMultiviewFramesSoFar_ = 0;
   captureMultiviewPinsSoFar_ = 0;
   captureMultiviewElapsedMsSoFar_ = 0;
@@ -4374,14 +4373,11 @@ void hf::capture::CapturePanelController::startRecord() {
 
   if (wantMultiview)
   {
-    double stage1 = 1600.0;
-    double stage2 = 1700.0;
-    multiviewGuiStageMm(host_, stage1, stage2);
+    const double stageMm = multiviewGuiStageMm();
     host_->appendLog(QStringLiteral(
-        "Capture record: after HSI, stage → pos1 (%1 mm) then pos2 (%2 mm), then "
+        "Capture record: after HSI, stage → %1 mm, then "
         "Continue/Skip Multiview. Preprocessing can start as soon as HSI is saved.")
-                         .arg(stage1, 0, 'f', 0)
-                         .arg(stage2, 0, 'f', 0));
+                         .arg(stageMm, 0, 'f', 0));
   }
 
   host_->appendLog(QStringLiteral("Capture record: session %1 \u2014 "
@@ -4649,18 +4645,13 @@ void hf::capture::CapturePanelController::beginMultiviewCapturePhase() {
   if (captureMultiviewSessionDirectory_.isEmpty() && captureWriterWorker_ != nullptr)
     captureMultiviewSessionDirectory_ = captureWriterWorker_->sessionDirectory();
 
-  captureMultiviewNeedRingsLeg_ = false;
   captureMultiviewFramesSoFar_ = 0;
   captureMultiviewPinsSoFar_ = 0;
   captureMultiviewElapsedMsSoFar_ = 0;
-  double stage1 = 1600.0;
-  double stage2 = 1700.0;
-  multiviewGuiStageMm(host_, stage1, stage2);
-  (void)stage2;
-  const double targetMm = stage1;
+  const double targetMm = multiviewGuiStageMm();
   captureScanPhase_ = CaptureScanPhase::MoveToMultiviewPosition;
   host_->appendLog(
-      QStringLiteral("%1: moving stage to Multiview stage pos1 %2 mm…")
+      QStringLiteral("%1: moving stage to Multiview %2 mm…")
           .arg(captureSequenceLogPrefix())
           .arg(targetMm, 0, 'f', 2));
   requestCaptureAbsoluteMove(targetMm, CaptureScanPhase::MoveToMultiviewPosition);
@@ -4683,31 +4674,15 @@ void hf::capture::CapturePanelController::startHemisphereMultiviewCaptureAfterSt
   QDir().mkpath(outDir);
 
   const auto &hw = hf::hardwareConfig();
-  const bool twoStage = multiviewGuiTwoStage(host_);
   hf::ur3e::HemisphereScanExecuteOptions opts;
   opts.captureOutputDir = outDir;
   opts.stabilizeMs = hw.ur3e.scanCaptureStabilizeMs;
   opts.suppressUiSummary = true;
-  if (twoStage && !captureMultiviewNeedRingsLeg_)
-  {
-    opts.pinSet = hf::ur3e::HemisphereScanPinSet::ApexOnly;
-    opts.applyApexStageOutputShift = true;
-  }
-  else if (twoStage && captureMultiviewNeedRingsLeg_)
-  {
-    opts.pinSet = hf::ur3e::HemisphereScanPinSet::RingsOnly;
-    opts.startFrameIndex = captureMultiviewFramesSoFar_;
-    opts.appendTransformsJson = true;
-  }
   captureMultiviewInProgress_ = true;
   lastCaptureMultiviewSummaryText_.clear();
-  const QString leg =
-      !twoStage ? QStringLiteral("full hemisphere")
-                : (captureMultiviewNeedRingsLeg_ ? QStringLiteral("MVS rings")
-                                                 : QStringLiteral("apex"));
   host_->appendLog(
-      QStringLiteral("%1: %2 Multiview capture → %3 (%4 ms settle per pose; wrist sweep if enabled)…")
-          .arg(captureSequenceLogPrefix(), leg, outDir)
+      QStringLiteral("%1: Multiview capture → %2 (%3 ms settle per pose; wrist sweep if enabled)…")
+          .arg(captureSequenceLogPrefix(), outDir)
           .arg(opts.stabilizeMs));
 
   connect(host_->ur3ePanel(),
@@ -4755,41 +4730,6 @@ void hf::capture::CapturePanelController::onMultiviewCaptureFinished(
   captureMultiviewPinsSoFar_ += successfulPins;
   captureMultiviewElapsedMsSoFar_ += elapsedMs;
 
-  bool haveSpinRings = true;
-  if (host_->ur3eHemisphereScanSettings_ != nullptr
-      && hf::ur3e::isSavedRingRouteMode(host_->ur3eHemisphereScanSettings_->scanExecuteMode()))
-  {
-    const auto semi = host_->ur3eHemisphereScanSettings_->semiFixedRoute();
-    haveSpinRings = false;
-    for (const auto &ring : semi.rings)
-    {
-      if (!ring.noPan && std::abs(ring.thetaDeg) >= 0.75)
-      {
-        haveSpinRings = true;
-        break;
-      }
-    }
-  }
-  double stage1 = 1600.0;
-  double stage2 = 1700.0;
-  multiviewGuiStageMm(host_, stage1, stage2);
-  const bool twoStage = multiviewGuiTwoStage(host_);
-  if (ok && twoStage && !captureMultiviewNeedRingsLeg_
-      && haveSpinRings) {
-    captureMultiviewInProgress_ = false;
-    captureMultiviewNeedRingsLeg_ = true;
-    captureScanPhase_ = CaptureScanPhase::MoveToMultiviewPosition;
-    host_->appendLog(
-        QStringLiteral("%1: apex stills done (%2 frame(s)) — moving stage to pos2 %3 mm…")
-            .arg(captureSequenceLogPrefix())
-            .arg(capturedFrameCount)
-            .arg(stage2, 0, 'f', 2));
-    requestCaptureAbsoluteMove(stage2,
-                               CaptureScanPhase::MoveToMultiviewPosition);
-    updateRecorderStatus();
-    return;
-  }
-
   if (ok) {
     const qint64 totalMs = captureMultiviewElapsedMsSoFar_ > 0
                                ? captureMultiviewElapsedMsSoFar_
@@ -4806,9 +4746,75 @@ void hf::capture::CapturePanelController::onMultiviewCaptureFinished(
                                                   : capturedFrameCount)
             .arg(totalSec / 60)
             .arg(totalSec % 60, 2, 10, QLatin1Char('0'));
+
+    maybeStartFppMvsProcessingAfterMultiview();
   }
 
   finishCaptureSequenceAfterOptionalMultiview();
+}
+
+void hf::capture::CapturePanelController::maybeStartFppMvsProcessingAfterMultiview()
+{
+  const auto &hw = hf::hardwareConfig();
+  if (!hw.ur3e.fppMvsAutoProcess)
+    return;
+
+  QString sessionDir = captureMultiviewSessionDirectory_;
+  if (sessionDir.isEmpty() && captureWriterWorker_ != nullptr)
+    sessionDir = captureWriterWorker_->sessionDirectory();
+  if (sessionDir.isEmpty())
+    return;
+
+  const QString multiviewDir = QDir(sessionDir).filePath(QStringLiteral("multiview"));
+  if (!hf::processing::multiviewHasFppBurst(multiviewDir))
+  {
+    host_->appendLog(QStringLiteral(
+        "FPP MVS: skipped (no fpp_pattern / fpp_step_index in multiview JSON)."));
+    return;
+  }
+
+  if (fppMvsWorker_ == nullptr)
+    return;
+
+  hf::processing::FppMvsRunRequest req;
+  req.inputPath = sessionDir;
+  req.mode = QStringLiteral("sweep");
+  req.timeoutMs = hw.ur3e.fppMvsTimeoutMs;
+
+  host_->appendLog(
+      QStringLiteral("FPP MVS: starting decode→fusion in background → %1/multiview/processed/ …")
+          .arg(sessionDir));
+
+  fppMvsWorker_->requestProcess(
+      req,
+      [this](hf::processing::FppMvsRunResult result) {
+        QMetaObject::invokeMethod(
+            this,
+            [this, result = std::move(result)]() {
+              if (result.skipped)
+              {
+                host_->appendLog(
+                    QStringLiteral("FPP MVS: skipped (%1)")
+                        .arg(result.reason.isEmpty() ? QStringLiteral("no_fpp_burst")
+                                                     : result.reason));
+                return;
+              }
+              if (!result.success)
+              {
+                host_->appendLog(
+                    QStringLiteral("FPP MVS failed: %1")
+                        .arg(result.errorMessage.isEmpty() ? QStringLiteral("unknown error")
+                                                           : result.errorMessage));
+                return;
+              }
+              host_->appendLog(
+                  QStringLiteral("FPP MVS done in %1 s → %2")
+                      .arg(result.elapsedS, 0, 'f', 1)
+                      .arg(result.primaryCloudPath.isEmpty() ? result.processedDir
+                                                             : result.primaryCloudPath));
+            },
+            Qt::QueuedConnection);
+      });
 }
 
 void hf::capture::CapturePanelController::syncBfsAndMultiviewRgbCaptureControls(

@@ -9,6 +9,7 @@
 #include "frontend/controllers/DlpPanelController.hpp"
 #include "frontend/controllers/Ur3ePanelController.hpp"
 #include "frontend/logging/AppLog.hpp"
+#include "frontend/settings/AppSettingsStore.hpp"
 #include "frontend/widgets/BfsCameraSettingsWidget.hpp"
 #include "frontend/widgets/MainWindow.hpp"
 #include "frontend/widgets/StreamPaneHelpers.hpp"
@@ -309,7 +310,7 @@ void BfsPanelController::onCaptureClicked()
         const QString parentDir = QFileDialog::getExistingDirectory(
             host_,
             QStringLiteral("Save FPP burst (26 HDMI frames)"),
-            QString(),
+            AppSettingsStore::suggestedCaptureSaveStartDir(),
             QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
         if (parentDir.isEmpty())
             return;
@@ -351,7 +352,7 @@ void BfsPanelController::onCaptureClicked()
     QString path = QFileDialog::getSaveFileName(
         host_,
         QStringLiteral("Save BFS capture"),
-        defaultName,
+        QDir(AppSettingsStore::suggestedCaptureSaveStartDir()).filePath(defaultName),
         QStringLiteral("TIFF Image (*.tif *.tiff)"));
     if (path.isEmpty())
         return;

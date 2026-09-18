@@ -60,7 +60,9 @@ struct Ur3eSemiFixedRoute
     bool haveStagePositions = false;
     double stageHomeMm = 0.0;
     double stageDlpMm = 0.0;
-    /// Always captured first (θ=0, home pose with Z = ring R). Filled if missing.
+    /// FPP apex working distance (metres above sample / z=0). 0 = default 0.45.
+    double apexHeightM = 0.0;
+    /// Always captured first. FPP: home XY at apexHeightM. Semi: home XY at ring R.
     Ur3eSemiFixedRing topPose{};
     bool hasTopPose = false;
     QVector<Ur3eSemiFixedRing> rings;
@@ -76,8 +78,8 @@ struct Ur3eSemiFixedRouteInfo
     double intervalDeg = 10.0;
 };
 
-/// Apex TCP: home XY + home orientation, Z = *sphereRadiusM*.
-[[nodiscard]] Ur3eSemiFixedRing apexTopPoseOnRingSphere(double sphereRadiusM);
+/// Apex TCP: home XY + home orientation, Z = *zM* (FPP working distance or Semi ring R).
+[[nodiscard]] Ur3eSemiFixedRing apexTopPoseOnRingSphere(double zM);
 
 /// Legacy wrapper — 200 mm leftover. Prefer apexTopPoseOnRingSphere(ring R).
 [[nodiscard]] Ur3eSemiFixedRing defaultSemiFixedTopPose();
@@ -85,7 +87,8 @@ struct Ur3eSemiFixedRouteInfo
 /// Sphere radius implied by planned ring TCPs (0 if unknown).
 [[nodiscard]] double inferSemiFixedSphereRadiusM(const Ur3eSemiFixedRoute &route);
 
-/// If the route has rings, install / replace a non-matching apex with home XY and Z = R.
+/// FPP: keep saved home joints; TCP = home XY at apexHeightM (default 450 mm).
+/// Semi: if rings exist, install / replace a non-matching apex with home XY and Z = R.
 void ensureSemiFixedTopPose(Ur3eSemiFixedRoute &route);
 
 /// Named Semi plans beside app.exe (`mvs_scan_plans/semi`, from app/preset).

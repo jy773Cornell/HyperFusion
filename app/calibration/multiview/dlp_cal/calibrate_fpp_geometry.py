@@ -1,5 +1,5 @@
 # Camera–projector stereo from checkerboard HDMI FPP bursts.
-# fpp_cal layer. No robot motion. Last --holdout bursts are not used in the fit.
+# dlp_cal layer. No robot motion. Last --holdout bursts are not used in the fit.
 """Fit metric projector geometry from tilted-board bursts (no tray-plane calib)."""
 from __future__ import annotations
 
@@ -17,11 +17,11 @@ DEFAULT_OUT = ROOT / "results"
 if str(SIDECAR_FPP) not in sys.path:
     sys.path.insert(0, str(SIDECAR_FPP))
 
-from hyperfusion_fpp.board_detect import load_board  # noqa: E402
-from hyperfusion_fpp.capture import list_burst_jobs, load_burst  # noqa: E402
-from hyperfusion_fpp.decode import decode_burst  # noqa: E402
-from hyperfusion_fpp.geometry import evaluate_holdout, fit_stereo, observe_burst  # noqa: E402
-from hyperfusion_fpp.undistort import undistort_burst  # noqa: E402
+from fpp_depth.board_detect import load_board  # noqa: E402
+from fpp_depth.capture import list_burst_jobs, load_burst  # noqa: E402
+from fpp_depth.decode import decode_burst  # noqa: E402
+from fpp_depth.geometry import evaluate_holdout, fit_stereo, observe_burst  # noqa: E402
+from fpp_depth.undistort import undistort_burst  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:

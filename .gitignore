@@ -1,4 +1,6 @@
-﻿# --- OS / shell ---
+﻿# HyperFusion — root .gitignore (Windows native app + Python sidecars)
+
+# --- OS / shell ---
 Thumbs.db
 ehthumbs.db
 Desktop.ini
@@ -36,7 +38,7 @@ $RECYCLE.BIN/
 *.jsc
 CMakeLists.txt.user*
 
-# CMake / build trees (generated)
+# --- Build trees / generated ---
 **/.qt/
 **/CMakeFiles/
 **/CMakeCache.txt
@@ -46,8 +48,6 @@ CMakeLists.txt.user*
 **/compile_commands.json
 **/Testing/
 **/app_autogen/
-
-# Common build output folder names
 **/build/
 **/build-*/
 **/cmake-build-*/
@@ -61,12 +61,12 @@ CMakeLists.txt.user*
 *.lib
 *.exe.manifest
 
-# Ninja / Makefile artifacts inside build trees
+# Ninja
 **/*.ninja
 **/.ninja_deps
 **/.ninja_log
 
-# --- Python (GSAM2 WSL sidecar, scripts) ---
+# --- Python ---
 **/__pycache__/
 **/*.py[cod]
 **/.pytest_cache/
@@ -75,10 +75,12 @@ CMakeLists.txt.user*
 **/.venv/
 **/venv/
 *.egg-info/
+**/.cache/
 **/.cache/huggingface/
 **/.cache/torch/
 
-# SAM2 / GSAM2 model weights (large; see app/sidecars/gsam2/envsetup.md)
+# --- Sidecar weights / vendor clones (do not commit) ---
+# SAM2 / GSAM2
 app/sidecars/gsam2/checkpoints/*.pt
 app/sidecars/gsam2/checkpoints/*.pth
 app/sidecars/gsam2/checkpoints/*.ckpt
@@ -86,34 +88,45 @@ app/sidecars/gsam2/.cache/
 app/sidecars/gsam2/venv/
 resources/sam2/
 
-# --- HyperFusion local runtime / capture data ---
-/processing/
-app/calibration/multiview/results/undistort_preview/
-app/calibration/multiview/bfs_cal/results/undistort_preview/
+# Preview dumps
+app/calibration/multiview/**/undistort_preview/
+app/calibration/multiview/**/results/undistort_preview/
+
 # BFS stills (multi-GB). Keep board.yaml / scripts / small YAML results.
 app/calibration/multiview/bfs_cal/checkerboard/
-# FPP geometry bursts (~15 GB TIFFs). Keep README + manifest + stereo YAML.
-app/calibration/multiview/fpp_cal/checkerboard/*/
-!app/calibration/multiview/fpp_cal/checkerboard/README.md
-!app/calibration/multiview/fpp_cal/checkerboard/manifest.json
-app/calibration/multiview/fpp_cal/results/depth_smoke_*/
-# Legacy FPP plane-calib path (removed); keep ignore if leftovers appear.
+
+# DLP / FPP geometry bursts (TIFFs + per-frame JSON). Keep scripts + stereo YAML.
+app/calibration/multiview/dlp_cal/checkerboard/
+app/calibration/multiview/dlp_cal/results/depth_smoke_*/
+
+# Legacy FPP plane-calib path (removed tree; ignore leftovers)
+app/calibration/multiview/fpp_cal/checkerboard/
 app/calibration/multiview/FPP/*
 !app/calibration/multiview/FPP/README.md
 !app/calibration/multiview/FPP/fpp_calib_index.json
 !app/calibration/multiview/FPP/fpp_calib_quality.json
 
-# Logs / temp
+# Bundle-adjustment corner cache (large). Keep scripts + small YAML/JSON results.
+app/calibration/multiview/ba/cache/
+
+# Common binary capture / reconstruction dumps under calibration
+app/calibration/multiview/**/*.tif
+app/calibration/multiview/**/*.tiff
+app/calibration/multiview/**/*.npz
+app/calibration/multiview/**/*.ply
+app/calibration/multiview/**/*.pt
+app/calibration/multiview/**/*.pth
+app/calibration/multiview/**/*.ckpt
+
+# --- Logs / temp ---
 *.log
 *.tmp
 *.temp
 *.swp
 *.swo
 
-# Documentation (local / generated; not versioned here)
+# --- Docs / installer (local, not versioned here) ---
 docs/
-
-# Installer staging and bundled vendor SDK binaries (do not commit)
 dist/
 tools/vendor_installers/**
 !tools/vendor_installers/install_order.txt

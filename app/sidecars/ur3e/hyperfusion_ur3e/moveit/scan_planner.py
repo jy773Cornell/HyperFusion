@@ -4429,6 +4429,19 @@ class MoveItScanPlanner:
                 f"goal=[{self._joints_deg_csv(plan_goal)}] (no MoveIt start feedback)\n"
             )
 
+        # FPP apex = scan home: start==goal. Pilz/OMPL reject empty PTP (code 99999).
+        if moveit_start is not None:
+            already_rad = self._joint_distance_rad(moveit_start, plan_goal)
+            if already_rad <= HOME_JOINT_TOLERANCE_RAD:
+                start_ok, _start_reason = self._state_is_valid(moveit_start)
+                if start_ok:
+                    sys.stderr.write(
+                        "UR3e MoveIt execute: already at goal "
+                        f"(Δ={math.degrees(already_rad):.1f}°·joint) — skipping empty plan.\n"
+                    )
+                    sys.stderr.flush()
+                    return True, MoveItErrorCodes.SUCCESS, "success"
+
         if recovery:
             allowed_planning_time = RECOVERY_ALLOWED_PLANNING_TIME_S
             num_planning_attempts = RECOVERY_NUM_PLANNING_ATTEMPTS

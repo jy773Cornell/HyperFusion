@@ -1,5 +1,5 @@
 # QA one checkerboard FPP Execute burst (white frame + lit patch).
-# fpp_cal layer. No robot motion. Run after each shot; keep only GOOD bursts.
+# dlp_cal layer. No robot motion. Run after each shot; keep only GOOD bursts.
 """Check 70 inner corners sit inside the DLP patch. Writes a white overlay JPEG."""
 from __future__ import annotations
 
@@ -19,11 +19,11 @@ DEFAULT_INPUT = ROOT / "checkerboard"
 if str(SIDECAR_FPP) not in sys.path:
     sys.path.insert(0, str(SIDECAR_FPP))
 
-from hyperfusion_fpp.board_detect import gray_u8, load_board  # noqa: E402
-from hyperfusion_fpp.capture import list_burst_jobs, load_burst  # noqa: E402
-from hyperfusion_fpp.decode import decode_burst  # noqa: E402
-from hyperfusion_fpp.geometry import observe_burst  # noqa: E402
-from hyperfusion_fpp.undistort import undistort_burst  # noqa: E402
+from fpp_depth.board_detect import gray_u8, load_board  # noqa: E402
+from fpp_depth.capture import list_burst_jobs, load_burst  # noqa: E402
+from fpp_depth.decode import decode_burst  # noqa: E402
+from fpp_depth.geometry import observe_burst  # noqa: E402
+from fpp_depth.undistort import undistort_burst  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:

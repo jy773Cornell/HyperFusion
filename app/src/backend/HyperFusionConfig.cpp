@@ -153,7 +153,7 @@ bool resolveSampleStagePositions(const SampleStagePositionDraft &draft,
         resolved.insert(QStringLiteral("sample_multiview_position_mm"),
                         resolved.value(QStringLiteral("sample_3d_scanning_position_mm")));
     }
-    // Optional legacy keys (Multiview Stage 1/2 are GUI-owned). Defaults 1600.
+    // Optional legacy keys (Multiview stage is GUI-owned). Defaults 1600.
     if (resolved.contains(QStringLiteral("sample_multiview_position_mm")))
     {
         ok = require(QStringLiteral("sample_multiview_position_mm"),
@@ -1432,6 +1432,20 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                     lower.isEmpty() || lower == QStringLiteral("true") || lower == QStringLiteral("1")
                     || lower == QStringLiteral("yes");
             }
+            else if (key == QStringLiteral("fpp_mvs_auto_process"))
+            {
+                const QString lower = value.trimmed().toLower();
+                config.ur3e.fppMvsAutoProcess =
+                    lower.isEmpty() || lower == QStringLiteral("true") || lower == QStringLiteral("1")
+                    || lower == QStringLiteral("yes");
+            }
+            else if (key == QStringLiteral("fpp_mvs_timeout_ms"))
+            {
+                if (!hasNumber || numericValue <= 0.0)
+                    warnings.push_back(QStringLiteral("Invalid fpp_mvs_timeout_ms: %1").arg(value));
+                else
+                    config.ur3e.fppMvsTimeoutMs = static_cast<int>(numericValue);
+            }
             else if (key == QStringLiteral("bfs_camera_fx"))
             {
                 if (!hasNumber || numericValue < 0.0)
@@ -1656,8 +1670,8 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "sample_scanning_starting_position_fx10e_mm = 840\n"
         << "sample_scanning_starting_position_swir3_mm = sample_scanning_starting_position_fx10e_mm - distance_dual_camera_mm\n"
         << "temp_stop_position_mm = 500\n"
-        << "# Multiview Stage 1/2 are GUI (QSettings). Optional legacy seed keys omitted.\n"
-        << "# +stage travel in base_link for home→spin output translation (x, -x, y, -y).\n"
+        << "# Multiview stage stop is GUI (QSettings). Optional legacy seed keys omitted.\n"
+        << "# +stage travel in base_link (legacy two-stop pose translation; unused for single-stage scans).\n"
         << "sample_multiview_stage_axis = x\n"
         << "\n"
         << "[scanning_settings]\n"
@@ -1791,6 +1805,10 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "# Semi Plan: φ candidates per θ ring (evenly over 360°). e.g. 260 ≈ every 1.4°.\n"
         << "semi_ring_search_candidates = 360\n"
         << "remember_last_scan_plan = true\n"
+        << "# After FPP MVS capture, run fpp_mvs_cli.py in background → {dataset}/multiview/processed/.\n"
+        << "# Does not block Record / next scan (unlike HSI post-process).\n"
+        << "fpp_mvs_auto_process = true\n"
+        << "fpp_mvs_timeout_ms = 3600000\n"
         << "# BFS OpenCV intrinsics for multiview JSON (pixels). Tsai checkerboard calibration.\n"
         << "bfs_camera_fx = 1787.820905328422\n"
         << "bfs_camera_fy = 1787.499380533722\n"

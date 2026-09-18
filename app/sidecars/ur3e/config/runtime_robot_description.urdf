@@ -312,14 +312,14 @@
   <ros2_control name="ur3e" rw_rate="0" type="system">
     <hardware>
       <plugin>ur_robot_driver/URPositionHardwareInterface</plugin>
-      <param name="robot_ip">192.168.1.10</param>
+      <param name="robot_ip">0.0.0.0</param>
       <param name="script_filename">/opt/ros/jazzy/share/ur_client_library/resources/external_control.urscript</param>
       <param name="output_recipe_filename">/opt/ros/jazzy/share/ur_robot_driver/resources/rtde_output_recipe.txt</param>
       <param name="input_recipe_filename">/opt/ros/jazzy/share/ur_robot_driver/resources/rtde_input_recipe.txt</param>
       <param name="headless_mode">False</param>
       <param name="reverse_port">50001</param>
       <param name="script_sender_port">50002</param>
-      <param name="reverse_ip">192.168.1.20</param>
+      <param name="reverse_ip">0.0.0.0</param>
       <param name="script_command_port">50004</param>
       <param name="trajectory_port">50003</param>
       <param name="tf_prefix"></param>
@@ -419,7 +419,7 @@
       <command_interface name="effort"/>
       <state_interface name="position">
         <!-- initial position for the mock system and simulation -->
-        <param name="initial_value">0.720821</param>
+        <param name="initial_value">3.862414</param>
       </state_interface>
       <state_interface name="velocity">
         <param name="initial_value">0.0</param>

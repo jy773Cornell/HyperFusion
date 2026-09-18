@@ -17,8 +17,7 @@ struct HardwareConfig
     double brightRefMm[2] = {760.0, 570.0};
     double sampleScanStartMm[2] = {840.0, 650.0};
     double tempStopPositionMm = 500.0;
-    /// Stage pose (mm) for the apex (θ=0) still. Then the stage moves to
-    /// sampleMultiviewPositionMm.
+    /// Stage pose (mm) for Multiview / FPP (GUI override). Legacy apex key falls back to this.
     double sampleMultiviewApexPositionMm = 1600.0;
     /// Stage pose (mm) for MVS ring pins. Apex camera JSON is expressed at this stop.
     double sampleMultiviewPositionMm = 1600.0;
@@ -257,6 +256,9 @@ struct HardwareConfig
         /// Brown-Conrady distortion: k1,k2,p1,p2,k3 (optional).
         std::vector<double> bfsCameraDistortion{-0.16223465, 0.10156067, 0.0025228506,
                                                 0.00068692294, -0.029189458};
+        /// After FPP MVS capture, run fpp_mvs_cli.py → multiview/processed/{decode,fusion}.
+        bool fppMvsAutoProcess = true;
+        int fppMvsTimeoutMs = 3600000;
     };
 
     Ur3eConfig ur3e;
@@ -270,7 +272,7 @@ struct HardwareConfig
         int ledBlueMa = 2400;
         /// Qt screen index for the EVM HDMI display. -1 = auto (1280×720, else non-primary).
         int hdmiScreenIndex = -1;
-        /// Optional override of calibration/multiview/fpp_cal/patterns/psp.
+        /// Optional override of calibration/multiview/dlp_cal/patterns/psp.
         QString hdmiPatternDir;
     };
 

@@ -9,6 +9,14 @@
 
 namespace hf::dlp
 {
+namespace
+{
+bool looksLikePspDir(const QString &candidate)
+{
+    return QFileInfo::exists(QDir(candidate).filePath(QStringLiteral("sine_1_0.png")));
+}
+} // namespace
+
 QString resolveHdmiPspPatternDir()
 {
     const QString configured = hf::hardwareConfig().dlp.hdmiPatternDir.trimmed();
@@ -19,15 +27,36 @@ QString resolveHdmiPspPatternDir()
             return info.absoluteFilePath();
     }
 
+    const QStringList relativeCandidates = {
+        QStringLiteral("calibration/multiview/dlp_cal/patterns/psp"),
+        QStringLiteral("calibration/multiview/fpp_cal/patterns/psp"), // legacy name
+    };
+
     QDir dir(QCoreApplication::applicationDirPath());
     for (int depth = 0; depth < 8; ++depth)
     {
-        const QString candidate = dir.filePath(QStringLiteral("calibration/multiview/fpp_cal/patterns/psp"));
-        if (QFileInfo::exists(QDir(candidate).filePath(QStringLiteral("sine_1_0.png"))))
-            return QFileInfo(candidate).absoluteFilePath();
+        for (const QString &rel : relativeCandidates)
+        {
+            const QString candidate = dir.filePath(rel);
+            if (looksLikePspDir(candidate))
+                return QFileInfo(candidate).absoluteFilePath();
+        }
         if (!dir.cdUp())
             break;
     }
+
+#ifdef HF_APP_SOURCE_DIR
+    {
+        const QDir src(QString::fromUtf8(HF_APP_SOURCE_DIR));
+        for (const QString &rel : relativeCandidates)
+        {
+            const QString candidate = src.filePath(rel);
+            if (looksLikePspDir(candidate))
+                return QFileInfo(candidate).absoluteFilePath();
+        }
+    }
+#endif
+
     return {};
 }
 

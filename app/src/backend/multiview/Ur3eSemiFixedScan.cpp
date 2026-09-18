@@ -217,6 +217,36 @@ double inferSemiFixedSphereRadiusM(const Ur3eSemiFixedRoute &route)
 
 void ensureSemiFixedTopPose(Ur3eSemiFixedRoute &route)
 {
+    const auto finishApex = [&route](const double zM) {
+        const QString keepId = route.topPose.id;
+        const QString keepName = route.topPose.displayName;
+        std::vector<double> keepJoints = route.topPose.entryJointsRad;
+        route.topPose = apexTopPoseOnRingSphere(zM);
+        if (!keepId.isEmpty())
+            route.topPose.id = keepId;
+        if (!keepName.isEmpty())
+            route.topPose.displayName = keepName;
+        if (keepJoints.size() == 6)
+            route.topPose.entryJointsRad = std::move(keepJoints);
+        route.topPose.noPan = true;
+        route.topPose.thetaDeg = 0.0;
+        route.topPose.reachabilityKnown = true;
+        route.topPose.reachable = true;
+        route.topPose.homePathOk = true;
+        route.hasTopPose = true;
+    };
+
+    if (route.isFppPlan)
+    {
+        const double zM = route.apexHeightM > 0.01 ? route.apexHeightM : 0.45;
+        finishApex(zM);
+        if (route.topPose.id.isEmpty())
+            route.topPose.id = QStringLiteral("home");
+        if (route.topPose.displayName.isEmpty())
+            route.topPose.displayName = QStringLiteral("Home (camera 450 mm)");
+        return;
+    }
+
     const double ringR = inferSemiFixedSphereRadiusM(route);
     if (route.hasTopPose && route.topPose.entryJointsRad.size() == 6
         && route.topPose.hasEntryTcp)
@@ -226,16 +256,8 @@ void ensureSemiFixedTopPose(Ur3eSemiFixedRoute &route)
     }
     if (ringR < 0.01)
         return;
-    std::vector<double> keepJoints = route.topPose.entryJointsRad;
-    route.topPose = apexTopPoseOnRingSphere(ringR);
-    if (keepJoints.size() == 6)
-        route.topPose.entryJointsRad = std::move(keepJoints);
     // Apex is home pose with Z=R; joints are filled at execute when missing.
-    // Keep preview green (not gray/blue) for deferred IK.
-    route.topPose.reachabilityKnown = true;
-    route.topPose.reachable = true;
-    route.topPose.homePathOk = true;
-    route.hasTopPose = true;
+    finishApex(ringR);
 }
 
 QString defaultUr3eSemiScanRoutesDir()
@@ -264,6 +286,12 @@ bool saveUr3eSemiFixedRoute(const QString &path,
     root.insert(QStringLiteral("pan_range_deg"), toSave.panRangeDeg);
     root.insert(QStringLiteral("pan_direction"), toSave.panDirection);
     root.insert(QStringLiteral("stabilize_ms"), toSave.stabilizeMs);
+    if (toSave.isFppPlan || toSave.apexHeightM > 0.01)
+    {
+        const double mm =
+            (toSave.apexHeightM > 0.01 ? toSave.apexHeightM : 0.45) * 1000.0;
+        root.insert(QStringLiteral("apex_height_mm"), mm);
+    }
 
     {
         QJsonObject top;
@@ -280,6 +308,8 @@ bool saveUr3eSemiFixedRoute(const QString &path,
         }
         top.insert(QStringLiteral("base_sweep_ok"), toSave.topPose.baseSweepOk);
         top.insert(QStringLiteral("backup_coverage_ok"), toSave.topPose.backupCoverageOk);
+        top.insert(QStringLiteral("theta_deg"), toSave.topPose.thetaDeg);
+        top.insert(QStringLiteral("no_pan"), true);
         root.insert(QStringLiteral("top_pose"), top);
     }
 
@@ -387,10 +417,19 @@ bool loadUr3eSemiFixedRoute(const QString &path,
         routeOut.panDirection = -1;
     routeOut.stabilizeMs = root.value(QStringLiteral("stabilize_ms")).toInt(500);
 
-    // Stage stops are GUI-owned (Multiview Stage 1 / 2). Ignore legacy JSON stage blocks.
+    // Stage stop is GUI-owned. Ignore legacy JSON stage blocks.
     routeOut.haveStagePositions = false;
     routeOut.stageHomeMm = 0.0;
     routeOut.stageDlpMm = 0.0;
+
+    double apexMm = root.value(QStringLiteral("apex_height_mm")).toDouble(0.0);
+    if (apexMm <= 0.0 && root.value(QStringLiteral("notes")).isObject())
+        apexMm = root.value(QStringLiteral("notes")).toObject()
+                     .value(QStringLiteral("height_mm"))
+                     .toDouble(0.0);
+    if (apexMm <= 0.0 && routeOut.isFppPlan)
+        apexMm = 450.0;
+    routeOut.apexHeightM = apexMm > 0.0 ? apexMm * 0.001 : 0.0;
 
     if (root.contains(QStringLiteral("top_pose")) && root.value(QStringLiteral("top_pose")).isObject())
     {
@@ -412,6 +451,8 @@ bool loadUr3eSemiFixedRoute(const QString &path,
             pose.reachabilityKnown = true;
             pose.reachable = top.value(QStringLiteral("reachable")).toBool(true);
             pose.homePathOk = top.value(QStringLiteral("home_path_ok")).toBool(true);
+            pose.noPan = true;
+            pose.thetaDeg = top.value(QStringLiteral("theta_deg")).toDouble(0.0);
             routeOut.topPose = pose;
             routeOut.hasTopPose = true;
         }
@@ -567,7 +608,8 @@ QVector<Ur3eSemiFixedPreviewRing> inferSemiFixedPreviewRings(const Ur3eSemiFixed
         }
         out.push_back(top);
     }
-    snapApexPreviewToRingSphere(out, 0.0);
+    if (!route.isFppPlan)
+        snapApexPreviewToRingSphere(out, 0.0);
     return out;
 }
 

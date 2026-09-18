@@ -25,6 +25,7 @@
 #include "frontend/widgets/Ur3eExternalControlWaitDialog.hpp"
 #include "frontend/widgets/Ur3eHemisphereScanSettingsWidget.hpp"
 #include "frontend/widgets/Ur3eJointBarWidget.hpp"
+#include "frontend/settings/AppSettingsStore.hpp"
 #include "frontend/widgets/Ur3eScanRoutePlanWidget.hpp"
 
 #include <QDir>
@@ -298,7 +299,7 @@ struct OutputPoseShift
     return ok;
 }
 
-/// After the apex still, park at the MVS ring plane (not the home sensor).
+/// Stay at the scan stage stop after execute (do not home the stage sensor).
 void parkStageAtMvsAfterExecuteIfUsed(MainWindow *host,
                                       const bool useStage,
                                       const std::function<bool()> &stillOk,
@@ -327,7 +328,7 @@ void parkStageAtMvsAfterExecuteIfUsed(MainWindow *host,
 
 [[nodiscard]] OutputPoseShift makeApexStageOutputShift()
 {
-    // Legacy helper — prefer makeStageOutputShiftMm with GUI Stage 1 / 2.
+    // Legacy helper (unused for single-stage scans).
     OutputPoseShift shift;
     const auto &hw = hf::hardwareConfig();
     if (!hw.sampleMultiviewTwoStage())
@@ -2347,7 +2348,7 @@ void Ur3ePanelController::onLoadPlannedRouteAsSemiFixedRequested(const QString &
             refreshSemiFixedPreview();
             host_->appendLog(
                 QStringLiteral("UR3e %1: loaded \"%2\" → home + %3 ring(s) "
-                               "(spin uses GUI Range/Interval/Direction; stage uses GUI Stage 1/2).")
+                               "(spin uses GUI Range/Interval/Direction; stage uses GUI Stage).")
                     .arg(fppMode ? QStringLiteral("FPP") : QStringLiteral("semi-fixed"))
                     .arg(hand.displayName)
                     .arg(hand.rings.size()));
@@ -2579,7 +2580,7 @@ void Ur3ePanelController::onExecuteHemisphereScanRequested()
     const QString parentDir = QFileDialog::getExistingDirectory(
         host_,
         QStringLiteral("Save Multiview images"),
-        QString(),
+        AppSettingsStore::suggestedCaptureSaveStartDir(),
         QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks);
     if (parentDir.isEmpty())
     {
@@ -2731,9 +2732,7 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
     const QString serverUrl = serverManager_->serverUrl();
     const bool driveStage = options.pinSet == HemisphereScanPinSet::All;
     const bool useStage = driveStage && stageConnectedForScan(host_);
-    const double stageHomeMm = host_->ur3eHemisphereScanSettings_->stagePosition1Mm();
-    const double stageSpinMm = host_->ur3eHemisphereScanSettings_->stagePosition2Mm();
-    const bool twoStage = std::abs(stageSpinMm - stageHomeMm) > 0.5;
+    const double stageMm = host_->ur3eHemisphereScanSettings_->stagePositionMm();
     QString captureNote = captureStills ? QStringLiteral(", BFS stills → ") + captureDir
                                         : QStringLiteral(", motion-only");
     if (captureStills && host_->dlpPanel() != nullptr && host_->dlpPanel()->isConnected())
@@ -2745,21 +2744,11 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
     }
     if (useStage)
     {
-        if (twoStage)
-        {
-            captureNote += QStringLiteral(", stage %1→%2 mm")
-                               .arg(stageHomeMm, 0, 'f', 0)
-                               .arg(stageSpinMm, 0, 'f', 0);
-        }
-        else
-        {
-            captureNote += QStringLiteral(", stage %1 mm")
-                               .arg(stageSpinMm, 0, 'f', 0);
-        }
+        captureNote += QStringLiteral(", stage %1 mm").arg(stageMm, 0, 'f', 0);
     }
     else if (driveStage)
     {
-        captureNote += QStringLiteral(", stage not connected (GUI Stage 1/2 ignored)");
+        captureNote += QStringLiteral(", stage not connected (GUI Stage ignored)");
     }
     host_->appendLog(
         QStringLiteral("UR3e scan execute: %1 reachable point(s), top-ring-first clockwise sweep "
@@ -2790,10 +2779,6 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
 
         const int startFrameIndex = std::max(0, options.startFrameIndex);
         const bool appendTransformsJson = options.appendTransformsJson;
-        const bool applyApexShiftAlways = options.applyApexStageOutputShift;
-        OutputPoseShift outputShift;
-        if (applyApexShiftAlways || (useStage && twoStage))
-            outputShift = makeStageOutputShiftMm(stageHomeMm, stageSpinMm);
 
         scanExecuteThread_ = std::thread([this,
                                           serverUrl,
@@ -2806,12 +2791,8 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                                           wristSweep,
                                           startFrameIndex,
                                           appendTransformsJson,
-                                          outputShift,
-                                          applyApexShiftAlways,
                                           useStage,
-                                          stageHomeMm,
-                                          stageSpinMm,
-                                          twoStage]() {
+                                          stageMm]() {
             int executed = 0;
             int skipped = 0;
             int captured = startFrameIndex;
@@ -2838,14 +2819,15 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
             };
 
             const auto finishWithCapture = [this, &transformsDoc, captureStills, captureDir,
-                                            appendTransformsJson, useStage, &sessionActive](
+                                            appendTransformsJson, useStage, &sessionActive,
+                                            stageMm](
                                                bool finishOk,
                                                const QString &finishError,
                                                int executedCount,
                                                bool stopped,
                                                int capturedCount,
                                                qint64 elapsedMs) {
-                parkStageAtMvsAfterExecuteIfUsed(host_, useStage, sessionActive);
+                parkStageAtMvsAfterExecuteIfUsed(host_, useStage, sessionActive, stageMm);
                 if (captureStills && !transformsDoc.frames.empty())
                 {
                     QString writeError;
@@ -2891,13 +2873,6 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                                                 const int pointIndex) -> bool {
                 if (!captureStills)
                     return true;
-                const bool pinIsApex =
-                    pointIndex >= 0 && pointIndex < static_cast<int>(planCopy.points.size())
-                    && std::abs(planCopy.points[static_cast<std::size_t>(pointIndex)].gridPoint.thetaDeg)
-                           <= 1.0e-9;
-                const OutputPoseShift shiftForPin =
-                    (outputShift.apply && (applyApexShiftAlways || pinIsApex)) ? outputShift
-                                                                               : OutputPoseShift{};
                 return capturePinStillsMaybeFpp(
                     this,
                     host_,
@@ -2910,7 +2885,7 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                     &errorMessage,
                     QStringLiteral("pin %1").arg(pointIndex),
                     captureContinue,
-                    shiftForPin);
+                    OutputPoseShift{});
             };
 
             QMetaObject::invokeMethod(
@@ -2940,36 +2915,18 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
 
             bool returnHomeAfterScan = true;
             const auto scanStartedAt = std::chrono::steady_clock::now();
-            const bool twoStageMove = useStage && twoStage;
-            bool needMvsStageMove = twoStageMove;
             const auto stageSessionOk = [this, &sessionActive]() {
                 return sessionActive() && !stopRequested_.load(std::memory_order_acquire);
             };
             if (useStage)
             {
-                bool orderHasApex = false;
-                for (const int index : order)
-                {
-                    if (index < 0 || index >= static_cast<int>(planCopy.points.size()))
-                        continue;
-                    if (std::abs(planCopy.points[static_cast<std::size_t>(index)].gridPoint.thetaDeg)
-                        <= 1.0e-9)
-                    {
-                        orderHasApex = true;
-                        break;
-                    }
-                }
-                const double firstStageMm = orderHasApex ? stageHomeMm : stageSpinMm;
-                const QString firstLabel =
-                    orderHasApex ? QStringLiteral("stage pos 1") : QStringLiteral("stage pos 2");
                 QString stageErr;
-                if (!waitMoveStageAbsolute(host_, firstStageMm, firstLabel, stageSessionOk, &stageErr))
+                if (!waitMoveStageAbsolute(host_, stageMm, QStringLiteral("stage"),
+                                           stageSessionOk, &stageErr))
                 {
                     finishWithCapture(false, stageErr, 0, false, captured, 0);
                     return;
                 }
-                if (!orderHasApex)
-                    needMvsStageMove = false;
             }
 
             // Clear wrist_3 wind at home when |live−home|≥180°. Used before and after pins
@@ -3030,22 +2987,6 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
                 const int pointIndex = order[static_cast<std::size_t>(step)];
                 const Ur3ePlannedScanPoint &point =
                     planCopy.points[static_cast<std::size_t>(pointIndex)];
-                const bool pinIsApex = std::abs(point.gridPoint.thetaDeg) <= 1.0e-9;
-                if (needMvsStageMove && !pinIsApex)
-                {
-                    QString stageErr;
-                    if (!waitMoveStageAbsolute(host_,
-                                               stageSpinMm,
-                                               QStringLiteral("stage pos 2"),
-                                               stageSessionOk,
-                                               &stageErr))
-                    {
-                        ok = false;
-                        errorMessage = stageErr;
-                        break;
-                    }
-                    needMvsStageMove = false;
-                }
                 const QString tcpSummary =
                     QStringLiteral("tcp=(%1, %2, %3) m theta=%4° phi=%5°")
                         .arg(point.tcp.xM, 0, 'f', 3)
@@ -3437,23 +3378,6 @@ bool Ur3ePanelController::startHemisphereScanExecute(const HemisphereScanExecute
             if (!sessionActive())
                 return;
 
-            // Apex-only / last pin was θ=0: go to the MVS plane, do not home the stage.
-            if (needMvsStageMove && useStage)
-            {
-                QString stageErr;
-                if (!waitMoveStageAbsolute(host_,
-                                           stageSpinMm,
-                                           QStringLiteral("stage pos 2"),
-                                           stageSessionOk,
-                                           &stageErr)
-                    && ok)
-                {
-                    ok = false;
-                    errorMessage = stageErr;
-                }
-                needMvsStageMove = false;
-            }
-
             // User Stop must always retreat to home after cancelling the current motion.
             const bool userStopped = stopRequested_.load(std::memory_order_acquire);
             if (userStopped)
@@ -3653,29 +3577,17 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
     const bool useStage = driveStage && stageConnectedForScan(host_);
     const bool fppMode =
         host_->ur3eHemisphereScanSettings_->scanExecuteMode() == Ur3eScanExecuteMode::Fpp;
-    const double stageHomeMm = host_->ur3eHemisphereScanSettings_->stagePosition1Mm();
-    const double stageSpinMm = host_->ur3eHemisphereScanSettings_->stagePosition2Mm();
-    const bool twoStageGui = std::abs(stageSpinMm - stageHomeMm) > 0.5;
+    const double stageMm = host_->ur3eHemisphereScanSettings_->stagePositionMm();
     if (useStage)
     {
-        if (twoStageGui)
-        {
-            host_->appendLog(QStringLiteral("UR3e %1: stage %2→%3 mm (GUI Stage 1 / 2)")
-                                 .arg(fppMode ? QStringLiteral("FPP") : QStringLiteral("semi-fixed"))
-                                 .arg(stageHomeMm, 0, 'f', 0)
-                                 .arg(stageSpinMm, 0, 'f', 0));
-        }
-        else
-        {
-            host_->appendLog(QStringLiteral("UR3e %1: stage %2 mm")
-                                 .arg(fppMode ? QStringLiteral("FPP") : QStringLiteral("semi-fixed"))
-                                 .arg(stageSpinMm, 0, 'f', 0));
-        }
+        host_->appendLog(QStringLiteral("UR3e %1: stage %2 mm")
+                             .arg(fppMode ? QStringLiteral("FPP") : QStringLiteral("semi-fixed"))
+                             .arg(stageMm, 0, 'f', 0));
     }
     else if (driveStage)
     {
         host_->appendLog(QStringLiteral(
-            "UR3e Multiview: stage not connected (GUI Stage 1 / 2 ignored)"));
+            "UR3e Multiview: stage not connected (GUI Stage ignored)"));
     }
     stopRequested_.store(false, std::memory_order_release);
     scanExecuting_ = true;
@@ -3735,33 +3647,11 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
         const bool appendTransformsJson = options.appendTransformsJson;
         const bool skipTop = options.pinSet == HemisphereScanPinSet::RingsOnly;
         const bool skipRings = options.pinSet == HemisphereScanPinSet::ApexOnly;
-        const bool applyApexShiftAlways = options.applyApexStageOutputShift;
-        // Express all burst poses as if the sample stayed at stage pos 2
-        // (stage static): translate home-stage camera TCP by (pos2 − pos1).
-        OutputPoseShift outputShift;
-        if (useStage && (applyApexShiftAlways || twoStageGui))
-            outputShift = makeStageOutputShiftMm(stageHomeMm, stageSpinMm);
-        else if (applyApexShiftAlways)
-            outputShift = makeStageOutputShiftMm(stageHomeMm, stageSpinMm);
-
-        if (outputShift.apply && captureStills)
-        {
-            host_->appendLog(
-                QStringLiteral(
-                    "UR3e FPP/MVS: home-burst poses += (%1, %2, %3) m "
-                    "(stage %4→%5 mm, sample-static / arm-relative frame)")
-                    .arg(outputShift.xM, 0, 'f', 4)
-                    .arg(outputShift.yM, 0, 'f', 4)
-                    .arg(outputShift.zM, 0, 'f', 4)
-                    .arg(outputShift.stageCaptureMm, 0, 'f', 0)
-                    .arg(outputShift.stageOutputMm, 0, 'f', 0));
-        }
 
         scanExecuteThread_ = std::thread([this, serverUrl, route, sessionId, captureDir,
                                           captureStills, stabilizeMs, wristSweep,
                                           startFrameIndex, appendTransformsJson, skipTop,
-                                          skipRings, outputShift, applyApexShiftAlways,
-                                          useStage, stageHomeMm, stageSpinMm]() {
+                                          skipRings, useStage, stageMm]() {
             int captured = startFrameIndex;
             TransformsJsonDocument transformsDoc;
 
@@ -3775,12 +3665,12 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
 
             const auto finishWithCapture = [this, &transformsDoc, captureStills, captureDir,
                                             &captured, appendTransformsJson, useStage,
-                                            &sessionActive, stageSpinMm](
+                                            &sessionActive, stageMm](
                                                bool finishOk, const QString &finishError,
                                                int executedCount, bool stopped,
                                                int /*capturedFromExec*/,
                                                qint64 elapsedMs) {
-                parkStageAtMvsAfterExecuteIfUsed(host_, useStage, sessionActive, stageSpinMm);
+                parkStageAtMvsAfterExecuteIfUsed(host_, useStage, sessionActive, stageMm);
                 if (captureStills && !transformsDoc.frames.empty())
                 {
                     QString writeError;
@@ -3813,10 +3703,6 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
                     ringIndex < 0
                         ? QStringLiteral("top")
                         : QStringLiteral("ring %1 sample %2").arg(ringIndex).arg(sampleIndex);
-                const bool pinIsApex = ringIndex < 0;
-                const OutputPoseShift shiftForPin =
-                    (outputShift.apply && (applyApexShiftAlways || pinIsApex)) ? outputShift
-                                                                               : OutputPoseShift{};
                 return capturePinStillsMaybeFpp(this,
                                                 host_,
                                                 serverUrl,
@@ -3828,7 +3714,7 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
                                                 nullptr,
                                                 skipContext,
                                                 captureContinue,
-                                                shiftForPin);
+                                                OutputPoseShift{});
             };
 
             SemiFixedScanExecuteInput input;
@@ -3840,8 +3726,7 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
             input.wristSweep = wristSweep;
             input.skipTop = skipTop;
             input.skipRings = skipRings;
-            input.stageHomeMm = stageHomeMm;
-            input.stageSpinMm = stageSpinMm;
+            input.stageMm = stageMm;
 
             SemiFixedScanExecuteHost hostHooks;
             hostHooks.sessionActive = sessionActive;

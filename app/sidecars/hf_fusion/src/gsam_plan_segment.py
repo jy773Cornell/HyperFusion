@@ -506,6 +506,29 @@ def _stream_process_order(mode: str, camera: str) -> tuple[int, str]:
     return (mode_rank, camera.lower())
 
 
+def _order_streams_for_reuse(plan: dict, streams: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    remaining = list(streams)
+    ordered: list[tuple[str, str]] = []
+    while remaining:
+        progressed = False
+        for item in list(remaining):
+            mode, camera = item
+            stream_plan = plan["streams"].get(f"{mode}/{camera}") or {}
+            source = resolve_reuse_masks_from(stream_plan, mode, camera)
+            if source is not None:
+                src_mode, src_camera = source.split("/", 1)
+                if (src_mode, src_camera) in remaining:
+                    continue
+            ordered.append(item)
+            remaining.remove(item)
+            progressed = True
+        if not progressed:
+            remaining.sort(key=lambda item: _stream_process_order(item[0], item[1]))
+            ordered.extend(remaining)
+            break
+    return ordered
+
+
 def streams_with_rgb(session: Path, plan: dict, stem: str) -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     for key in plan_stream_keys(plan):
@@ -516,5 +539,5 @@ def streams_with_rgb(session: Path, plan: dict, stem: str) -> list[tuple[str, st
         rgb = pre / f"{stem}_rgb.png"
         if rgb.is_file() or any(pre.glob("*_rgb.png")):
             found.append((mode, camera))
-    found.sort(key=lambda item: _stream_process_order(item[0], item[1]))
-    return found
+    return _order_streams_for_reuse(plan, found)
+

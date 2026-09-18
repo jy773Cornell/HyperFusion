@@ -43,12 +43,8 @@ struct HemisphereScanExecuteOptions
     /// Capture merges the scan stats into Recording complete.
     bool suppressUiSummary = false;
     HemisphereScanPinSet pinSet = HemisphereScanPinSet::All;
-    /// Continue TIFF/JSON numbering after a previous execute leg.
     int startFrameIndex = 0;
-    /// Load existing transforms.json and append this leg's frames.
     bool appendTransformsJson = false;
-    /// Translate apex-leg camera outputs to sample_multiview_position_mm (MVS / sample-static).
-    bool applyApexStageOutputShift = false;
 };
 
 class Ur3ePanelController : public QObject

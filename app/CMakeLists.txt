@@ -198,6 +198,8 @@ qt_add_executable(app WIN32
     src/backend/camera/processing/CapturePostProcessor.cpp
     src/backend/camera/processing/CapturePostProcessorWorker.cpp
     src/backend/camera/processing/HfFusionRunner.cpp
+    src/backend/camera/processing/FppMvsRunner.cpp
+    src/backend/camera/processing/FppMvsWorker.cpp
     src/backend/camera/processing/HfFusionWorker.cpp
     src/backend/camera/processing/Gsam2SegmentationClient.cpp
     src/backend/camera/processing/GsamPlan.cpp
@@ -283,6 +285,8 @@ qt_add_executable(app WIN32
     include/backend/multiview/Ur3eScanPlanCache.hpp
     include/backend/camera/processing/CapturePostProcessor.hpp
     include/backend/camera/processing/HfFusionRunner.hpp
+    include/backend/camera/processing/FppMvsRunner.hpp
+    include/backend/camera/processing/FppMvsWorker.hpp
     include/backend/camera/processing/HfFusionWorker.hpp
     include/backend/camera/processing/SwirBprCorrector.hpp
     include/backend/camera/processing/SwirBprCalpackMap.hpp

@@ -23,7 +23,9 @@ MOVEIT_JOINT_LIMITS_RAD: tuple[Optional[tuple[float, float]], ...] = (
     (-math.pi, math.pi),  # elbow ±180° (artificial cap in ur_description)
     (-TWO_PI, TWO_PI),  # wrist_1 ±360°
     (-TWO_PI, TWO_PI),  # wrist_2 ±360°
-    None,  # wrist_3: continuous (no position limits in URDF)
+    # URDF wrist_3 is continuous, but OMPL/Pilz sample ±360°. Keep plan goals
+    # in that band (home 221° → DLP 37°, not 37°+360=397° which MoveIt rejects).
+    (-TWO_PI, TWO_PI),
 )
 
 # Wider branch search for execute trajectories on hardware (multi-turn wrists / pan).

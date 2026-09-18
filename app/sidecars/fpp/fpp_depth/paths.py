@@ -1,16 +1,20 @@
-# Default FPP calib paths under app/calibration/multiview/fpp_cal (sidecar).
+# Default FPP calib paths under app/calibration/multiview (sidecar).
 # Offline only — GUI does not load these yet.
 """Resolved paths to stereo YAML and checkerboard bursts."""
 from __future__ import annotations
 
 from pathlib import Path
 
-# hyperfusion_fpp/ -> fpp/ -> sidecars/ -> app/
+# fpp_depth/ -> sidecars/fpp/ -> sidecars/ -> app/
 _APP = Path(__file__).resolve().parents[3]
-FPP_CAL = _APP / "calibration" / "multiview" / "fpp_cal"
+_CAL = _APP / "calibration" / "multiview"
+# Prefer dlp_cal (current); fall back to legacy fpp_cal name.
+_DLP_CAL = _CAL / "dlp_cal"
+_FPP_CAL = _CAL / "fpp_cal"
+FPP_CAL = _DLP_CAL if (_DLP_CAL / "results").is_dir() else _FPP_CAL
 DEFAULT_STEREO_YAML = FPP_CAL / "results" / "camera_projector_stereo.yaml"
 DEFAULT_CHECKERBOARD = FPP_CAL / "checkerboard"
-DEFAULT_BOARD_YAML = _APP / "calibration" / "multiview" / "bfs_cal" / "board.yaml"
+DEFAULT_BOARD_YAML = _CAL / "bfs_cal" / "board.yaml"
 
 
 def resolve_stereo_yaml(explicit: Path | None = None) -> Path | None:
@@ -20,6 +24,10 @@ def resolve_stereo_yaml(explicit: Path | None = None) -> Path | None:
         if not path.is_file():
             raise FileNotFoundError(f"Stereo YAML not found: {path}")
         return path
-    if DEFAULT_STEREO_YAML.is_file():
-        return DEFAULT_STEREO_YAML
+    for cand in (
+        _DLP_CAL / "results" / "camera_projector_stereo.yaml",
+        _FPP_CAL / "results" / "camera_projector_stereo.yaml",
+    ):
+        if cand.is_file():
+            return cand
     return None

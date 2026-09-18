@@ -98,7 +98,7 @@ app/calibration/multiview/
     board.yaml
     checkerboard/        # BFS stills + live tool0 JSON
     results/             # K/D, hand-eye, board, validation
-  fpp_cal/
+  dlp_cal/
     calibrate_fpp_geometry.py  # camera–projector stereo (metric)
     check_fpp_board.py
     generate_psp.py            # regenerate HDMI sine PNGs
@@ -195,20 +195,18 @@ Results: `camera_intrinsics.yaml`, `undistort_preview/`, `flange_T_camera.yaml`,
 
 ### FPP geometry (checkerboard in the DLP patch — no empty tray)
 
-Same 10×7 / **18 mm** board as `bfs_cal/board.yaml`. Robot **nadir, one pin**, stage locked. Connect DLP. Execute once per board pose (26 frames). Keep GOOD bursts under `fpp_cal/checkerboard/` as `00000`–`00015` (13 fit + 3 hold-out). Whole board must sit inside the bright rectangle.
+Same 10×7 / **18 mm** board as `bfs_cal/board.yaml`. Robot **nadir, one pin**, stage locked. Connect DLP. Execute once per board pose (26 frames). Keep GOOD bursts under `dlp_cal/checkerboard/` as `00000`–`00015` (13 fit + 3 hold-out). Whole board must sit inside the bright rectangle.
 
 ```powershell
-.\.venv\Scripts\python fpp_cal\check_fpp_board.py --input fpp_cal\checkerboard
-.\.venv\Scripts\python fpp_cal\calibrate_fpp_geometry.py --holdout 3
+.\.venv\Scripts\python dlp_cal\check_fpp_board.py --input dlp_cal\checkerboard
+.\.venv\Scripts\python dlp_cal\calibrate_fpp_geometry.py --holdout 3
 ```
 
-Writes `fpp_cal/results/camera_projector_stereo.yaml`. Offline object depth:
+Writes `dlp_cal/results/camera_projector_stereo.yaml`. Offline MVS decode + dense cloud:
 
 ```powershell
 cd app\sidecars\fpp
-..\..\calibration\multiview\.venv\Scripts\python fpp_cli.py --input D:\path\to\burst --out D:\path\to\out
+.\.venv\Scripts\python.exe fpp_mvs_cli.py --input D:\path\to\Cluster_X
 ```
 
-(defaults to that stereo YAML; camera Z in m / mm). Not wired into the GUI yet.
-
-No motion on app start. Calibration capture is an explicit, armed sequence like scan Execute.
+Writes `{Cluster_X}/multiview/processed/{decode,fusion}` + `metadata.json`. Auto-runs after FPP MVS capture when `fpp_mvs_auto_process = true`.

@@ -1,0 +1,55 @@
+{
+  "name": "Ripe 5x5 grape tray",
+  "version": 1,
+  "sample_count": 25,
+  "streams": {
+    "reflectance/fx10e": {
+      "prompt": "purple grape",
+      "invert_rgb": false,
+      "box_threshold": 0.3,
+      "max_box_area_frac": 0.2,
+      "nms_iou": 0.4,
+      "reuse_masks_from": "transmittance/fx10e"
+    },
+    "reflectance/swir3": {
+      "prompt": "green marble",
+      "invert_rgb": false,
+      "box_threshold": 0.08,
+      "max_box_area_frac": 0.2,
+      "nms_iou": 0.4,
+      "two_stage": {
+        "enabled": true,
+        "stage1_prompt": "circle hole",
+        "stage2_prompt": "green marble",
+        "stage2_box_threshold": 0.15,
+        "crop_margin_px": 0,
+        "nms_iou": 0.4,
+        "max_dets": 50
+      }
+    },
+    "transmittance/fx10e": {
+      "prompt": "white marble",
+      "invert_rgb": true,
+      "box_threshold": 0.08,
+      "max_box_area_frac": 0.2,
+      "nms_iou": 0.4,
+      "two_stage": {
+        "enabled": true,
+        "stage1_prompt": "circle hole",
+        "stage2_prompt": "white marble",
+        "stage2_box_threshold": 0.15,
+        "crop_margin_px": 0,
+        "nms_iou": 0.4,
+        "max_dets": 50
+      }
+    },
+    "transmittance/swir3": {
+      "prompt": "pink balloon",
+      "invert_rgb": true,
+      "box_threshold": 0.08,
+      "max_box_area_frac": 0.2,
+      "nms_iou": 0.4,
+      "reuse_reflectance_masks": true
+    }
+  }
+}

@@ -175,7 +175,7 @@ bool DlpPanelController::showHdmiPngOnGui(int stepIndex, DlpError &error)
     if (path.isEmpty())
     {
         error = {DlpErrorCode::NotAvailable,
-                 "HDMI PSP PNGs not found (calibration/multiview/fpp_cal/patterns/psp).",
+                 "HDMI PSP PNGs not found (calibration/multiview/dlp_cal/patterns/psp).",
                  false};
         return false;
     }

@@ -49,10 +49,69 @@ def load_board(path: Path) -> dict[str, Any]:
 
 
 def list_images(folder: Path) -> list[Path]:
+    """Flat folder or recursive (multiview_* / nested)."""
     files: list[Path] = []
     for ext in ("*.tif", "*.tiff", "*.TIF", "*.png", "*.jpg"):
         files.extend(folder.glob(ext))
-    return sorted({p.resolve() for p in files})
+        files.extend(folder.rglob(ext))
+    # Prefer unique paths; skip decode/fusion junk if present.
+    out: list[Path] = []
+    seen: set[Path] = set()
+    for p in sorted({q.resolve() for q in files}):
+        parts = {x.lower() for x in p.parts}
+        if parts & {"decode", "fusion", "rejected_no_corners", "dropped_worst"}:
+            continue
+        if p in seen:
+            continue
+        seen.add(p)
+        out.append(p)
+    return out
+
+
+def load_prior_flange_T_camera_mm(
+    xyz_mm: list[float], rpy_deg: list[float]
+) -> np.ndarray:
+    """App/CAD mount prior: same physical camera body → HE t must stay near this."""
+    roll, pitch, yaw = [math.radians(float(v)) for v in rpy_deg]
+    cx, sx = math.cos(roll), math.sin(roll)
+    cy, sy = math.cos(pitch), math.sin(pitch)
+    cz, sz = math.cos(yaw), math.sin(yaw)
+    Rx = np.array([[1.0, 0.0, 0.0], [0.0, cx, -sx], [0.0, sx, cx]], dtype=np.float64)
+    Ry = np.array([[cy, 0.0, sy], [0.0, 1.0, 0.0], [-sy, 0.0, cy]], dtype=np.float64)
+    Rz = np.array([[cz, -sz, 0.0], [sz, cz, 0.0], [0.0, 0.0, 1.0]], dtype=np.float64)
+    T = np.eye(4, dtype=np.float64)
+    T[:3, :3] = Rz @ Ry @ Rx
+    T[:3, 3] = np.asarray(xyz_mm, dtype=np.float64) * 0.001
+    return T
+
+
+def write_intrinsics_into_pose_jsons(
+    images_dir: Path, K: np.ndarray, D: np.ndarray, *, source: str
+) -> int:
+    """Overwrite capture-time (often wrong-lens) intrinsics with fitted K/D."""
+    n = 0
+    fx, fy = float(K[0, 0]), float(K[1, 1])
+    cx, cy = float(K[0, 2]), float(K[1, 2])
+    dist = [float(x) for x in np.asarray(D).reshape(-1)[:5]]
+    for jpath in sorted(images_dir.glob("*.json")):
+        if jpath.name.lower() in {"transforms.json", "board_check.json"}:
+            continue
+        meta = json.loads(jpath.read_text(encoding="utf-8"))
+        if "intrinsics" not in meta or not isinstance(meta["intrinsics"], dict):
+            meta["intrinsics"] = {}
+        meta["intrinsics"].update(
+            {
+                "fx": fx,
+                "fy": fy,
+                "cx": cx,
+                "cy": cy,
+                "distortion": dist,
+                "source": source,
+            }
+        )
+        jpath.write_text(json.dumps(meta, indent=4) + "\n", encoding="utf-8")
+        n += 1
+    return n
 
 
 def read_bgr(path: Path) -> np.ndarray:
@@ -140,12 +199,19 @@ def rotation_angle_deg(R: np.ndarray) -> float:
 
 
 def average_SE3(Ts: list[np.ndarray]) -> np.ndarray:
-    ts = np.stack([T[:3, 3] for T in Ts], axis=0)
+    finite = [T for T in Ts if np.isfinite(T).all()]
+    if not finite:
+        raise ValueError("average_SE3: no finite transforms")
+    ts = np.stack([T[:3, 3] for T in finite], axis=0)
     t_med = np.median(ts, axis=0)
     R_sum = np.zeros((3, 3), dtype=np.float64)
-    for T in Ts:
+    for T in finite:
         R_sum += T[:3, :3]
-    U, _, Vt = np.linalg.svd(R_sum)
+    try:
+        U, _, Vt = np.linalg.svd(R_sum)
+    except np.linalg.LinAlgError:
+        # Fall back to first finite rotation if SVD fails (degenerate set).
+        return Rt_to_T(finite[0][:3, :3], t_med)
     R_mean = U @ Vt
     if np.linalg.det(R_mean) < 0:
         U[:, 2] *= -1
@@ -309,7 +375,12 @@ def split_holdout(frames: list[dict[str, Any]], holdout: int) -> tuple[list, lis
     return frames[:-holdout], frames[-holdout:]
 
 
-def run_hand_eye(fit: list[dict[str, Any]]) -> dict[str, Any]:
+def run_hand_eye(
+    fit: list[dict[str, Any]],
+    *,
+    prior_T: np.ndarray | None = None,
+    max_prior_delta_mm: float = 80.0,
+) -> dict[str, Any]:
     usable = [f for f in fit if f.get("flange_T") is not None]
     if len(usable) < 3:
         return {"ok": False, "error": f"need >= 3 flange poses, got {len(usable)}"}
@@ -317,6 +388,10 @@ def run_hand_eye(fit: list[dict[str, Any]]) -> dict[str, Any]:
     t_gripper2base = [f["flange_T"][:3, 3].reshape(3, 1) for f in usable]
     R_target2cam = [f["cam_T_board"][:3, :3] for f in usable]
     t_target2cam = [f["cam_T_board"][:3, 3].reshape(3, 1) for f in usable]
+
+    prior_t_mm = (
+        prior_T[:3, 3] * 1000.0 if prior_T is not None else CAD_FLANGE_T_CAM_MM.copy()
+    )
 
     methods = {}
     for name, flag in HAND_EYE_METHODS.items():
@@ -327,16 +402,31 @@ def run_hand_eye(fit: list[dict[str, Any]]) -> dict[str, Any]:
         except cv2.error as exc:
             methods[name] = {"ok": False, "error": str(exc)}
             continue
-        flange_T_cam = Rt_to_T(R, t.reshape(3))
+        R = np.asarray(R, dtype=np.float64)
+        t = np.asarray(t, dtype=np.float64).reshape(3)
+        if not np.isfinite(R).all() or not np.isfinite(t).all():
+            methods[name] = {"ok": False, "error": "non-finite R/t from calibrateHandEye"}
+            continue
+        flange_T_cam = Rt_to_T(R, t)
         board_Ts = [f["flange_T"] @ flange_T_cam @ f["cam_T_board"] for f in usable]
-        mean_T = average_SE3(board_Ts)
+        try:
+            mean_T = average_SE3(board_Ts)
+        except (ValueError, np.linalg.LinAlgError) as exc:
+            methods[name] = {"ok": False, "error": f"board average failed: {exc}"}
+            continue
         t_err = []
         r_err = []
         for T in board_Ts:
+            if not np.isfinite(T).all():
+                continue
             t_err.append(np.linalg.norm(T[:3, 3] - mean_T[:3, 3]) * 1000.0)
             r_err.append(rotation_angle_deg(mean_T[:3, :3].T @ T[:3, :3]))
+        if not t_err:
+            methods[name] = {"ok": False, "error": "no finite board poses"}
+            continue
         t_mm = flange_T_cam[:3, 3] * 1000.0
         cad_delta_mm = t_mm - CAD_FLANGE_T_CAM_MM
+        prior_delta_mm = float(np.linalg.norm(t_mm - prior_t_mm))
         optical_z = R[:, 2]
         z_deg = float(math.degrees(math.acos(np.clip(optical_z[2], -1.0, 1.0))))
         methods[name] = {
@@ -344,6 +434,7 @@ def run_hand_eye(fit: list[dict[str, Any]]) -> dict[str, Any]:
             "flange_T_camera": flange_T_cam.tolist(),
             "t_cam_in_flange_mm": t_mm.tolist(),
             "cad_t_delta_mm": cad_delta_mm.tolist(),
+            "prior_t_delta_mm": prior_delta_mm,
             "optical_z_vs_tool0_z_deg": z_deg,
             "base_T_board_spread_mm_median": float(np.median(t_err)),
             "base_T_board_spread_mm_max": float(np.max(t_err)),
@@ -352,21 +443,53 @@ def run_hand_eye(fit: list[dict[str, Any]]) -> dict[str, Any]:
             "n": len(usable),
         }
 
-    ok_methods = {k: v for k, v in methods.items() if v.get("ok")}
+    ok_methods = {
+        k: v
+        for k, v in methods.items()
+        if v.get("ok") and np.isfinite(v.get("prior_t_delta_mm", np.nan))
+    }
     if not ok_methods:
         return {"ok": False, "error": "all hand-eye methods failed", "methods": methods}
+    # Prefer physical mount agreement (lens change must not invent a new TCP).
     best = min(
         ok_methods.items(),
-        key=lambda kv: kv[1]["base_T_board_spread_mm_median"]
-        + 10.0 * kv[1]["base_T_board_spread_deg_median"],
+        key=lambda kv: (
+            kv[1]["prior_t_delta_mm"],
+            kv[1]["base_T_board_spread_mm_median"]
+            + 10.0 * kv[1]["base_T_board_spread_deg_median"],
+        ),
     )
     chosen = best[0]
     flange_T_cam = np.asarray(ok_methods[chosen]["flange_T_camera"], dtype=np.float64)
+    used_prior = False
+    note = None
+    if prior_T is not None and float(ok_methods[chosen]["prior_t_delta_mm"]) > float(
+        max_prior_delta_mm
+    ):
+        # Same camera body / mount: discard unphysical HE translation.
+        flange_T_cam = prior_T.copy()
+        used_prior = True
+        note = (
+            f"Rejected OpenCV HE '{chosen}' (|t-prior|="
+            f"{ok_methods[chosen]['prior_t_delta_mm']:.1f} mm > {max_prior_delta_mm} mm). "
+            "Kept app/CAD mount prior — lens-only change must not move tool0→camera by tens of cm."
+        )
+        print(f"WARNING: {note}")
     board_Ts = [f["flange_T"] @ flange_T_cam @ f["cam_T_board"] for f in usable]
-    base_T_board = average_SE3(board_Ts)
+    try:
+        base_T_board = average_SE3(board_Ts)
+    except (ValueError, np.linalg.LinAlgError) as exc:
+        return {
+            "ok": False,
+            "error": f"base_T_board average failed: {exc}",
+            "methods": methods,
+        }
     return {
         "ok": True,
-        "chosen_method": chosen,
+        "chosen_method": "prior_mount" if used_prior else chosen,
+        "opencv_best_method": chosen,
+        "used_mount_prior": used_prior,
+        "note": note,
         "methods": methods,
         "flange_T_camera": flange_T_cam,
         "base_T_board": base_T_board,
@@ -438,6 +561,7 @@ def run(args: argparse.Namespace) -> int:
     print(f"Board {board['pattern_size']} squares={board.get('squares_x')}x{board.get('squares_y')} "
           f"{board['square_size_mm']} mm")
     print(f"Images: {len(images)} in {args.images}")
+    print("Note: pose JSON intrinsics are ignored for K/D (often wrong lens from capture cfg).")
 
     frames, size = detect_dataset(images, board)
     if len(frames) < 3:
@@ -475,6 +599,7 @@ def run(args: argparse.Namespace) -> int:
         },
         "n_images": len(fit),
         "pass_rms_px_lt_0_5": passed,
+        "note": "Fitted from checkerboard images; capture JSON K/D are not used as input.",
     }
     if not passed:
         intr_yaml["warning"] = (
@@ -483,12 +608,31 @@ def run(args: argparse.Namespace) -> int:
         )
     write_yaml(args.out / "camera_intrinsics.yaml", intr_yaml)
 
+    n_json = write_intrinsics_into_pose_jsons(
+        Path(args.images),
+        intr["K"],
+        intr["D"],
+        source=str((args.out / "camera_intrinsics.yaml").resolve()),
+    )
+    print(f"Wrote fitted K/D into {n_json} pose JSON files under {args.images}")
+
     pnp_fit = solve_pnp_frames(fit, intr["K"], intr["D"])
     pnp_hold = solve_pnp_frames(hold, intr["K"], intr["D"])
     if pnp_fit:
         print(f"PnP fit median RMS {np.median([f['pnp_rms_px'] for f in pnp_fit]):.4f} px")
 
-    he = run_hand_eye(pnp_fit)
+    prior_T = load_prior_flange_T_camera_mm(args.prior_tcp_xyz_mm, args.prior_tcp_rpy_deg)
+    print(
+        "HE mount prior xyz_mm =",
+        [round(v, 3) for v in args.prior_tcp_xyz_mm],
+        "rpy_deg =",
+        [round(v, 4) for v in args.prior_tcp_rpy_deg],
+    )
+    he = run_hand_eye(
+        pnp_fit,
+        prior_T=prior_T,
+        max_prior_delta_mm=float(args.he_max_prior_delta_mm),
+    )
     if not he.get("ok"):
         print(f"Hand-eye skipped: {he.get('error')}")
         write_yaml(args.out / "flange_T_camera.yaml", he)
@@ -505,9 +649,14 @@ def run(args: argparse.Namespace) -> int:
         args.out / "flange_T_camera.yaml",
         {
             "method": he["chosen_method"],
+            "opencv_best_method": he.get("opencv_best_method"),
+            "used_mount_prior": he.get("used_mount_prior", False),
+            "note": he.get("note"),
             "T": numpy_to_nested(flange_T_cam),
             "urdf_origin": rpy_xyz_from_T(flange_T_cam),
             "cad_tool_tcp_mm": CAD_FLANGE_T_CAM_MM.tolist(),
+            "prior_tool_tcp_mm": list(args.prior_tcp_xyz_mm),
+            "prior_tool_tcp_rpy_deg": list(args.prior_tcp_rpy_deg),
             "methods": he["methods"],
             "n_fit": he["n_fit"],
         },
@@ -553,6 +702,28 @@ def parse_args() -> argparse.Namespace:
         "--fix-focal",
         action="store_true",
         help="with --use-nominal-k, do not move fx/fy (solve principal point + distortion only)",
+    )
+    p.add_argument(
+        "--prior-tcp-xyz-mm",
+        type=float,
+        nargs=3,
+        default=[0.693, -71.639, 114.199],
+        metavar=("X", "Y", "Z"),
+        help="Physical mount prior tool0→camera (mm). Default = hyperfusion.cfg tool_tcp.",
+    )
+    p.add_argument(
+        "--prior-tcp-rpy-deg",
+        type=float,
+        nargs=3,
+        default=[-0.3469, -0.2031, 0.1778],
+        metavar=("ROLL", "PITCH", "YAW"),
+        help="Physical mount prior RPY (deg). Default = hyperfusion.cfg tool_tcp.",
+    )
+    p.add_argument(
+        "--he-max-prior-delta-mm",
+        type=float,
+        default=80.0,
+        help="If OpenCV HE |t-prior| exceeds this, keep the mount prior instead.",
     )
     return p.parse_args()
 

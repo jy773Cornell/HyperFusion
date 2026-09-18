@@ -20,6 +20,7 @@
 class CapturePostProcessorWorker;
 class CaptureWriterWorker;
 class HfFusionWorker;
+class FppMvsWorker;
 class MainWindow;
 class OperationWaitDialog;
 class QWidget;
@@ -201,10 +202,11 @@ private:
     void completeCaptureSequence();
     void beginMultiviewCapturePhase();
     void onMultiviewCaptureFinished(bool ok,
-                                     const QString &detail,
-                                     int capturedFrameCount,
-                                     int successfulPins,
-                                     qint64 elapsedMs);
+                                    const QString &detail,
+                                    int capturedFrameCount,
+                                    int successfulPins,
+                                    qint64 elapsedMs);
+    void maybeStartFppMvsProcessingAfterMultiview();
     void finishCaptureSequenceAfterOptionalMultiview();
     [[nodiscard]] bool isMultiviewRgbCaptureSelected() const;
     [[nodiscard]] bool canRunMultiviewRgbCapture() const;
@@ -320,8 +322,6 @@ private:
     bool captureMultiviewInProgress_ = false;
     /// After HSI: stage moves to Multiview pose first; confirm dialog runs when that move completes.
     bool captureMultiviewAwaitingOperatorConfirm_ = false;
-    /// Two-stage MVS: apex stills done; next MoveToMultiviewPosition is the ring stop.
-    bool captureMultiviewNeedRingsLeg_ = false;
     int captureMultiviewFramesSoFar_ = 0;
     int captureMultiviewPinsSoFar_ = 0;
     qint64 captureMultiviewElapsedMsSoFar_ = 0;
@@ -358,6 +358,7 @@ private:
     std::unique_ptr<CaptureWriterWorker> captureWriterWorker_;
     std::unique_ptr<CapturePostProcessorWorker> capturePostProcessorWorker_;
     std::unique_ptr<HfFusionWorker> hfFusionWorker_;
+    std::unique_ptr<FppMvsWorker> fppMvsWorker_;
     CaptureWriterSessionSummary lastEndedCaptureSessionSummary_;
     std::unique_ptr<hf::processing::Gsam2ServerManager> gsam2ServerManager_;
 };

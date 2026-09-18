@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-# Offline FPP decode + metric depth (sidecar). Not wired into the GUI yet.
+# Offline FPP decode + metric depth (sidecar). Prefer fpp_mvs_cli.py for MVS→processed/.
 """Decode an FPP burst. Default: camera Z (mm) via camera_projector_stereo.yaml.
 
 Uses ``dlp_led`` / ``decode_channel`` from pose JSON (or ``--channel``) so red-LED
 bursts decode on R instead of Rec.601 luma.
+
+For full MVS (decode + dense cloud under ``processed/``), use ``fpp_mvs_cli.py``.
 """
 
 from __future__ import annotations
@@ -14,13 +16,22 @@ from pathlib import Path
 
 import numpy as np
 
-from hyperfusion_fpp.capture import list_burst_jobs, load_burst
-from hyperfusion_fpp.decode import decode_burst
-from hyperfusion_fpp.depth import depth_from_decode
-from hyperfusion_fpp.geometry import StereoGeometry
-from hyperfusion_fpp.io_maps import write_decode_maps, write_depth_maps
-from hyperfusion_fpp.paths import DEFAULT_STEREO_YAML, resolve_stereo_yaml
-from hyperfusion_fpp.undistort import undistort_burst
+from fpp_depth.capture import (
+    STEP_COUNT,
+    U_ONLY_STEP_COUNT,
+    _burst_stride,
+    _normalize_channel,
+    _stem_sort_key,
+    decode_channel_from_led_ma,
+    list_burst_jobs,
+    load_burst,
+)
+from fpp_depth.decode import decode_burst
+from fpp_depth.depth import depth_from_decode
+from fpp_depth.geometry import StereoGeometry
+from fpp_depth.io_maps import write_decode_maps, write_depth_maps
+from fpp_depth.paths import DEFAULT_STEREO_YAML, resolve_stereo_yaml
+from fpp_depth.undistort import undistort_burst
 
 
 def _parse_led_ma(text: str) -> tuple[int, int, int]:
@@ -40,8 +51,6 @@ def _backfill_led_json(
     channel: str,
 ) -> int:
     """Write dlp_led + decode_channel into pose JSONs for this burst (offline repair)."""
-    from hyperfusion_fpp.capture import STEP_COUNT, U_ONLY_STEP_COUNT, _burst_stride, _stem_sort_key
-
     tiffs = sorted(burst_dir.glob("*.tif"), key=_stem_sort_key)
     tiffs += sorted(p for p in burst_dir.glob("*.tiff") if p not in set(tiffs))
     offset = next((i for i, p in enumerate(tiffs) if p.name == start.name), None)
@@ -76,6 +85,8 @@ def _process_burst(
     min_modulation: float,
     min_phase_quality: float,
     channel: str,
+    *,
+    flat: bool,
 ) -> dict:
     burst = load_burst(burst_dir, start=start, channel=channel)
     undistort_burst(burst)
@@ -86,7 +97,9 @@ def _process_burst(
     )
     stereo = StereoGeometry.load(Path(stereo_arg)) if stereo_arg is not None else None
     depth = depth_from_decode(decoded, stereo=stereo)
-    dest = out_dir / burst_dir.name / start.stem
+    # flat: out/<stem>/  (MVS processed/decode layout)
+    # nested (legacy): out/<burst_name>/<stem>/
+    dest = (out_dir / start.stem) if flat else (out_dir / burst_dir.name / start.stem)
     write_decode_maps(dest, decoded, stem="fpp")
     write_depth_maps(dest, depth, stem="fpp")
     summary: dict = {
@@ -131,6 +144,11 @@ def main() -> int:
     )
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument(
+        "--flat",
+        action="store_true",
+        help="Write out/<stem>/ (no burst-name nesting). Use for processed/decode.",
+    )
+    parser.add_argument(
         "--channel",
         default="auto",
         help="Decode gray channel: auto|r|g|b|luma (default auto from dlp_led / image).",
@@ -161,8 +179,6 @@ def main() -> int:
 
     if args.set_led is not None:
         red_ma, green_ma, blue_ma = _parse_led_ma(args.set_led)
-        from hyperfusion_fpp.capture import decode_channel_from_led_ma, _normalize_channel
-
         ch = _normalize_channel(args.channel)
         if ch == "auto":
             ch = decode_channel_from_led_ma(red_ma, green_ma, blue_ma)
@@ -197,6 +213,7 @@ def main() -> int:
             args.min_modulation,
             args.min_phase_quality,
             args.channel,
+            flat=bool(args.flat),
         )
         for burst_dir, start in jobs
     ]

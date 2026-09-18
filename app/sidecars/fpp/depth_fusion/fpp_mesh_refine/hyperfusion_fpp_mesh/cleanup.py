@@ -1,0 +1,253 @@
+# Point-cloud cleanup for dense FPP back-project (sidecar / depth_fusion / fpp_mesh_refine).
+# ROI/component → SOR → ROR → optional light MLS. No robot I/O.
+"""
+Cleanup pipeline on the fused dense cloud::
+
+  multi-view back-project
+  → ROI + connected-component removal
+  → Statistical Outlier Removal (SOR)
+  → Radius Outlier Removal (ROR)
+  → optional light MLS smoothing
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+import numpy as np
+
+try:
+    import open3d as o3d
+except ImportError as exc:  # pragma: no cover
+    raise SystemExit("open3d required") from exc
+
+
+@dataclass
+class CleanupStats:
+    n_in: int
+    n_after_roi: int
+    n_after_sor: int
+    n_after_ror: int
+    n_out: int
+    n_components_kept: int = 1
+    mean_nn_m: float | None = None
+    steps: dict = field(default_factory=dict)
+
+
+def _estimate_mean_nn(cloud: o3d.geometry.PointCloud, *, k: int = 8, sample: int = 5000) -> float:
+    pts = np.asarray(cloud.points)
+    if pts.shape[0] < k + 1:
+        return 0.002
+    rng = np.random.default_rng(0)
+    idx = rng.choice(pts.shape[0], size=min(sample, pts.shape[0]), replace=False)
+    tree = o3d.geometry.KDTreeFlann(cloud)
+    dists: list[float] = []
+    for i in idx:
+        _, _, d2 = tree.search_knn_vector_3d(cloud.points[i], k + 1)
+        if len(d2) > 1:
+            dists.append(float(np.mean(np.sqrt(d2[1:]))))
+    return float(np.median(dists)) if dists else 0.002
+
+
+def roi_component_filter(
+    cloud: o3d.geometry.PointCloud,
+    *,
+    percentile_lo: float = 1.0,
+    percentile_hi: float = 99.0,
+    margin_m: float = 0.005,
+    eps_m: float | None = None,
+    min_points: int = 500,
+) -> tuple[o3d.geometry.PointCloud, dict]:
+    """Crop to percentile AABB, then keep largest DBSCAN component(s)."""
+    pts = np.asarray(cloud.points)
+    n0 = int(pts.shape[0])
+    if n0 == 0:
+        return cloud, {"n_in": 0, "n_out": 0}
+
+    lo = np.percentile(pts, percentile_lo, axis=0) - margin_m
+    hi = np.percentile(pts, percentile_hi, axis=0) + margin_m
+    inside = np.all((pts >= lo) & (pts <= hi), axis=1)
+    cropped = cloud.select_by_index(np.where(inside)[0].tolist())
+
+    if eps_m is None:
+        eps_m = max(0.003, 3.0 * _estimate_mean_nn(cropped))
+
+    labels = np.array(cropped.cluster_dbscan(eps=float(eps_m), min_points=20, print_progress=False))
+    if labels.size == 0 or int(labels.max()) < 0:
+        return cropped, {
+            "n_in": n0,
+            "n_after_roi": int(len(cropped.points)),
+            "n_out": int(len(cropped.points)),
+            "eps_m": float(eps_m),
+            "n_components_kept": 0,
+        }
+
+    # Keep components with enough points; prefer largest if only noise otherwise
+    counts: dict[int, int] = {}
+    for lab in labels:
+        if lab < 0:
+            continue
+        counts[int(lab)] = counts.get(int(lab), 0) + 1
+    if not counts:
+        return cropped, {"n_in": n0, "n_out": int(len(cropped.points)), "eps_m": float(eps_m)}
+
+    keep_labs = {lab for lab, c in counts.items() if c >= int(min_points)}
+    if not keep_labs:
+        keep_labs = {max(counts, key=counts.get)}  # type: ignore[arg-type]
+
+    keep_idx = [i for i, lab in enumerate(labels) if int(lab) in keep_labs]
+    out = cropped.select_by_index(keep_idx)
+    return out, {
+        "n_in": n0,
+        "n_after_roi": int(len(cropped.points)),
+        "n_out": int(len(out.points)),
+        "eps_m": float(eps_m),
+        "n_components_kept": int(len(keep_labs)),
+        "component_sizes": {str(k): int(v) for k, v in sorted(counts.items(), key=lambda x: -x[1])[:8]},
+    }
+
+
+def statistical_outlier_removal(
+    cloud: o3d.geometry.PointCloud,
+    *,
+    nb_neighbors: int = 25,
+    std_ratio: float = 1.75,
+) -> tuple[o3d.geometry.PointCloud, dict]:
+    """SOR: remove points with mean kNN distance > μ + α·σ."""
+    n0 = int(len(cloud.points))
+    if n0 < nb_neighbors + 1:
+        return cloud, {"n_in": n0, "n_out": n0, "nb_neighbors": nb_neighbors, "std_ratio": std_ratio}
+    cleaned, ind = cloud.remove_statistical_outlier(
+        nb_neighbors=int(nb_neighbors),
+        std_ratio=float(std_ratio),
+    )
+    return cleaned, {
+        "n_in": n0,
+        "n_out": int(len(cleaned.points)),
+        "n_removed": n0 - int(len(cleaned.points)),
+        "nb_neighbors": int(nb_neighbors),
+        "std_ratio": float(std_ratio),
+    }
+
+
+def radius_outlier_removal(
+    cloud: o3d.geometry.PointCloud,
+    *,
+    radius_m: float | None = None,
+    min_neighbors: int = 12,
+) -> tuple[o3d.geometry.PointCloud, dict]:
+    """ROR: remove points with too few neighbors inside radius."""
+    n0 = int(len(cloud.points))
+    if n0 == 0:
+        return cloud, {"n_in": 0, "n_out": 0}
+    if radius_m is None:
+        # ~2.5× mean spacing — isolates small fragments around berries
+        radius_m = max(0.002, 2.5 * _estimate_mean_nn(cloud))
+    cleaned, ind = cloud.remove_radius_outlier(
+        nb_points=int(min_neighbors),
+        radius=float(radius_m),
+    )
+    return cleaned, {
+        "n_in": n0,
+        "n_out": int(len(cleaned.points)),
+        "n_removed": n0 - int(len(cleaned.points)),
+        "radius_m": float(radius_m),
+        "min_neighbors": int(min_neighbors),
+    }
+
+
+def light_mls_smooth(
+    cloud: o3d.geometry.PointCloud,
+    *,
+    search_radius_m: float | None = None,
+) -> tuple[o3d.geometry.PointCloud, dict]:
+    """Mild MLS smoothing — keep berry valleys (small radius)."""
+    n0 = int(len(cloud.points))
+    if n0 < 50:
+        return cloud, {"n_in": n0, "n_out": n0, "skipped": True}
+    if search_radius_m is None:
+        search_radius_m = max(0.002, 2.0 * _estimate_mean_nn(cloud))
+    try:
+        # Open3D MLS via MovingLeastSquares if available
+        mls = o3d.geometry.PointCloud(cloud)
+        # Fallback: estimate normals + slight position pull via neighbor mean (very mild)
+        mls.estimate_normals(
+            search_param=o3d.geometry.KDTreeSearchParamHybrid(
+                radius=float(search_radius_m), max_nn=30
+            )
+        )
+        # Use Open3D's optional reconstruct if present; else neighbor average
+        tree = o3d.geometry.KDTreeFlann(mls)
+        pts = np.asarray(mls.points)
+        out = pts.copy()
+        r = float(search_radius_m)
+        for i in range(pts.shape[0]):
+            k, idx, _ = tree.search_radius_vector_3d(mls.points[i], r)
+            if k >= 4:
+                nb = pts[list(idx)]
+                # 70% original + 30% neighbor mean — light only
+                out[i] = 0.70 * pts[i] + 0.30 * nb.mean(axis=0)
+        mls.points = o3d.utility.Vector3dVector(out)
+        return mls, {
+            "n_in": n0,
+            "n_out": int(len(mls.points)),
+            "search_radius_m": float(search_radius_m),
+            "blend": 0.30,
+        }
+    except Exception as exc:  # noqa: BLE001
+        return cloud, {"n_in": n0, "n_out": n0, "error": str(exc)}
+
+
+def cleanup_dense_cloud(
+    cloud: o3d.geometry.PointCloud,
+    *,
+    do_roi: bool = True,
+    do_sor: bool = True,
+    do_ror: bool = True,
+    do_smooth: bool = False,
+    sor_k: int = 25,
+    sor_std: float = 1.75,
+    ror_min_neighbors: int = 12,
+    ror_radius_m: float | None = None,
+    component_min_points: int = 800,
+) -> tuple[o3d.geometry.PointCloud, CleanupStats]:
+    """Run ROI → SOR → ROR → optional light smooth on a dense fused cloud."""
+    n_in = int(len(cloud.points))
+    stats = CleanupStats(
+        n_in=n_in,
+        n_after_roi=n_in,
+        n_after_sor=n_in,
+        n_after_ror=n_in,
+        n_out=n_in,
+    )
+    cur = cloud
+
+    if do_roi:
+        cur, s = roi_component_filter(cur, min_points=int(component_min_points))
+        stats.n_after_roi = int(len(cur.points))
+        stats.n_components_kept = int(s.get("n_components_kept", 1))
+        stats.steps["roi"] = s
+
+    if do_sor and len(cur.points) > 0:
+        cur, s = statistical_outlier_removal(cur, nb_neighbors=sor_k, std_ratio=sor_std)
+        stats.n_after_sor = int(len(cur.points))
+        stats.steps["sor"] = s
+    else:
+        stats.n_after_sor = int(len(cur.points))
+
+    if do_ror and len(cur.points) > 0:
+        cur, s = radius_outlier_removal(
+            cur, radius_m=ror_radius_m, min_neighbors=ror_min_neighbors
+        )
+        stats.n_after_ror = int(len(cur.points))
+        stats.steps["ror"] = s
+    else:
+        stats.n_after_ror = int(len(cur.points))
+
+    if do_smooth and len(cur.points) > 0:
+        cur, s = light_mls_smooth(cur)
+        stats.steps["smooth"] = s
+
+    stats.n_out = int(len(cur.points))
+    stats.mean_nn_m = _estimate_mean_nn(cur) if stats.n_out > 0 else None
+    return cur, stats

@@ -2,7 +2,10 @@
 
 #include "backend/HyperFusionConfig.hpp"
 
+#include <QDir>
+#include <QFileInfo>
 #include <QSettings>
+#include <QStandardPaths>
 
 #include <algorithm>
 
@@ -68,6 +71,14 @@ void AppSettingsStore::saveCapturePosition(const PersistedCapturePosition &posit
     settings.setValue(QStringLiteral("capture/preprocess/gsamPlanId"), position.gsamPlanId);
     settings.setValue(QStringLiteral("capture/dualCameraAutoSync"), position.dualCameraAutoSync);
     settings.setValue(QStringLiteral("capture/metadata/saveFolder"), position.saveFolder);
+}
+
+QString AppSettingsStore::suggestedCaptureSaveStartDir()
+{
+    const QString folder = loadCapturePosition().saveFolder.trimmed();
+    if (!folder.isEmpty() && QFileInfo(folder).isDir())
+        return QDir::toNativeSeparators(folder);
+    return QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation);
 }
 
 PersistedStageConnection AppSettingsStore::loadStageConnection()
@@ -357,28 +368,34 @@ PersistedUr3eHemisphereScanSettings AppSettingsStore::loadUr3eHemisphereScan()
                    defaults.lastSemiFixedRoutePath)
             .toString();
 
-    // Stage stops: QSettings first; optional one-time seed from hyperfusion.cfg.
-    const bool hasGuiStage =
-        settings.contains(QStringLiteral("ur3e/hemisphereScan/stagePosition1Mm"))
-        || settings.contains(QStringLiteral("ur3e/hemisphereScan/stagePosition2Mm"));
-    if (hasGuiStage)
+    // Stage stop: QSettings first; optional one-time seed from hyperfusion.cfg.
+    if (settings.contains(QStringLiteral("ur3e/hemisphereScan/stagePositionMm")))
     {
-        scan.stagePosition1Mm =
+        scan.stagePositionMm =
             settings
-                .value(QStringLiteral("ur3e/hemisphereScan/stagePosition1Mm"),
-                       defaults.stagePosition1Mm)
+                .value(QStringLiteral("ur3e/hemisphereScan/stagePositionMm"),
+                       defaults.stagePositionMm)
                 .toDouble();
-        scan.stagePosition2Mm =
+    }
+    else if (settings.contains(QStringLiteral("ur3e/hemisphereScan/stagePosition2Mm")))
+    {
+        scan.stagePositionMm =
             settings
                 .value(QStringLiteral("ur3e/hemisphereScan/stagePosition2Mm"),
-                       defaults.stagePosition2Mm)
+                       defaults.stagePositionMm)
+                .toDouble();
+    }
+    else if (settings.contains(QStringLiteral("ur3e/hemisphereScan/stagePosition1Mm")))
+    {
+        scan.stagePositionMm =
+            settings
+                .value(QStringLiteral("ur3e/hemisphereScan/stagePosition1Mm"),
+                       defaults.stagePositionMm)
                 .toDouble();
     }
     else
     {
-        const auto &hw = hf::hardwareConfig();
-        scan.stagePosition1Mm = hw.sampleMultiviewApexPositionMm;
-        scan.stagePosition2Mm = hw.sampleMultiviewPositionMm;
+        scan.stagePositionMm = hf::hardwareConfig().sampleMultiviewPositionMm;
     }
 
     mirrorActivePanelAliases(scan);
@@ -422,10 +439,8 @@ void AppSettingsStore::saveUr3eHemisphereScan(const PersistedUr3eHemisphereScanS
     settings.setValue(QStringLiteral("ur3e/hemisphereScan/lastFppPlanPath"), scan.lastFppPlanPath);
     settings.setValue(QStringLiteral("ur3e/hemisphereScan/lastSemiFixedRoutePath"),
                       scan.lastSemiFixedRoutePath);
-    settings.setValue(QStringLiteral("ur3e/hemisphereScan/stagePosition1Mm"),
-                      scan.stagePosition1Mm);
-    settings.setValue(QStringLiteral("ur3e/hemisphereScan/stagePosition2Mm"),
-                      scan.stagePosition2Mm);
+    settings.setValue(QStringLiteral("ur3e/hemisphereScan/stagePositionMm"),
+                      scan.stagePositionMm);
 }
 
 PersistedBfsCameraSettings AppSettingsStore::loadBfsCameraSettings()
