@@ -88,7 +88,7 @@ struct CalibrationCaptureExtras
     double flangeRz = 0.0;
     QStringList jointNames;
     std::vector<double> jointsRad;
-    /// FPP pin burst: step index in kFppScanningSteps, or -1 if not an FPP still.
+    /// Decoder PSP step 0..25; -1 for the leading visual-color or a non-FPP still.
     int fppStepIndex = -1;
     QString fppStepLabel;
     /// HDMI PSP pattern name shown on the DLP (empty when DLP was not used).

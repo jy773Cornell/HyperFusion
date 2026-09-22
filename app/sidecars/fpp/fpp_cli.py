@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 
 from fpp_depth.capture import (
+    CAPTURE_STEP_COUNT,
     STEP_COUNT,
     U_ONLY_STEP_COUNT,
     _burst_stride,
@@ -57,7 +58,8 @@ def _backfill_led_json(
     if offset is None:
         return 0
     stride = _burst_stride(tiffs, offset)
-    stride = min(stride, STEP_COUNT if stride >= STEP_COUNT else U_ONLY_STEP_COUNT)
+    visual_offset = 1 if stride == CAPTURE_STEP_COUNT else 0
+    decode_count = STEP_COUNT if stride >= STEP_COUNT else U_ONLY_STEP_COUNT
     n = 0
     led = {
         "red_ma": int(red_ma),
@@ -65,7 +67,8 @@ def _backfill_led_json(
         "blue_ma": int(blue_ma),
         "decode_channel": channel,
     }
-    for path in tiffs[offset : offset + stride]:
+    first_decode = offset + visual_offset
+    for path in tiffs[first_decode : first_decode + decode_count]:
         jpath = path.with_suffix(".json")
         if not jpath.is_file():
             continue

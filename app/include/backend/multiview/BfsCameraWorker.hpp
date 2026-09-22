@@ -32,6 +32,10 @@ public:
     void requestEnumerate();
     void requestConnect(const BfsCameraSettings &settings);
     void requestApplySettings(const BfsCameraSettings &settings);
+    /// Blocking apply on the control thread (safe from other threads; not from control itself).
+    [[nodiscard]] bool applySettingsBlocking(const BfsCameraSettings &settings,
+                                             BfsError *errorOut = nullptr,
+                                             int timeoutMs = 8000);
     void requestDisconnect();
 
     [[nodiscard]] BfsCameraState currentState() const;

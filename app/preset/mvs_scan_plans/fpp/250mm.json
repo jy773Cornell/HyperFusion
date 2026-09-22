@@ -1,0 +1,145 @@
+{
+  "schema": 1,
+  "kind": "fpp",
+  "id": "250mm",
+  "display_name": "250mm",
+  "robot_cfg_fingerprint": "",
+  "interval_deg": 60.0,
+  "pan_range_deg": 360.0,
+  "pan_direction": 1,
+  "stabilize_ms": 500,
+  "apex_height_mm": 250,
+  "dlp_exposure_us": 150000,
+  "rgb_exposure_us": 180000,
+  "notes": {
+    "height_mm": 250,
+    "home_joints_deg": [
+      141.0,
+      -30.3,
+      -106.5,
+      19.2,
+      114.4,
+      33.6
+    ],
+    "home": "Cfg + FPP hub = dlp1 look-down. Ring hops use MoveIt. After FPP: RGB sweep at dlp2 pose.",
+    "dlp_joints_deg": [
+      141.0,
+      -30.3,
+      -106.5,
+      19.2,
+      114.4,
+      33.6
+    ],
+    "dlp": "Ring 1: look-down teach. Cam ~250 mm to stage center.",
+    "dlp2_joints_deg": [
+      160.6,
+      -77.0,
+      44.0,
+      -108.0,
+      105.0,
+      12.1
+    ],
+    "dlp2": "Ring 2: taught oblique (elbow +44°). MoveIt plans dlp1→dlp2 despite elbow family flip.",
+    "rgb": "After FPP: blank DLP, confirm, then RGB sweep at dlp2 (oblique) pose.",
+    "exposure": "dlp_exposure_us / rgb_exposure_us applied to BFS when connected; omit to use GUI Exposure Time.",
+    "scan_tcp": "dlp"
+  },
+  "rgb_ring": {
+    "id": "rgb_250",
+    "display_name": "RGB oblique",
+    "capture_kind": "rgb",
+    "interval_deg": 10.0,
+    "pan_range_deg": 360.0,
+    "entry_joints_rad": [
+      2.802998778702893,
+      -1.3439035240356338,
+      0.767944870877505,
+      -1.8849555921538759,
+      1.8325957145940461,
+      0.2111848394913139
+    ],
+    "entry_tcp": {
+      "x_m": -0.14386110060262985,
+      "y_m": -0.030554022417969985,
+      "z_m": 0.6622789287562691,
+      "rx": 0.3738673332908756,
+      "ry": 0.3731916254616713,
+      "rz": 1.5371918487216778,
+      "tool_z_x": 0.45865729228879215,
+      "tool_z_y": -0.0006799657793959309,
+      "tool_z_z": 0.8886129786790493
+    },
+    "reachable": true,
+    "home_path_ok": true,
+    "base_sweep_ok": true,
+    "backup_coverage_ok": false,
+    "backup_union_deg": 0.0,
+    "phi_deg": -168.01,
+    "theta_deg": 27.3,
+    "no_pan": false
+  },
+  "rings": [
+    {
+      "id": "dlp_250",
+      "display_name": "DLP look-down",
+      "entry_joints_rad": [
+        2.4609142453120048,
+        -0.5288347633542818,
+        -1.858775653373961,
+        0.3351032163829112,
+        1.9966566642815131,
+        0.5864306286700948
+      ],
+      "entry_tcp": {
+        "x_m": -0.04611905539322385,
+        "y_m": -0.010728390016312862,
+        "z_m": 0.5954578262824305,
+        "rx": 0.10487232615249119,
+        "ry": 0.19191376121951828,
+        "rz": 1.5893864930895258,
+        "tool_z_x": 0.18648261928863025,
+        "tool_z_y": 0.057150150385140215,
+        "tool_z_z": 0.9807946232592262
+      },
+      "reachable": true,
+      "home_path_ok": true,
+      "base_sweep_ok": true,
+      "backup_coverage_ok": false,
+      "backup_union_deg": 0.0,
+      "phi_deg": -166.9,
+      "theta_deg": 11.25,
+      "no_pan": false
+    },
+    {
+      "id": "dlp_oblique",
+      "display_name": "DLP oblique",
+      "entry_joints_rad": [
+        2.802998778702893,
+        -1.3439035240356338,
+        0.767944870877505,
+        -1.8849555921538759,
+        1.8325957145940461,
+        0.2111848394913139
+      ],
+      "entry_tcp": {
+        "x_m": -0.14386110060262985,
+        "y_m": -0.030554022417969985,
+        "z_m": 0.6622789287562691,
+        "rx": 0.3738673332908756,
+        "ry": 0.3731916254616713,
+        "rz": 1.5371918487216778,
+        "tool_z_x": 0.45865729228879215,
+        "tool_z_y": -0.0006799657793959309,
+        "tool_z_z": 0.8886129786790493
+      },
+      "reachable": true,
+      "home_path_ok": true,
+      "base_sweep_ok": true,
+      "backup_coverage_ok": false,
+      "backup_union_deg": 0.0,
+      "phi_deg": -168.01,
+      "theta_deg": 27.3,
+      "no_pan": false
+    }
+  ]
+}

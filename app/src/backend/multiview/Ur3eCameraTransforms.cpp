@@ -517,9 +517,11 @@ bool writeCameraPoseJson(const QString &jsonPath, const Ur3eScanTcpPose &tcp,
   else
     root.insert(QStringLiteral("base_T_flange"), QJsonValue::Null);
 
-    if (calib != nullptr && calib->fppStepIndex >= 0)
+  if (calib != nullptr
+      && (calib->fppStepIndex >= 0 || !calib->fppPattern.isEmpty()))
   {
-    root.insert(QStringLiteral("fpp_step_index"), calib->fppStepIndex);
+    if (calib->fppStepIndex >= 0)
+      root.insert(QStringLiteral("fpp_step_index"), calib->fppStepIndex);
     if (!calib->fppStepLabel.isEmpty())
       root.insert(QStringLiteral("fpp_step_label"), calib->fppStepLabel);
     if (!calib->fppPattern.isEmpty())

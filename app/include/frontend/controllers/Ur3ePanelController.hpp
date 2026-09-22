@@ -75,7 +75,7 @@ public:
                                                 QString *errorMessage = nullptr,
                                                 CalibrationCaptureExtras *calibOut = nullptr) const;
 
-    /// HDMI 26-frame FPP at the current pose (Execute burst, no robot/stage motion).
+    /// HDMI 26-frame FPP at the current pose (no robot/stage motion).
     /// Call from a worker thread — BFS stills use BlockingQueuedConnection.
     [[nodiscard]] bool captureStationaryFppBurst(const QString &captureDir,
                                                  QString *errorMessage = nullptr);

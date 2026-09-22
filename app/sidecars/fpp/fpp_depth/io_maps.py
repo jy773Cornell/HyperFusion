@@ -47,6 +47,7 @@ def write_decode_maps(out_dir: Path, decoded: DecodeResult, stem: str = "fpp") -
     np.save(out_dir / f"{stem}_phase.npy", decoded.wrapped_phase)
     np.save(out_dir / f"{stem}_phase_v.npy", decoded.wrapped_phase_v)
     np.save(out_dir / f"{stem}_modulation.npy", decoded.modulation)
+    np.save(out_dir / f"{stem}_phase_quality.npy", decoded.phase_quality)
     _save_preview(out_dir / f"{stem}_mask.png", decoded.mask.astype(np.float32), decoded.mask, "FPP mask")
     _save_preview(out_dir / f"{stem}_projector_u.png", decoded.projector_u, decoded.mask, "Projector u (px)")
     if np.isfinite(decoded.projector_v).any():

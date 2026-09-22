@@ -117,6 +117,7 @@ private:
     QLabel *gridFormLabel_ = nullptr;
     QLabel *radiusFormLabel_ = nullptr;
     QLabel *rangeIntervalFormLabel_ = nullptr;
+    QLabel *rgbRangeIntervalFormLabel_ = nullptr;
     QLabel *stageFormLabel_ = nullptr;
     QLabel *thetaFormLabel_ = nullptr;
     QLabel *sweepFormLabel_ = nullptr;
@@ -128,6 +129,9 @@ private:
     QDoubleSpinBox *sphereRadiusSpin_ = nullptr;
     QWidget *rangeIntervalRow_ = nullptr;
     QDoubleSpinBox *fppRangeSpin_ = nullptr;
+    QWidget *rgbRangeIntervalRow_ = nullptr;
+    QDoubleSpinBox *rgbRangeSpin_ = nullptr;
+    QDoubleSpinBox *rgbIntervalSpin_ = nullptr;
     QSpinBox *horizontalPointsSpin_ = nullptr;
     QSpinBox *verticalPointsSpin_ = nullptr;
     QLabel *gridTimesLabel_ = nullptr;

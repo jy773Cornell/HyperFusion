@@ -22,12 +22,74 @@ except ImportError as exc:  # pragma: no cover
     raise SystemExit("open3d required") from exc
 
 
+# Intersection-era cleanup is aggressive (assumes multi-view support already
+# removed lonely noise). Union keeps 1-view surfaces, so knobs must be milder.
+_CLEANUP_PRESETS: dict[str, dict[str, float | int]] = {
+    "intersection": {
+        "sor_k": 25,
+        "sor_std": 1.75,
+        "ror_min_neighbors": 12,
+        "ror_radius_scale": 2.5,
+        "component_min_points": 800,
+        "final_component_eps_m": 0.0015,
+        "final_component_min_points": 500,
+        "surface_max_normal_angle_deg": 55.0,
+    },
+    "union": {
+        "sor_k": 20,
+        "sor_std": 2.50,
+        "ror_min_neighbors": 6,
+        "ror_radius_scale": 3.5,
+        "component_min_points": 300,
+        "final_component_eps_m": 0.0025,
+        "final_component_min_points": 200,
+        "surface_max_normal_angle_deg": 75.0,
+    },
+}
+
+
+def resolve_cleanup_defaults(
+    fusion_mode: str,
+    *,
+    sor_k: int | None = None,
+    sor_std: float | None = None,
+    ror_min_neighbors: int | None = None,
+    component_min_points: int | None = None,
+    final_component_eps_m: float | None = None,
+    final_component_min_points: int | None = None,
+    surface_max_normal_angle_deg: float | None = None,
+) -> dict[str, float | int | str]:
+    """Pick cleanup knobs for fusion mode; explicit values always win."""
+    mode = str(fusion_mode or "intersection").strip().lower()
+    if mode not in _CLEANUP_PRESETS:
+        mode = "intersection"
+    base = dict(_CLEANUP_PRESETS[mode])
+    if sor_k is not None:
+        base["sor_k"] = int(sor_k)
+    if sor_std is not None:
+        base["sor_std"] = float(sor_std)
+    if ror_min_neighbors is not None:
+        base["ror_min_neighbors"] = int(ror_min_neighbors)
+    if component_min_points is not None:
+        base["component_min_points"] = int(component_min_points)
+    if final_component_eps_m is not None:
+        base["final_component_eps_m"] = float(final_component_eps_m)
+    if final_component_min_points is not None:
+        base["final_component_min_points"] = int(final_component_min_points)
+    if surface_max_normal_angle_deg is not None:
+        base["surface_max_normal_angle_deg"] = float(surface_max_normal_angle_deg)
+    base["preset"] = mode
+    return base
+
+
 @dataclass
 class CleanupStats:
     n_in: int
     n_after_roi: int
     n_after_sor: int
     n_after_ror: int
+    n_after_surface: int
+    n_after_final_components: int
     n_out: int
     n_components_kept: int = 1
     mean_nn_m: float | None = None
@@ -52,22 +114,26 @@ def _estimate_mean_nn(cloud: o3d.geometry.PointCloud, *, k: int = 8, sample: int
 def roi_component_filter(
     cloud: o3d.geometry.PointCloud,
     *,
+    percentile_crop: bool = True,
     percentile_lo: float = 1.0,
     percentile_hi: float = 99.0,
     margin_m: float = 0.005,
     eps_m: float | None = None,
     min_points: int = 500,
 ) -> tuple[o3d.geometry.PointCloud, dict]:
-    """Crop to percentile AABB, then keep largest DBSCAN component(s)."""
+    """Optionally percentile-crop, then keep significant DBSCAN components."""
     pts = np.asarray(cloud.points)
     n0 = int(pts.shape[0])
     if n0 == 0:
         return cloud, {"n_in": 0, "n_out": 0}
 
-    lo = np.percentile(pts, percentile_lo, axis=0) - margin_m
-    hi = np.percentile(pts, percentile_hi, axis=0) + margin_m
-    inside = np.all((pts >= lo) & (pts <= hi), axis=1)
-    cropped = cloud.select_by_index(np.where(inside)[0].tolist())
+    if percentile_crop:
+        lo = np.percentile(pts, percentile_lo, axis=0) - margin_m
+        hi = np.percentile(pts, percentile_hi, axis=0) + margin_m
+        inside = np.all((pts >= lo) & (pts <= hi), axis=1)
+        cropped = cloud.select_by_index(np.where(inside)[0].tolist())
+    else:
+        cropped = cloud
 
     if eps_m is None:
         eps_m = max(0.003, 3.0 * _estimate_mean_nn(cropped))
@@ -107,6 +173,78 @@ def roi_component_filter(
     }
 
 
+def physical_workspace_filter(
+    cloud: o3d.geometry.PointCloud,
+    *,
+    tray_plane: list[float],
+    camera_c2w: list[np.ndarray],
+    width_m: float = 0.200,
+    depth_m: float = 0.200,
+) -> tuple[o3d.geometry.PointCloud, dict]:
+    """Crop a stage-centered box above the tray, derived from robot camera poses."""
+    pts = np.asarray(cloud.points)
+    n0 = int(pts.shape[0])
+    plane = np.asarray(tray_plane, dtype=np.float64).reshape(4)
+    normal_norm = float(np.linalg.norm(plane[:3]))
+    if n0 == 0 or normal_norm < 1.0e-9 or not camera_c2w:
+        return cloud, {"n_in": n0, "n_out": n0, "skipped": True}
+
+    normal = plane[:3] / normal_norm
+    offset = float(plane[3]) / normal_norm
+    cameras = np.asarray([pose[:3, 3] for pose in camera_c2w], dtype=np.float64)
+    camera_side = cameras @ normal + offset
+    # "Above" means the tray side containing the robot cameras.
+    up = normal if float(np.median(camera_side)) >= 0.0 else -normal
+
+    intersections: list[np.ndarray] = []
+    for pose in camera_c2w:
+        origin = pose[:3, 3]
+        forward = pose[:3, 2]
+        denom = float(np.dot(normal, forward))
+        if abs(denom) < 1.0e-6:
+            continue
+        ray_t = -float(np.dot(normal, origin) + offset) / denom
+        if ray_t > 0.0:
+            intersections.append(origin + ray_t * forward)
+    if intersections:
+        center = np.median(np.asarray(intersections), axis=0)
+    else:
+        center = np.median(cameras, axis=0)
+        center = center - (float(np.dot(normal, center)) + offset) * normal
+
+    axis_u = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+    axis_u -= float(np.dot(axis_u, up)) * up
+    if float(np.linalg.norm(axis_u)) < 1.0e-6:
+        axis_u = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        axis_u -= float(np.dot(axis_u, up)) * up
+    axis_u /= np.linalg.norm(axis_u)
+    axis_v = np.cross(up, axis_u)
+    axis_v /= np.linalg.norm(axis_v)
+
+    relative = pts - center
+    u = relative @ axis_u
+    v = relative @ axis_v
+    height = relative @ up
+    half_width = 0.5 * float(width_m)
+    inside = (
+        (np.abs(u) <= half_width)
+        & (np.abs(v) <= half_width)
+        & (height >= 0.0)
+        & (height <= float(depth_m))
+    )
+    out = cloud.select_by_index(np.flatnonzero(inside).tolist())
+    return out, {
+        "n_in": n0,
+        "n_out": int(len(out.points)),
+        "width_m": float(width_m),
+        "depth_m": float(depth_m),
+        "center_world_m": center.tolist(),
+        "up_world": up.tolist(),
+        "axis_u_world": axis_u.tolist(),
+        "axis_v_world": axis_v.tolist(),
+    }
+
+
 def statistical_outlier_removal(
     cloud: o3d.geometry.PointCloud,
     *,
@@ -135,14 +273,15 @@ def radius_outlier_removal(
     *,
     radius_m: float | None = None,
     min_neighbors: int = 12,
+    radius_scale: float = 2.5,
 ) -> tuple[o3d.geometry.PointCloud, dict]:
     """ROR: remove points with too few neighbors inside radius."""
     n0 = int(len(cloud.points))
     if n0 == 0:
         return cloud, {"n_in": 0, "n_out": 0}
     if radius_m is None:
-        # ~2.5× mean spacing — isolates small fragments around berries
-        radius_m = max(0.002, 2.5 * _estimate_mean_nn(cloud))
+        # Scale × mean spacing — larger scale / fewer neighbors = milder (union).
+        radius_m = max(0.002, float(radius_scale) * _estimate_mean_nn(cloud))
     cleaned, ind = cloud.remove_radius_outlier(
         nb_points=int(min_neighbors),
         radius=float(radius_m),
@@ -153,6 +292,57 @@ def radius_outlier_removal(
         "n_removed": n0 - int(len(cleaned.points)),
         "radius_m": float(radius_m),
         "min_neighbors": int(min_neighbors),
+        "radius_scale": float(radius_scale),
+    }
+
+
+def multiscale_surface_filter(
+    cloud: o3d.geometry.PointCloud,
+    *,
+    max_normal_angle_deg: float = 55.0,
+) -> tuple[o3d.geometry.PointCloud, dict]:
+    """Reject points whose fine- and coarse-scale normals strongly disagree."""
+    n0 = int(len(cloud.points))
+    if n0 < 50:
+        return cloud, {"n_in": n0, "n_out": n0, "skipped": True}
+
+    spacing = _estimate_mean_nn(cloud)
+    fine_radius = max(0.002, 3.0 * spacing)
+    coarse_radius = max(0.004, 6.0 * spacing)
+    fine_cloud = o3d.geometry.PointCloud(cloud)
+    coarse_cloud = o3d.geometry.PointCloud(cloud)
+    fine_cloud.estimate_normals(
+        search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=fine_radius, max_nn=30)
+    )
+    coarse_cloud.estimate_normals(
+        search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=coarse_radius, max_nn=60)
+    )
+    fine = np.asarray(fine_cloud.normals)
+    coarse = np.asarray(coarse_cloud.normals)
+    agreement = np.abs(np.einsum("ij,ij->i", fine, coarse))
+    threshold = float(np.cos(np.deg2rad(max_normal_angle_deg)))
+    keep = np.isfinite(agreement) & (agreement >= threshold)
+    out = cloud.select_by_index(np.flatnonzero(keep).tolist())
+    if len(out.points) > 0:
+        out.estimate_normals(
+            search_param=o3d.geometry.KDTreeSearchParamHybrid(
+                radius=coarse_radius, max_nn=60
+            )
+        )
+        # Sign consistency is useful downstream; filtering itself is sign-invariant.
+        try:
+            out.orient_normals_consistent_tangent_plane(20)
+        except RuntimeError:
+            # Filtering remains valid because agreement used abs(dot).
+            pass
+    return out, {
+        "n_in": n0,
+        "n_out": int(len(out.points)),
+        "n_removed": n0 - int(len(out.points)),
+        "mean_nn_m": float(spacing),
+        "fine_radius_m": float(fine_radius),
+        "coarse_radius_m": float(coarse_radius),
+        "max_normal_angle_deg": float(max_normal_angle_deg),
     }
 
 
@@ -204,29 +394,57 @@ def cleanup_dense_cloud(
     do_roi: bool = True,
     do_sor: bool = True,
     do_ror: bool = True,
+    do_surface: bool = True,
+    do_final_components: bool = True,
     do_smooth: bool = False,
+    tray_plane: list[float] | None = None,
+    camera_c2w: list[np.ndarray] | None = None,
+    workspace_width_m: float = 0.200,
+    workspace_depth_m: float = 0.200,
     sor_k: int = 25,
     sor_std: float = 1.75,
     ror_min_neighbors: int = 12,
     ror_radius_m: float | None = None,
+    ror_radius_scale: float = 2.5,
     component_min_points: int = 800,
+    final_component_eps_m: float = 0.0015,
+    final_component_min_points: int = 500,
+    surface_max_normal_angle_deg: float = 55.0,
 ) -> tuple[o3d.geometry.PointCloud, CleanupStats]:
-    """Run ROI → SOR → ROR → optional light smooth on a dense fused cloud."""
+    """Run physical ROI/components, SOR, ROR, normals, and optional smoothing."""
     n_in = int(len(cloud.points))
     stats = CleanupStats(
         n_in=n_in,
         n_after_roi=n_in,
         n_after_sor=n_in,
         n_after_ror=n_in,
+        n_after_surface=n_in,
+        n_after_final_components=n_in,
         n_out=n_in,
     )
     cur = cloud
 
     if do_roi:
-        cur, s = roi_component_filter(cur, min_points=int(component_min_points))
+        if tray_plane is not None and camera_c2w:
+            cur, workspace_stats = physical_workspace_filter(
+                cur,
+                tray_plane=tray_plane,
+                camera_c2w=camera_c2w,
+                width_m=float(workspace_width_m),
+                depth_m=float(workspace_depth_m),
+            )
+            stats.steps["workspace"] = workspace_stats
+            percentile_crop = False
+        else:
+            percentile_crop = True
+        cur, s = roi_component_filter(
+            cur,
+            percentile_crop=percentile_crop,
+            min_points=int(component_min_points),
+        )
         stats.n_after_roi = int(len(cur.points))
         stats.n_components_kept = int(s.get("n_components_kept", 1))
-        stats.steps["roi"] = s
+        stats.steps["components"] = s
 
     if do_sor and len(cur.points) > 0:
         cur, s = statistical_outlier_removal(cur, nb_neighbors=sor_k, std_ratio=sor_std)
@@ -237,12 +455,36 @@ def cleanup_dense_cloud(
 
     if do_ror and len(cur.points) > 0:
         cur, s = radius_outlier_removal(
-            cur, radius_m=ror_radius_m, min_neighbors=ror_min_neighbors
+            cur,
+            radius_m=ror_radius_m,
+            min_neighbors=ror_min_neighbors,
+            radius_scale=float(ror_radius_scale),
         )
         stats.n_after_ror = int(len(cur.points))
         stats.steps["ror"] = s
     else:
         stats.n_after_ror = int(len(cur.points))
+
+    if do_surface and len(cur.points) > 0:
+        cur, s = multiscale_surface_filter(
+            cur, max_normal_angle_deg=float(surface_max_normal_angle_deg)
+        )
+        stats.n_after_surface = int(len(cur.points))
+        stats.steps["surface"] = s
+    else:
+        stats.n_after_surface = int(len(cur.points))
+
+    if do_final_components and len(cur.points) > 0:
+        cur, s = roi_component_filter(
+            cur,
+            percentile_crop=False,
+            eps_m=float(final_component_eps_m),
+            min_points=int(final_component_min_points),
+        )
+        stats.n_after_final_components = int(len(cur.points))
+        stats.steps["final_components"] = s
+    else:
+        stats.n_after_final_components = int(len(cur.points))
 
     if do_smooth and len(cur.points) > 0:
         cur, s = light_mls_smooth(cur)

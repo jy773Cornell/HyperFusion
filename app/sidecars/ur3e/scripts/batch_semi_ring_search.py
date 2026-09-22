@@ -446,20 +446,25 @@ def build_ring_poses(
     tilt_deg: float,
     *,
     start_index: int = 0,
+    up: tuple[float, float, float] = (0.0, 0.0, 1.0),
 ) -> list[dict[str, Any]]:
-    """One latitude ring. Look-at tray XY (0,0). Image-up = world +Z (camera bottom)."""
+    """One latitude ring. Look-at tray XY (0,0). Default image-up = world +Z.
+
+    DLP TCP (yaw≈180): +Z-up puts camera on the bottom / projector on top.
+    Camera TCP (yaw≈0): use up=(0,0,-1) for the same payload roll.
+    """
     poses: list[dict[str, Any]] = []
     theta = math.radians(theta_deg)
     sin_t, cos_t = math.sin(theta), math.cos(theta)
-    up = (0.0, 0.0, 1.0)
+    ux, uy, uz = float(up[0]), float(up[1]), float(up[2])
     for i in range(max(1, n_phi)):
         phi_deg = 360.0 * i / float(n_phi)
         phi = math.radians(phi_deg)
         x = radius_m * sin_t * math.cos(phi)
         y = radius_m * sin_t * math.sin(phi)
         z = radius_m * cos_t
-        zx, zy, zz = apply_pin_tilt(-x, -y, -z, up, tilt_deg)
-        rx, ry, rz = tool_z_to_rotation_vector(zx, zy, zz, up=up)
+        zx, zy, zz = apply_pin_tilt(-x, -y, -z, (ux, uy, uz), tilt_deg)
+        rx, ry, rz = tool_z_to_rotation_vector(zx, zy, zz, up=(ux, uy, uz))
         poses.append(
             {
                 "index": start_index + i,
@@ -472,9 +477,9 @@ def build_ring_poses(
                 "tool_z_x": zx,
                 "tool_z_y": zy,
                 "tool_z_z": zz,
-                "camera_up_x": 0.0,
-                "camera_up_y": 0.0,
-                "camera_up_z": 1.0,
+                "camera_up_x": ux,
+                "camera_up_y": uy,
+                "camera_up_z": uz,
                 "require_perpendicular": False,
                 "theta_deg": float(theta_deg),
                 "phi_deg": float(phi_deg),
@@ -490,10 +495,11 @@ def build_cylinder_poses(
     tilt_deg: float,
     *,
     start_index: int = 0,
+    up: tuple[float, float, float] = (0.0, 0.0, 1.0),
 ) -> list[dict[str, Any]]:
-    """Vertical cylinder: fixed XY radius, look-at tray origin (0,0,0). Camera up = world +Z."""
+    """Vertical cylinder: fixed XY radius, look-at tray origin (0,0,0)."""
     look_deg = math.degrees(math.atan2(max(0.0, rho_m), max(1.0e-9, z_m)))
-    up = (0.0, 0.0, 1.0)
+    ux, uy, uz = float(up[0]), float(up[1]), float(up[2])
     poses: list[dict[str, Any]] = []
     for i in range(max(1, n_phi)):
         phi_deg = 360.0 * i / float(n_phi)
@@ -501,8 +507,8 @@ def build_cylinder_poses(
         x = rho_m * math.cos(phi)
         y = rho_m * math.sin(phi)
         z = z_m
-        zx, zy, zz = apply_pin_tilt(-x, -y, -z, up, tilt_deg)
-        rx, ry, rz = tool_z_to_rotation_vector(zx, zy, zz, up=up)
+        zx, zy, zz = apply_pin_tilt(-x, -y, -z, (ux, uy, uz), tilt_deg)
+        rx, ry, rz = tool_z_to_rotation_vector(zx, zy, zz, up=(ux, uy, uz))
         poses.append(
             {
                 "index": start_index + i,
@@ -515,9 +521,9 @@ def build_cylinder_poses(
                 "tool_z_x": zx,
                 "tool_z_y": zy,
                 "tool_z_z": zz,
-                "camera_up_x": 0.0,
-                "camera_up_y": 0.0,
-                "camera_up_z": 1.0,
+                "camera_up_x": ux,
+                "camera_up_y": uy,
+                "camera_up_z": uz,
                 "require_perpendicular": False,
                 "theta_deg": float(look_deg),
                 "phi_deg": float(phi_deg),

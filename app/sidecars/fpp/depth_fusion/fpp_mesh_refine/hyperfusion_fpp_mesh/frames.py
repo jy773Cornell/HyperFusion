@@ -33,6 +33,7 @@ class DepthFrame:
     c2w: np.ndarray  # 4x4
     pose_source: str
     conf: np.ndarray | None = None  # HxW float32 [0,1]
+    phase_quality: np.ndarray | None = None  # HxW PSP fringe quality
     meta: dict = field(default_factory=dict)
 
 
@@ -83,6 +84,12 @@ def load_raw_frames(
             mod = np.load(mod_path).astype(np.float32)
             if mod.shape == mask.shape and float(min_modulation) > 0.0:
                 mask = mask & (mod >= float(min_modulation))
+        phase_quality = None
+        phase_quality_path = pose_dir / "fpp_phase_quality.npy"
+        if phase_quality_path.is_file():
+            phase_quality = np.load(phase_quality_path).astype(np.float32)
+            if phase_quality.shape != mask.shape:
+                phase_quality = None
 
         depth_m = np.full(depth_mm.shape, np.nan, dtype=np.float32)
         valid = mask & np.isfinite(depth_mm)
@@ -105,6 +112,8 @@ def load_raw_frames(
             color = color[::stride, ::stride].copy()
             if mod is not None:
                 mod = mod[::stride, ::stride].copy()
+            if phase_quality is not None:
+                phase_quality = phase_quality[::stride, ::stride].copy()
             K = K.copy()
             K[0, 0] /= float(stride)
             K[1, 1] /= float(stride)
@@ -123,6 +132,7 @@ def load_raw_frames(
                 K=K,
                 c2w=c2w.copy(),
                 pose_source=src,
+                phase_quality=phase_quality,
                 meta=meta,
             )
         )

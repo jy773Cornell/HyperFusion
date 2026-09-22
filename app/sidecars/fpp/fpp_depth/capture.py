@@ -1,7 +1,8 @@
-﻿"""Load one HyperFusion FPP pin burst (26 HDMI PSP TIFF + JSON, or legacy 14 u-only).
+﻿"""Load one HyperFusion FPP pin burst.
 
-RGB stills become one decode channel: ``r``/``g``/``b`` when DLP LEDs are mono-primary
-(JSON ``dlp_led`` / ``decode_channel``), else Rec.601 ``luma``.
+New captures are a 26-frame HDMI PSP burst (black + white + 12u + 12v).
+Older captures that start with a full-white RGB visual TIFF are still loaded;
+color for new scans comes from the plan RGB ring, not that visual frame.
 """
 
 from __future__ import annotations
@@ -44,7 +45,9 @@ STEP_SPECS: tuple[tuple[int, str, str], ...] = (
     (25, "PSP sine v 80 270", "80-period sine v 270"),
 )
 STEP_COUNT = len(STEP_SPECS)
+CAPTURE_STEP_COUNT = STEP_COUNT + 1
 U_ONLY_STEP_COUNT = 14
+VISUAL_COLOR_PATTERN = "fpp visual color"
 PROJECTOR_WIDTH_PX = 1280
 PROJECTOR_HEIGHT_PX = 720
 
@@ -185,6 +188,7 @@ class FppBurst:
     frames: list[FppFrame]
     by_index: dict[int, FppFrame] = field(default_factory=dict)
     decode_channel: str = "luma"
+    visual_color_path: Path | None = None
 
     def image(self, step_index: int) -> np.ndarray:
         return self.by_index[step_index].image
@@ -222,8 +226,28 @@ def _match_step(
     return fallback_index, pattern or spec[1], label or spec[2]
 
 
+def _is_visual_color_meta(meta: dict[str, Any]) -> bool:
+    pattern = str(meta.get("fpp_pattern", "")).strip().lower()
+    label = str(meta.get("fpp_step_label", "")).strip().lower()
+    return pattern == VISUAL_COLOR_PATTERN or "visual color" in label
+
+
+def _has_fpp_fields(meta: dict[str, Any]) -> bool:
+    """True when pose JSON is an FPP still (not a plain RGB ring capture)."""
+    if _is_visual_color_meta(meta):
+        return True
+    if "fpp_step_index" in meta:
+        return True
+    pattern = str(meta.get("fpp_pattern", "")).strip()
+    label = str(meta.get("fpp_step_label", "")).strip()
+    return bool(pattern or label)
+
+
 def _burst_stride(tiffs: list[Path], offset: int) -> int:
     remaining = len(tiffs) - offset
+    first_json = tiffs[offset].with_suffix(".json")
+    if first_json.is_file() and _is_visual_color_meta(_read_json(first_json)):
+        return CAPTURE_STEP_COUNT
     limit = min(STEP_COUNT, remaining)
     for path in tiffs[offset : offset + limit]:
         json_path = path.with_suffix(".json")
@@ -246,7 +270,11 @@ def _burst_stride(tiffs: list[Path], offset: int) -> int:
 
 
 def list_burst_starts(directory: Path) -> list[Path]:
-    """TIFF stems that begin a 26-frame (u+v) or legacy 14-frame (u) HDMI PSP burst."""
+    """TIFF stems beginning a visual+26, existing 26, or legacy 14 burst.
+
+    Plain RGB ring stills (no ``fpp_*`` JSON fields) are skipped so they are not
+    mistaken for FPP black frames when their indices align to the burst stride.
+    """
     tiffs = sorted(directory.glob("*.tif"), key=_stem_sort_key)
     tiffs += sorted(p for p in directory.glob("*.tiff") if p not in tiffs)
     if not tiffs:
@@ -254,22 +282,28 @@ def list_burst_starts(directory: Path) -> list[Path]:
     starts: list[Path] = []
     i = 0
     while i < len(tiffs):
-        stride = _burst_stride(tiffs, i)
         json_path = tiffs[i].with_suffix(".json")
-        if json_path.is_file():
-            meta = _read_json(json_path)
-            index, _, _ = _match_step(meta, 0, STEP_SPECS[:stride])
-            if index == 0:
-                starts.append(tiffs[i])
-                i += stride
-                continue
-        if i + stride <= len(tiffs) and (i % stride) == 0:
+        if not json_path.is_file():
+            i += 1
+            continue
+        meta = _read_json(json_path)
+        if not _has_fpp_fields(meta):
+            i += 1
+            continue
+        stride = _burst_stride(tiffs, i)
+        if i + stride > len(tiffs):
+            # Incomplete trailing burst (e.g. scan stopped mid-pin) — skip.
+            break
+        if _is_visual_color_meta(meta):
+            starts.append(tiffs[i])
+            i += stride
+            continue
+        index, _, _ = _match_step(meta, -1, STEP_SPECS[:stride])
+        if index == 0:
             starts.append(tiffs[i])
             i += stride
             continue
         i += 1
-    if not starts and len(tiffs) >= U_ONLY_STEP_COUNT:
-        starts.append(tiffs[0])
     return starts
 
 
@@ -326,14 +360,22 @@ def load_burst(
     offset = next((i for i, p in enumerate(tiffs) if p.name == start_name), None)
     if offset is None:
         raise FileNotFoundError(f"Burst start {start_name} is not in {directory}")
-    stride = _burst_stride(tiffs, offset)
-    specs = STEP_SPECS[:stride]
-    if len(tiffs) < offset + stride:
+    capture_stride = _burst_stride(tiffs, offset)
+    if len(tiffs) < offset + capture_stride:
         raise FileNotFoundError(
-            f"{directory} needs {stride} HDMI PSP TIFFs from {start.name}. "
+            f"{directory} needs {capture_stride} FPP TIFFs from {start.name}. "
             f"Found {len(tiffs) - offset}."
         )
-    chunk = tiffs[offset : offset + stride]
+    capture_chunk = tiffs[offset : offset + capture_stride]
+    first_capture_meta: dict[str, Any] = {}
+    first_capture_json = capture_chunk[0].with_suffix(".json")
+    if first_capture_json.is_file():
+        first_capture_meta = _read_json(first_capture_json)
+    has_visual_color = _is_visual_color_meta(first_capture_meta)
+    visual_color_path = capture_chunk[0] if has_visual_color else None
+    chunk = capture_chunk[1:] if has_visual_color else capture_chunk
+    decode_stride = len(chunk)
+    specs = STEP_SPECS[:decode_stride]
 
     first_meta: dict[str, Any] = {}
     first_json = chunk[0].with_suffix(".json")
@@ -371,6 +413,7 @@ def load_burst(
         frames=frames,
         by_index=by_index,
         decode_channel=decode_ch,
+        visual_color_path=visual_color_path,
     )
 
 

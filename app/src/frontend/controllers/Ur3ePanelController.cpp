@@ -54,6 +54,7 @@
 #include <cstdint>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <thread>
 #include <vector>
 
@@ -502,11 +503,12 @@ bool saveOneBfsStillAtPin(Ur3ePanelController *controller,
     const QString poseJsonPath = QDir(captureDir).filePath(stem + QStringLiteral(".json"));
     QString poseError;
     CalibrationCaptureExtras calib = extrasFromLivePose(livePose);
-    calib.fppStepIndex = fppStepIndex;
     calib.fppStepLabel = fppStepLabel;
     if (fppStepIndex >= 0 && fppStepIndex < hf::dlp::kFppScanningStepCount)
     {
         const hf::dlp::FppScanStep &step = hf::dlp::kFppScanningSteps[fppStepIndex];
+        // Sequence index matches decoder-facing PSP indices 0..25 (black..v80).
+        calib.fppStepIndex = fppStepIndex;
         const char *patternName = step.patternName;
         calib.fppPattern = patternName != nullptr
                                ? QString::fromUtf8(patternName)
@@ -580,8 +582,9 @@ bool saveOneBfsStillAtPin(Ur3ePanelController *controller,
     return true;
 }
 
-/// If DLP is connected: 11 FPP steps, 0.5 s dwell, one still each, then blank.
+/// If DLP is connected: 26 PSP stills, then blank.
 /// Otherwise one still (existing Multiview behavior).
+/// Color RGB uses the plan RGB ring (rgb exposure / capture_kind), not a white FPP step.
 bool capturePinStillsMaybeFpp(Ur3ePanelController *controller,
                               MainWindow *host,
                               const QString &serverUrl,
@@ -593,10 +596,11 @@ bool capturePinStillsMaybeFpp(Ur3ePanelController *controller,
                               QString *errorMessage,
                               const QString &skipContext,
                               const std::function<bool()> &sessionActive,
-                              const OutputPoseShift &outputShift = {})
+                              const OutputPoseShift &outputShift = {},
+                              bool rgbOnly = false)
 {
     hf::dlp::DlpPanelController *dlp = host != nullptr ? host->dlpPanel() : nullptr;
-    const bool fpp = dlp != nullptr && dlp->isConnected();
+    const bool fpp = !rgbOnly && dlp != nullptr && dlp->isConnected();
     if (!fpp)
     {
         return saveOneBfsStillAtPin(controller,
@@ -3489,7 +3493,8 @@ void Ur3ePanelController::refreshSemiFixedPreview()
     const bool fppMode =
         host_->ur3eHemisphereScanSettings_->scanExecuteMode() == Ur3eScanExecuteMode::Fpp;
     // Canned default top is always injected; only real planned/added rings skip params.
-    if (!route.rings.isEmpty() || (fppMode && route.hasTopPose))
+    if (!route.rings.isEmpty() || (fppMode && (route.hasTopPose || route.hasRgbRing
+                                               || route.hasRgbHome)))
         rings = fppMode ? inferFppPreviewPins(route) : inferSemiFixedPreviewRings(route);
     else if (!plannedScanPlan_.points.empty())
         rings = previewSemiFixedRingsFromHemispherePlan(plannedScanPlan_);
@@ -3543,7 +3548,8 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
     pruneSemiFixedRedundantFullSpinPins(route);
     ensureSemiFixedTopPose(route);
     host_->ur3eHemisphereScanSettings_->setSemiFixedRoute(route);
-    if (route.rings.isEmpty() && !route.hasTopPose)
+    if (route.rings.isEmpty() && !route.hasTopPose && !route.hasRgbRing
+        && !route.hasRgbHome)
     {
         host_->appendLog(
             QStringLiteral("UR3e semi-fixed execute rejected: add a ring or load an apex plan."));
@@ -3592,6 +3598,81 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
     stopRequested_.store(false, std::memory_order_release);
     scanExecuting_ = true;
     scanExecuteSuppressUiSummary_ = options.suppressUiSummary;
+
+    double guiExposureUs = 15005.0;
+    hf::bfs::BfsCameraSettings bfsUiSettings{};
+    hf::bfs::BfsCameraSettings dlpCaptureSettings{};
+    hf::bfs::BfsCameraSettings rgbCaptureSettings{};
+    bool haveBfsCaptureSettings = false;
+    if (host_->bfsPanel() != nullptr)
+    {
+        host_->bfsPanel()->setCaptureSettingsOverride(std::nullopt);
+        if (host_->bfsPanel()->isCameraConnected())
+        {
+            // Snapshot on the GUI thread — never read QWidgets from the scan worker.
+            bfsUiSettings = host_->bfsPanel()->settingsFromUi();
+            guiExposureUs = bfsUiSettings.exposureTimeUs > 0.0 ? bfsUiSettings.exposureTimeUs
+                                                              : guiExposureUs;
+            haveBfsCaptureSettings = true;
+        }
+    }
+    const double dlpExposureUs =
+        route.hasDlpExposure && route.dlpExposureUs > 0.0 ? route.dlpExposureUs
+                                                          : guiExposureUs;
+    const double rgbExposureUs =
+        route.hasRgbExposure && route.rgbExposureUs > 0.0 ? route.rgbExposureUs
+                                                          : guiExposureUs;
+    if (haveBfsCaptureSettings)
+    {
+        dlpCaptureSettings = hf::bfs::BfsPanelController::settingsWithCaptureExposure(
+            bfsUiSettings, dlpExposureUs);
+        rgbCaptureSettings = hf::bfs::BfsPanelController::settingsWithCaptureExposure(
+            bfsUiSettings, rgbExposureUs);
+    }
+    if (captureStills && host_->bfsPanel() != nullptr && host_->bfsPanel()->isCameraConnected())
+    {
+        host_->appendLog(
+            QStringLiteral("UR3e FPP/semi: BFS exposure DLP %1 µs%2, RGB %3 µs%4")
+                .arg(dlpExposureUs, 0, 'f', 0)
+                .arg(route.hasDlpExposure ? QStringLiteral(" (plan)")
+                                          : QStringLiteral(" (GUI)"))
+                .arg(rgbExposureUs, 0, 'f', 0)
+                .arg(route.hasRgbExposure ? QStringLiteral(" (plan)")
+                                          : QStringLiteral(" (GUI)")));
+
+        // Apply DLP exposure on the GUI thread before motion/capture (avoids Spinnaker
+        // stop/start racing the first FPP burst on the worker thread).
+        const auto exposureAlreadySet = [](const hf::bfs::BfsCameraSettings &cur,
+                                           const hf::bfs::BfsCameraSettings &want) {
+            return cur.exposureMode.compare(want.exposureMode, Qt::CaseInsensitive) == 0
+                   && cur.exposureAuto.compare(want.exposureAuto, Qt::CaseInsensitive) == 0
+                   && std::abs(cur.exposureTimeUs - want.exposureTimeUs) < 0.5;
+        };
+        if (!exposureAlreadySet(bfsUiSettings, dlpCaptureSettings))
+        {
+            QString applyErr;
+            if (!host_->bfsPanel()->applyCameraSettingsBlocking(dlpCaptureSettings, &applyErr))
+            {
+                host_->appendLog(QStringLiteral("UR3e: BFS DLP exposure apply failed — %1")
+                                     .arg(applyErr));
+                scanExecuting_ = false;
+                setBusy(false);
+                return false;
+            }
+            const std::uint64_t after = host_->bfsPanel()->lastFrameIndex();
+            host_->bfsPanel()->waitForNewerFrame(after, 1, 4000);
+            host_->appendLog(QStringLiteral("UR3e: BFS exposure → %1 µs (DLP/FPP)")
+                                 .arg(dlpExposureUs, 0, 'f', 0));
+        }
+        else
+        {
+            host_->bfsPanel()->setCaptureSettingsOverride(dlpCaptureSettings);
+            host_->appendLog(QStringLiteral(
+                                 "UR3e: BFS exposure already %1 µs (DLP/FPP) — skip re-apply")
+                                 .arg(dlpExposureUs, 0, 'f', 0));
+        }
+    }
+
     Ur3eWristSweepParams wristSweep{};
     if (host_->ur3eHemisphereScanSettings_ != nullptr)
         wristSweep = host_->ur3eHemisphereScanSettings_->wristSweepParams();
@@ -3601,14 +3682,27 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
             route.intervalDeg > 0.0 ? route.intervalDeg : 10.0;
         int ringSamples = 0;
         for (const Ur3eSemiFixedRing &ring : route.rings)
-            ringSamples += semiFixedRingSampleCount(ring, intervalDeg, route.panRangeDeg);
+        {
+            ringSamples += semiFixedRingSampleCount(
+                ring,
+                resolveRingIntervalDeg(ring, intervalDeg),
+                resolveRingPanRangeDeg(ring, route.panRangeDeg));
+        }
+        if (route.hasRgbRing)
+        {
+            ringSamples += semiFixedRingSampleCount(
+                route.rgbRing,
+                resolveRingIntervalDeg(route.rgbRing, intervalDeg),
+                resolveRingPanRangeDeg(route.rgbRing, route.panRangeDeg));
+        }
         const bool skipTop = options.pinSet == HemisphereScanPinSet::RingsOnly;
         const bool skipRings = options.pinSet == HemisphereScanPinSet::ApexOnly;
         const bool apexRingOnly =
             route.rings.size() == 1
             && (route.rings[0].noPan || std::abs(route.rings[0].thetaDeg) < 0.75);
-        const int topSamples =
-            (!skipTop && !(apexRingOnly && !skipRings)) ? 1 : 0;
+        const bool doTop =
+            !skipTop && route.hasTopPose && !(apexRingOnly && !skipRings);
+        const int topSamples = doTop ? 1 : 0;
         const int basePins = topSamples + (skipRings ? 0 : ringSamples);
         const int plannedPins = basePins * std::max(1, wristSweep.imagesPerPin());
         host_->ur3eScanRoutePlanWidget_->beginScanExecution(plannedPins);
@@ -3651,9 +3745,11 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
         scanExecuteThread_ = std::thread([this, serverUrl, route, sessionId, captureDir,
                                           captureStills, stabilizeMs, wristSweep,
                                           startFrameIndex, appendTransformsJson, skipTop,
-                                          skipRings, useStage, stageMm]() {
+                                          skipRings, useStage, stageMm, rgbCaptureSettings,
+                                          haveBfsCaptureSettings, rgbExposureUs]() {
             int captured = startFrameIndex;
             TransformsJsonDocument transformsDoc;
+            bool rgbExposureApplied = false;
 
             const auto sessionActive = [this, sessionId]() {
                 return !shutdownRequested_.load(std::memory_order_acquire)
@@ -3663,13 +3759,75 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
                 return sessionActive() && !stopRequested_.load(std::memory_order_acquire);
             };
 
+            const auto clearBfsCaptureOverride = [this]() {
+                QMetaObject::invokeMethod(
+                    this,
+                    [this]() {
+                        if (host_ != nullptr && host_->bfsPanel() != nullptr)
+                            host_->bfsPanel()->setCaptureSettingsOverride(std::nullopt);
+                    },
+                    Qt::QueuedConnection);
+            };
+
+            const auto ensureBfsExposure = [this, captureStills, &rgbExposureApplied,
+                                           rgbCaptureSettings, haveBfsCaptureSettings,
+                                           rgbExposureUs, &captureContinue](
+                                              const bool rgbOnly,
+                                              QString *errorOut) -> bool {
+                if (!captureStills || !haveBfsCaptureSettings)
+                    return true;
+                hf::bfs::BfsPanelController *bfs =
+                    host_ != nullptr ? host_->bfsPanel() : nullptr;
+                if (bfs == nullptr || !bfs->isCameraConnected())
+                    return true;
+                if (!rgbOnly)
+                    return true; // DLP exposure applied on GUI thread before this worker.
+                if (rgbExposureApplied)
+                    return true;
+
+                // Apply RGB exposure on the GUI thread (Spinnaker + override bookkeeping).
+                bool applyOk = false;
+                QString applyErr;
+                QMetaObject::invokeMethod(
+                    this,
+                    [bfs, rgbCaptureSettings, &applyOk, &applyErr]() {
+                        applyOk = bfs->applyCameraSettingsBlocking(rgbCaptureSettings, &applyErr);
+                    },
+                    Qt::BlockingQueuedConnection);
+                if (!applyOk)
+                {
+                    if (errorOut != nullptr)
+                    {
+                        *errorOut =
+                            QStringLiteral("BFS RGB exposure %1 µs failed: %2")
+                                .arg(rgbExposureUs, 0, 'f', 0)
+                                .arg(applyErr);
+                    }
+                    return false;
+                }
+                const std::uint64_t after = bfs->lastFrameIndex();
+                bfs->waitForNewerFrame(after, 1, 4000, nullptr, [&captureContinue]() {
+                    return !captureContinue();
+                });
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, rgbExposureUs]() {
+                        host_->appendLog(QStringLiteral("UR3e: BFS exposure → %1 µs (RGB)")
+                                             .arg(rgbExposureUs, 0, 'f', 0));
+                    },
+                    Qt::QueuedConnection);
+                rgbExposureApplied = true;
+                return true;
+            };
+
             const auto finishWithCapture = [this, &transformsDoc, captureStills, captureDir,
                                             &captured, appendTransformsJson, useStage,
-                                            &sessionActive, stageMm](
+                                            &sessionActive, stageMm, clearBfsCaptureOverride](
                                                bool finishOk, const QString &finishError,
                                                int executedCount, bool stopped,
                                                int /*capturedFromExec*/,
                                                qint64 elapsedMs) {
+                clearBfsCaptureOverride();
                 parkStageAtMvsAfterExecuteIfUsed(host_, useStage, sessionActive, stageMm);
                 if (captureStills && !transformsDoc.frames.empty())
                 {
@@ -3694,6 +3852,10 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
                                           Q_ARG(int, captured), Q_ARG(qint64, elapsedMs));
             };
 
+            // Mirror execute: rgb_home then rgb_ring appended after FPP rings.
+            Ur3eSemiFixedRoute captureRoute = route;
+            foldRgbEntriesIntoRings(captureRoute);
+
             const auto captureStillAtPose = [&](const Ur3eScanTcpPose &plannedTcp,
                                                 const int ringIndex,
                                                 const int sampleIndex) -> bool {
@@ -3703,6 +3865,25 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
                     ringIndex < 0
                         ? QStringLiteral("top")
                         : QStringLiteral("ring %1 sample %2").arg(ringIndex).arg(sampleIndex);
+                bool rgbOnly = false;
+                if (ringIndex >= 0 && ringIndex < captureRoute.rings.size())
+                {
+                    rgbOnly = captureRoute.rings[ringIndex].captureKind.trimmed().compare(
+                                  QStringLiteral("rgb"), Qt::CaseInsensitive)
+                              == 0;
+                }
+                QString exposureErr;
+                if (!ensureBfsExposure(rgbOnly, &exposureErr))
+                {
+                    QMetaObject::invokeMethod(
+                        this,
+                        [this, exposureErr]() {
+                            host_->appendLog(QStringLiteral("UR3e capture aborted: %1")
+                                                 .arg(exposureErr));
+                        },
+                        Qt::QueuedConnection);
+                    return false;
+                }
                 return capturePinStillsMaybeFpp(this,
                                                 host_,
                                                 serverUrl,
@@ -3714,7 +3895,8 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
                                                 nullptr,
                                                 skipContext,
                                                 captureContinue,
-                                                OutputPoseShift{});
+                                                OutputPoseShift{},
+                                                rgbOnly);
             };
 
             SemiFixedScanExecuteInput input;
@@ -3786,6 +3968,42 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
                     Qt::QueuedConnection);
             };
             hostHooks.captureStill = captureStillAtPose;
+            hostHooks.blankProjector = [this](QString *errorOut) -> bool {
+                hf::dlp::DlpPanelController *dlp =
+                    host_ != nullptr ? host_->dlpPanel() : nullptr;
+                if (dlp == nullptr || !dlp->isConnected())
+                    return true;
+                return dlp->blankSync(errorOut);
+            };
+            hostHooks.confirmContinueRgb = [this]() -> bool {
+                bool continueRgb = false;
+                QMetaObject::invokeMethod(
+                    this,
+                    [this, &continueRgb]() {
+                        if (host_ == nullptr)
+                        {
+                            continueRgb = false;
+                            return;
+                        }
+                        QMessageBox box(host_);
+                        box.setIcon(QMessageBox::Question);
+                        box.setWindowTitle(QStringLiteral("Continue RGB scanning?"));
+                        box.setText(QStringLiteral("FPP capture finished. DLP is blanked."));
+                        box.setInformativeText(
+                            QStringLiteral(
+                                "Continue with the RGB color sweep now?\n\n"
+                                "Choose Skip to finish the scan and return home."));
+                        box.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
+                        box.setDefaultButton(QMessageBox::Yes);
+                        if (QAbstractButton *yesButton = box.button(QMessageBox::Yes))
+                            yesButton->setText(QStringLiteral("Continue RGB"));
+                        if (QAbstractButton *noButton = box.button(QMessageBox::No))
+                            noButton->setText(QStringLiteral("Skip RGB"));
+                        continueRgb = box.exec() == QMessageBox::Yes;
+                    },
+                    Qt::BlockingQueuedConnection);
+                return continueRgb;
+            };
             if (useStage)
             {
                 hostHooks.moveStage = [this, &sessionActive](const double targetMm,

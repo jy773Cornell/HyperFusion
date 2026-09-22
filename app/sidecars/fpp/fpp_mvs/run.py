@@ -52,6 +52,12 @@ def run_fpp_mvs_pipeline(
     skip_decode: bool = False,
     skip_fusion: bool = False,
     require_fpp: bool = True,
+    fusion_mode: str = "intersection",
+    support_min_views: int | None = None,
+    score_lambda_agree: float = 0.15,
+    score_lambda_contradict: float = 0.40,
+    score_keep_threshold: float = 0.12,
+    enable_tsdf: bool = False,
 ) -> dict[str, Any]:
     t_all = time.perf_counter()
     datafolder, burst = resolve_datafolder(input_path)
@@ -136,6 +142,12 @@ def run_fpp_mvs_pipeline(
             densify=True,
             cleanup_dense=True,
             min_modulation=float(min_modulation),
+            fusion_mode=str(fusion_mode),
+            support_min_views=support_min_views,
+            score_lambda_agree=float(score_lambda_agree),
+            score_lambda_contradict=float(score_lambda_contradict),
+            score_keep_threshold=float(score_keep_threshold),
+            enable_tsdf=bool(enable_tsdf),
         )
         fusion_wall = round(time.perf_counter() - t_fus, 3)
         # Prefer pipeline stage timings when present
@@ -144,6 +156,8 @@ def run_fpp_mvs_pipeline(
             "ok": bool(fusion_summary.get("ok")),
             "elapsed_s": fusion_wall,
             "stage_timings_s": stage_timings,
+            "fusion_mode": fusion_summary.get("fusion_mode"),
+            "drop_accounting": fusion_summary.get("drop_accounting"),
             "point_cloud": fusion_summary.get("point_cloud"),
             "point_cloud_points": fusion_summary.get("point_cloud_points"),
             "out": str(fus),
@@ -175,6 +189,8 @@ def run_fpp_mvs_pipeline(
         },
         "pose_mode": pose_mode,
         "mode": mode,
+        "fusion_mode": fusion_mode,
+        "support_min_views": support_min_views,
         "fused_stems": (
             fusion_summary.get("stages", {}).get("load", {}).get("stems")
             if not skip_fusion
@@ -202,6 +218,8 @@ def run_fpp_mvs_pipeline(
                 "elapsed_s": stages.get("fusion", {}).get("elapsed_s"),
                 "stage_timings_s": stages.get("fusion", {}).get("stage_timings_s"),
                 "skipped": stages.get("fusion", {}).get("skipped", False),
+                "fusion_mode": stages.get("fusion", {}).get("fusion_mode"),
+                "drop_accounting": stages.get("fusion", {}).get("drop_accounting"),
                 "point_cloud_points": stages.get("fusion", {}).get("point_cloud_points"),
                 "point_cloud": stages.get("fusion", {}).get("point_cloud"),
             },

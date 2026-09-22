@@ -174,9 +174,52 @@ void BfsPanelController::wireSettingsTabConnections()
 
 BfsCameraSettings BfsPanelController::settingsFromUi() const
 {
+    if (captureSettingsOverride_.has_value())
+        return *captureSettingsOverride_;
     if (host_ == nullptr || host_->bfsCameraSettings_ == nullptr)
         return {};
     return host_->bfsCameraSettings_->currentSettings();
+}
+
+void BfsPanelController::setCaptureSettingsOverride(
+    const std::optional<BfsCameraSettings> &settings)
+{
+    captureSettingsOverride_ = settings;
+}
+
+BfsCameraSettings BfsPanelController::settingsWithCaptureExposure(BfsCameraSettings base,
+                                                                  const double exposureUs)
+{
+    base.exposureMode = QStringLiteral("Timed");
+    base.exposureAuto = QStringLiteral("Off");
+    base.exposureTimeUs = exposureUs;
+    return base;
+}
+
+bool BfsPanelController::applyCameraSettingsBlocking(const BfsCameraSettings &settings,
+                                                     QString *errorOut)
+{
+    if (worker_ == nullptr || !isCameraConnected())
+    {
+        if (errorOut != nullptr)
+            *errorOut = QStringLiteral("BFS camera not connected.");
+        return false;
+    }
+
+    BfsError error;
+    if (!worker_->applySettingsBlocking(settings, &error))
+    {
+        if (errorOut != nullptr)
+        {
+            *errorOut = error.message.empty()
+                            ? QStringLiteral("BFS applySettings failed.")
+                            : QString::fromStdString(error.message);
+        }
+        return false;
+    }
+
+    captureSettingsOverride_ = settings;
+    return true;
 }
 
 bool BfsPanelController::isCameraConnected() const

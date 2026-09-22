@@ -25,6 +25,7 @@
 #include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QSpinBox>
+#include <QStringList>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -140,6 +141,36 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
     rangeIntervalFormLabel_ =
         qobject_cast<QLabel *>(autoForm->labelForField(rangeIntervalRow_));
 
+    rgbRangeSpin_ = new QDoubleSpinBox(autoSection_);
+    rgbRangeSpin_->setRange(0.0, 360.0);
+    rgbRangeSpin_->setDecimals(0);
+    rgbRangeSpin_->setSingleStep(10.0);
+    rgbRangeSpin_->setSuffix(QStringLiteral(" °"));
+    rgbRangeSpin_->setValue(360.0);
+    rgbRangeSpin_->setToolTip(
+        QStringLiteral("RGB color sweep: shoulder-pan arc (0…360°). "
+                       "One still every RGB Interval along this arc."));
+
+    rgbIntervalSpin_ = new QDoubleSpinBox(autoSection_);
+    rgbIntervalSpin_->setRange(1.0, 90.0);
+    rgbIntervalSpin_->setDecimals(1);
+    rgbIntervalSpin_->setSingleStep(1.0);
+    rgbIntervalSpin_->setSuffix(QStringLiteral(" °"));
+    rgbIntervalSpin_->setValue(60.0);
+    rgbIntervalSpin_->setToolTip(
+        QStringLiteral("RGB color sweep: photo every this many degrees of shoulder_pan."));
+
+    rgbRangeIntervalRow_ = new QWidget(autoSection_);
+    auto *rgbRangeIntervalLayout = new QHBoxLayout(rgbRangeIntervalRow_);
+    rgbRangeIntervalLayout->setContentsMargins(0, 0, 0, 0);
+    rgbRangeIntervalLayout->setSpacing(6);
+    rgbRangeIntervalLayout->addWidget(rgbRangeSpin_, 1);
+    rgbRangeIntervalLayout->addWidget(rgbIntervalSpin_, 1);
+    rgbRangeIntervalRow_->setVisible(false);
+    autoForm->addRow(QStringLiteral("RGB Range / Interval"), rgbRangeIntervalRow_);
+    rgbRangeIntervalFormLabel_ =
+        qobject_cast<QLabel *>(autoForm->labelForField(rgbRangeIntervalRow_));
+
     horizontalPointsSpin_ = new QSpinBox(autoSection_);
     horizontalPointsSpin_->setRange(1, 360);
     horizontalPointsSpin_->setValue(12);
@@ -241,23 +272,31 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
     stagePositionSpin_->setToolTip(
         QStringLiteral("Sample-stage stop for the whole Multiview / FPP scan."));
 
+    semiFixedDirectionCombo_ = new QComboBox(autoSection_);
+    semiFixedDirectionCombo_->addItem(QStringLiteral("+ pan"), 1);
+    semiFixedDirectionCombo_->addItem(QStringLiteral("− pan"), -1);
+    semiFixedDirectionCombo_->setToolTip(
+        QStringLiteral("Shoulder-pan direction for Semi / FPP ring spins."));
+
     stageRow_ = new QWidget(autoSection_);
     auto *stageLayout = new QHBoxLayout(stageRow_);
     stageLayout->setContentsMargins(0, 0, 0, 0);
     stageLayout->setSpacing(6);
     stageLayout->addWidget(stagePositionSpin_, 1);
-    autoForm->addRow(QStringLiteral("Stage"), stageRow_);
+    stageLayout->addWidget(semiFixedDirectionCombo_, 1);
+    autoForm->addRow(QStringLiteral("Stage / Dir"), stageRow_);
     stageFormLabel_ = qobject_cast<QLabel *>(autoForm->labelForField(stageRow_));
 
     imageEstimateLabel_ = new QLabel(autoSection_);
-    imageEstimateLabel_->setWordWrap(false);
+    imageEstimateLabel_->setWordWrap(true);
     imageEstimateLabel_->setTextInteractionFlags(Qt::TextSelectableByMouse);
     imageEstimateLabel_->setStyleSheet(QStringLiteral("color: #444;"));
+    imageEstimateLabel_->setMinimumWidth(120);
     autoForm->addRow(QStringLiteral("Images"), imageEstimateLabel_);
 
     form->addRow(autoSection_);
 
-    // --- Semi-fixed / FPP section (Direction only; Images estimate lives above) ---
+    // --- Semi-fixed / FPP section (legacy controls kept hidden; Direction lives on Stage row) ---
     semiFixedSection_ = new QWidget(group);
     auto *semiForm = new QFormLayout(semiFixedSection_);
     semiForm->setContentsMargins(0, 0, 0, 0);
@@ -265,11 +304,7 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
     semiForm->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
     semiForm->setHorizontalSpacing(8);
     semiForm->setVerticalSpacing(4);
-
-    semiFixedDirectionCombo_ = new QComboBox(semiFixedSection_);
-    semiFixedDirectionCombo_->addItem(QStringLiteral("+ (positive pan)"), 1);
-    semiFixedDirectionCombo_->addItem(QStringLiteral("− (negative pan)"), -1);
-    semiForm->addRow(QStringLiteral("Direction"), semiFixedDirectionCombo_);
+    semiFixedSection_->setVisible(false);
 
     // Legacy widgets kept for API compatibility; not shown (top Route row loads Semi plans).
     semiFixedPlanRouteCombo_ = new QComboBox(semiFixedSection_);
@@ -356,6 +391,20 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
                 updateImageEstimateLabel();
                 emit semiFixedRouteChanged();
             });
+    connect(rgbRangeSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            [this](double) {
+                syncSemiFixedRouteFromUi();
+                saveToSettings();
+                updateImageEstimateLabel();
+                emit semiFixedRouteChanged();
+            });
+    connect(rgbIntervalSpin_, qOverload<double>(&QDoubleSpinBox::valueChanged), this,
+            [this](double) {
+                syncSemiFixedRouteFromUi();
+                saveToSettings();
+                updateImageEstimateLabel();
+                emit semiFixedRouteChanged();
+            });
     connect(semiFixedDirectionCombo_, qOverload<int>(&QComboBox::currentIndexChanged), this,
             [this](int) {
                 syncSemiFixedRouteFromUi();
@@ -411,6 +460,15 @@ hf::ur3e::Ur3eSemiFixedRoute Ur3eHemisphereScanSettingsWidget::semiFixedRoute() 
         route.panRangeDeg = 360.0;
     else if (route.panRangeDeg > 360.0)
         route.panRangeDeg = 360.0;
+    if (scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::Fpp && route.hasRgbRing)
+    {
+        if (rgbIntervalSpin_ != nullptr)
+            route.rgbRing.intervalDeg = rgbIntervalSpin_->value();
+        if (rgbRangeSpin_ != nullptr)
+            route.rgbRing.panRangeDeg = rgbRangeSpin_->value();
+        if (route.rgbRing.captureKind.trimmed().isEmpty())
+            route.rgbRing.captureKind = QStringLiteral("rgb");
+    }
     if (semiFixedDirectionCombo_ != nullptr)
     {
         const int dir = semiFixedDirectionCombo_->currentData().toInt();
@@ -444,6 +502,27 @@ void Ur3eHemisphereScanSettingsWidget::setSemiFixedRoute(const hf::ur3e::Ur3eSem
         const double range =
             route.panRangeDeg >= 0.0 ? std::min(360.0, route.panRangeDeg) : 360.0;
         fppRangeSpin_->setValue(range);
+    }
+    if (rgbRangeSpin_ != nullptr || rgbIntervalSpin_ != nullptr)
+    {
+        const double rgbInterval =
+            route.hasRgbRing && route.rgbRing.intervalDeg > 0.0
+                ? route.rgbRing.intervalDeg
+                : (route.intervalDeg > 0.0 ? route.intervalDeg : 60.0);
+        const double rgbRange =
+            route.hasRgbRing && route.rgbRing.panRangeDeg >= 0.0
+                ? std::min(360.0, route.rgbRing.panRangeDeg)
+                : (route.panRangeDeg >= 0.0 ? std::min(360.0, route.panRangeDeg) : 360.0);
+        if (rgbIntervalSpin_ != nullptr)
+        {
+            const QSignalBlocker b(rgbIntervalSpin_);
+            rgbIntervalSpin_->setValue(rgbInterval);
+        }
+        if (rgbRangeSpin_ != nullptr)
+        {
+            const QSignalBlocker b(rgbRangeSpin_);
+            rgbRangeSpin_->setValue(rgbRange);
+        }
     }
     if (semiFixedDirectionCombo_ != nullptr)
     {
@@ -530,8 +609,9 @@ void Ur3eHemisphereScanSettingsWidget::syncModeUi()
 
     if (autoSection_ != nullptr)
         autoSection_->setVisible(true);
+    // Direction moved onto Stage row; keep legacy section hidden.
     if (semiFixedSection_ != nullptr)
-        semiFixedSection_->setVisible(ringMode);
+        semiFixedSection_->setVisible(false);
 
     setFormFieldVisible(sphereRadiusSpin_, !fppMode);
     if (radiusFormLabel_ != nullptr)
@@ -544,6 +624,14 @@ void Ur3eHemisphereScanSettingsWidget::syncModeUi()
         rangeIntervalFormLabel_->setVisible(fppMode);
     if (fppRangeSpin_ != nullptr)
         fppRangeSpin_->setVisible(fppMode);
+    if (rgbRangeIntervalRow_ != nullptr)
+        rgbRangeIntervalRow_->setVisible(fppMode);
+    if (rgbRangeIntervalFormLabel_ != nullptr)
+        rgbRangeIntervalFormLabel_->setVisible(fppMode);
+    if (rgbRangeSpin_ != nullptr)
+        rgbRangeSpin_->setVisible(fppMode);
+    if (rgbIntervalSpin_ != nullptr)
+        rgbIntervalSpin_->setVisible(fppMode);
 
     if (semiFixedIntervalSpin_ != nullptr)
     {
@@ -616,6 +704,8 @@ void Ur3eHemisphereScanSettingsWidget::syncModeUi()
         stageRow_->setVisible(true);
     if (stageFormLabel_ != nullptr)
         stageFormLabel_->setVisible(true);
+    if (semiFixedDirectionCombo_ != nullptr)
+        semiFixedDirectionCombo_->setVisible(ringMode);
 
     if (imageEstimateLabel_ != nullptr)
         imageEstimateLabel_->setVisible(true);
@@ -661,6 +751,16 @@ void Ur3eHemisphereScanSettingsWidget::syncSemiFixedRouteFromUi()
         semiFixedRoute_.panRangeDeg = fppRangeSpin_->value();
     else if (scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::SemiFixed)
         semiFixedRoute_.panRangeDeg = 360.0;
+    if (scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::Fpp
+        && semiFixedRoute_.hasRgbRing)
+    {
+        if (rgbIntervalSpin_ != nullptr)
+            semiFixedRoute_.rgbRing.intervalDeg = rgbIntervalSpin_->value();
+        if (rgbRangeSpin_ != nullptr)
+            semiFixedRoute_.rgbRing.panRangeDeg = rgbRangeSpin_->value();
+        if (semiFixedRoute_.rgbRing.captureKind.trimmed().isEmpty())
+            semiFixedRoute_.rgbRing.captureKind = QStringLiteral("rgb");
+    }
     if (semiFixedDirectionCombo_ != nullptr)
     {
         const int dir = semiFixedDirectionCombo_->currentData().toInt();
@@ -823,6 +923,10 @@ void Ur3eHemisphereScanSettingsWidget::applyModePanelToUi(
             semiFixedIntervalSpin_->setValue(panel.imagingIntervalDeg);
         if (fppRangeSpin_ != nullptr)
             fppRangeSpin_->setValue(panel.panRangeDeg);
+        if (rgbIntervalSpin_ != nullptr)
+            rgbIntervalSpin_->setValue(panel.rgbImagingIntervalDeg);
+        if (rgbRangeSpin_ != nullptr)
+            rgbRangeSpin_->setValue(panel.rgbPanRangeDeg);
         if (semiFixedDirectionCombo_ != nullptr)
         {
             const int dirIdx = semiFixedDirectionCombo_->findData(panel.panDirection);
@@ -853,6 +957,9 @@ Ur3eHemisphereScanSettingsWidget::captureModePanelFromUi() const
     panel.imagingIntervalDeg =
         semiFixedIntervalSpin_ != nullptr ? semiFixedIntervalSpin_->value() : 10.0;
     panel.panRangeDeg = fppRangeSpin_ != nullptr ? fppRangeSpin_->value() : 360.0;
+    panel.rgbImagingIntervalDeg =
+        rgbIntervalSpin_ != nullptr ? rgbIntervalSpin_->value() : 60.0;
+    panel.rgbPanRangeDeg = rgbRangeSpin_ != nullptr ? rgbRangeSpin_->value() : 360.0;
     int pan = semiFixedDirectionCombo_ != nullptr ? semiFixedDirectionCombo_->currentData().toInt()
                                                   : 1;
     panel.panDirection = pan >= 0 ? 1 : -1;
@@ -904,12 +1011,16 @@ void Ur3eHemisphereScanSettingsWidget::saveToSettings() const
         const double keepInterval = saved.semiPanel.imagingIntervalDeg;
         const int keepPan = saved.semiPanel.panDirection;
         const double keepRange = saved.fppPanel.panRangeDeg;
+        const double keepRgbInterval = saved.fppPanel.rgbImagingIntervalDeg;
+        const double keepRgbRange = saved.fppPanel.rgbPanRangeDeg;
         saved.autoPanel = panel;
         saved.autoPanel.imagingIntervalDeg = keepInterval;
         saved.autoPanel.panDirection = keepPan;
         saved.semiPanel.imagingIntervalDeg = keepInterval;
         saved.semiPanel.panDirection = keepPan;
         saved.fppPanel.panRangeDeg = keepRange;
+        saved.fppPanel.rgbImagingIntervalDeg = keepRgbInterval;
+        saved.fppPanel.rgbPanRangeDeg = keepRgbRange;
     }
     if (routeCombo_ != nullptr)
     {
@@ -1115,6 +1226,8 @@ void Ur3eHemisphereScanSettingsWidget::applyLoadedSemiPlanSettings(
 
     const QSignalBlocker blockInterval(semiFixedIntervalSpin_);
     const QSignalBlocker blockRange(fppRangeSpin_);
+    const QSignalBlocker blockRgbInterval(rgbIntervalSpin_);
+    const QSignalBlocker blockRgbRange(rgbRangeSpin_);
     const QSignalBlocker blockDir(semiFixedDirectionCombo_);
     if (semiFixedIntervalSpin_ != nullptr)
         semiFixedIntervalSpin_->setValue(intervalDeg > 0.0 ? intervalDeg : 10.0);
@@ -1295,6 +1408,10 @@ void Ur3eHemisphereScanSettingsWidget::setParamsEnabled(const bool enabled)
         sphereRadiusSpin_->setEnabled(enabled);
     if (fppRangeSpin_ != nullptr)
         fppRangeSpin_->setEnabled(enabled);
+    if (rgbRangeSpin_ != nullptr)
+        rgbRangeSpin_->setEnabled(enabled);
+    if (rgbIntervalSpin_ != nullptr)
+        rgbIntervalSpin_->setEnabled(enabled);
     if (horizontalPointsSpin_ != nullptr)
         horizontalPointsSpin_->setEnabled(enabled);
     if (verticalPointsSpin_ != nullptr)
@@ -1383,14 +1500,15 @@ void Ur3eHemisphereScanSettingsWidget::updateImageEstimateLabel()
             && (semiFixedRoute_.rings.isEmpty()
                 || (semiFixedRoute_.rings.size() == 1
                     && (semiFixedRoute_.rings[0].noPan
-                        || std::abs(semiFixedRoute_.rings[0].thetaDeg) < 0.75)));
+                        || std::abs(semiFixedRoute_.rings[0].thetaDeg) < 0.75)))
+            && !semiFixedRoute_.hasRgbRing && !semiFixedRoute_.hasRgbHome;
         if (apexOnly)
         {
-            const qint64 total = static_cast<qint64>(perSample);
             imageEstimateLabel_->setText(
-                QStringLiteral("%1/pose × 1 apex = %2").arg(perSample).arg(total));
+                QStringLiteral("%1/pose × 1 apex = %2").arg(perSample).arg(perSample));
             return;
         }
+
         const int layers = horizontalPointsSpin_ != nullptr ? horizontalPointsSpin_->value() : 1;
         const double intervalDeg = semiFixedRoute_.intervalDeg > 0.0
                                        ? semiFixedRoute_.intervalDeg
@@ -1399,6 +1517,7 @@ void Ur3eHemisphereScanSettingsWidget::updateImageEstimateLabel()
             scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::Fpp
                 ? (fppRangeSpin_ != nullptr ? fppRangeSpin_->value() : 360.0)
                 : 360.0;
+
         qint64 ringPins = 0;
         int ringEntries = 0;
         if (semiFixedRoute_.rings.isEmpty())
@@ -1417,25 +1536,82 @@ void Ur3eHemisphereScanSettingsWidget::updateImageEstimateLabel()
                 ++ringEntries;
             }
         }
-        const qint64 total = static_cast<qint64>(perSample) * (1 + ringPins);
-        if (semiFixedRoute_.rings.isEmpty())
+
+        qint64 rgbPins = 0;
+        if (scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::Fpp
+            && semiFixedRoute_.hasRgbRing)
+        {
+            const double rgbInterval =
+                rgbIntervalSpin_ != nullptr ? rgbIntervalSpin_->value() : 60.0;
+            const double rgbRange =
+                rgbRangeSpin_ != nullptr ? rgbRangeSpin_->value() : 360.0;
+            rgbPins = hf::ur3e::semiFixedRingSampleCount(semiFixedRoute_.rgbRing,
+                                                         rgbInterval,
+                                                         rgbRange);
+        }
+
+        const qint64 apexPins = semiFixedRoute_.hasTopPose ? 1 : 0;
+        const qint64 poseCount = apexPins + ringPins + rgbPins;
+        const qint64 total = static_cast<qint64>(perSample) * poseCount;
+
+        if (scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::Fpp)
+        {
+            QStringList parts;
+            if (apexPins > 0)
+                parts << QStringLiteral("%1 apex").arg(apexPins);
+            if (ringPins > 0)
+                parts << QStringLiteral("%1 FPP").arg(ringPins);
+            if (rgbPins > 0)
+                parts << QStringLiteral("%1 RGB").arg(rgbPins);
+            if (parts.isEmpty())
+                parts << QStringLiteral("0");
+            if (perSample > 1)
+            {
+                imageEstimateLabel_->setText(
+                    QStringLiteral("%1/pose × (%2) = %3")
+                        .arg(perSample)
+                        .arg(parts.join(QStringLiteral(" + ")))
+                        .arg(total));
+            }
+            else
+            {
+                imageEstimateLabel_->setText(parts.join(QStringLiteral(" + ")));
+            }
+            return;
+        }
+
+        QStringList parts;
+        if (apexPins > 0)
+            parts << QStringLiteral("%1 apex").arg(apexPins);
+        if (ringPins > 0)
+        {
+            if (semiFixedRoute_.rings.isEmpty())
+            {
+                parts << QStringLiteral("%1/ring × %2")
+                             .arg(hf::ur3e::semiFixedSampleCount(intervalDeg, rangeDeg))
+                             .arg(ringEntries);
+            }
+            else
+            {
+                parts << QStringLiteral("%1 ring")
+                             .arg(ringPins);
+            }
+        }
+        if (parts.isEmpty())
+            parts << QStringLiteral("0");
+
+        if (perSample > 1)
         {
             imageEstimateLabel_->setText(
-                QStringLiteral("%1/pose × (1 apex + %2/ring × %3 layers) = %4")
+                QStringLiteral("%1/pose × (%2) = %3")
                     .arg(perSample)
-                    .arg(hf::ur3e::semiFixedSampleCount(intervalDeg, rangeDeg))
-                    .arg(ringEntries)
+                    .arg(parts.join(QStringLiteral(" + ")))
                     .arg(total));
         }
         else
         {
             imageEstimateLabel_->setText(
-                QStringLiteral("%1/pose × (1 apex + %2 ring pins @ %3° / %4°) = %5")
-                    .arg(perSample)
-                    .arg(ringPins)
-                    .arg(intervalDeg, 0, 'f', 1)
-                    .arg(rangeDeg, 0, 'f', 0)
-                    .arg(total));
+                QStringLiteral("%1 = %2").arg(parts.join(QStringLiteral(" + "))).arg(total));
         }
         return;
     }
@@ -1449,7 +1625,7 @@ void Ur3eHemisphereScanSettingsWidget::updateImageEstimateLabel()
                                   ? QStringLiteral("%1 ok").arg(pinCount)
                                   : QStringLiteral("%1 grid").arg(pinCount);
     imageEstimateLabel_->setText(
-        QStringLiteral("%1/pin x %2 = %3").arg(perPin).arg(pinSource).arg(total));
+        QStringLiteral("%1/pin × %2 = %3").arg(perPin).arg(pinSource).arg(total));
 }
 
 void Ur3eHemisphereScanSettingsWidget::onWristSweepChanged()

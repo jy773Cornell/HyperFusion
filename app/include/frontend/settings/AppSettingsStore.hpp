@@ -68,6 +68,10 @@ struct PersistedUr3eScanModePanelSettings
     double imagingIntervalDeg = 10.0;
     /// FPP pan arc (° 0…360); Semi keeps 360.
     double panRangeDeg = 360.0;
+    /// FPP RGB sweep interval (°); ignored outside FPP.
+    double rgbImagingIntervalDeg = 60.0;
+    /// FPP RGB pan arc (° 0…360).
+    double rgbPanRangeDeg = 360.0;
     /// Semi / FPP pan direction (+1 / −1); ignored in Auto.
     int panDirection = 1;
 };

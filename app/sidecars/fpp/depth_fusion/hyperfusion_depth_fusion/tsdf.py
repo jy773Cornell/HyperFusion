@@ -54,13 +54,14 @@ def _load_color_undistorted(
     shape_hw: tuple[int, int],
     meta: dict,
 ) -> np.ndarray:
-    """White frame (stem+1), remapped to the same pinhole as depth when D is set."""
+    """Visual RGB frame, or legacy PSP white frame, remapped to the depth pinhole."""
     h, w = shape_hw
     try:
         import tifffile
 
-        white_idx = int(stem) + 1
-        path = burst / f"{white_idx:05d}.tif"
+        pattern = str(meta.get("fpp_pattern", "")).strip().lower()
+        color_idx = int(stem) if pattern == "fpp visual color" else int(stem) + 1
+        path = burst / f"{color_idx:05d}.tif"
         if not path.is_file():
             raise FileNotFoundError(path)
         img = tifffile.imread(str(path))

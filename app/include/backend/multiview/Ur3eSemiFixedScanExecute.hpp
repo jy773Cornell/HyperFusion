@@ -50,6 +50,10 @@ struct SemiFixedScanExecuteHost
     /// Capture one still. ringIndex=-1 = top/apex pose; sampleIndex=0 there.
     std::function<bool(const Ur3eScanTcpPose &plannedTcp, int ringIndex, int sampleIndex)>
         captureStill;
+    /// Blank the DLP after FPP (before RGB). Optional. Return false on hard failure.
+    std::function<bool(QString *errorOut)> blankProjector;
+    /// Ask the operator to continue with the RGB sweep. Return false to skip RGB and finish.
+    std::function<bool()> confirmContinueRgb;
     /// Optional full-scan stage move. Empty = ignore stage.
     /// Return false on failed/aborted move. Do not install when the stage is disconnected.
     std::function<bool(double targetMm, const QString &label, QString *errorOut)> moveStage;

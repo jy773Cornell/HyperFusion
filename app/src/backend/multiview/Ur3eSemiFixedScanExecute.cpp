@@ -38,6 +38,23 @@ bool sameElbowFamily(const std::vector<double> &a, const std::vector<double> &b)
     return (ea * eb) > 0.0;
 }
 
+bool jointsNearEqual(const std::vector<double> &a, const std::vector<double> &b,
+                     const double tolRad = 2.0 * kDegToRad)
+{
+    if (a.size() != 6 || b.size() != 6)
+        return false;
+    for (int i = 0; i < 6; ++i)
+    {
+        const double d = std::atan2(std::sin(a[static_cast<std::size_t>(i)]
+                                             - b[static_cast<std::size_t>(i)]),
+                                    std::cos(a[static_cast<std::size_t>(i)]
+                                             - b[static_cast<std::size_t>(i)]));
+        if (std::abs(d) > tolRad)
+            return false;
+    }
+    return true;
+}
+
 bool hardwareMoveExact(const QString &serverUrl,
                        const std::vector<double> &joints,
                        const QString &label,
@@ -252,6 +269,34 @@ double unwrapContinuous(const double reference, const double raw)
     return reference + delta;
 }
 
+/// Prefer an elbow branch that does not cross 0° from *live* (fold-safe PTP).
+double unwrapElbowAvoidFold(const double liveElbow, const double targetPrincipal)
+{
+    constexpr double kNearZero = 5.0 * kDegToRad;
+    if (std::abs(liveElbow) < kNearZero || std::abs(targetPrincipal) < kNearZero)
+        return unwrapContinuous(liveElbow, targetPrincipal);
+
+    double best = unwrapContinuous(liveElbow, targetPrincipal);
+    double bestAbs = std::abs(best - liveElbow);
+    bool bestCrosses = (liveElbow < 0.0 && best > 0.0) || (liveElbow > 0.0 && best < 0.0);
+
+    for (int k = -2; k <= 2; ++k)
+    {
+        const double cand = targetPrincipal + static_cast<double>(k) * 2.0 * kPi;
+        const double absDelta = std::abs(cand - liveElbow);
+        const bool crosses = (liveElbow < 0.0 && cand > 0.0) || (liveElbow > 0.0 && cand < 0.0);
+        if (crosses)
+            continue;
+        if (bestCrosses || absDelta + 1.0e-9 < bestAbs)
+        {
+            best = cand;
+            bestAbs = absDelta;
+            bestCrosses = false;
+        }
+    }
+    return best;
+}
+
 std::vector<double> unwrapJointsOntoLive(const std::vector<double> &live,
                                          const std::vector<double> &target)
 {
@@ -259,9 +304,20 @@ std::vector<double> unwrapJointsOntoLive(const std::vector<double> &live,
     if (live.size() != 6 || target.size() != 6)
         return out;
     for (int i = 0; i < 6; ++i)
-        out[static_cast<std::size_t>(i)] =
-            unwrapContinuous(live[static_cast<std::size_t>(i)],
-                             target[static_cast<std::size_t>(i)]);
+    {
+        if (i == 2)
+        {
+            out[static_cast<std::size_t>(i)] =
+                unwrapElbowAvoidFold(live[static_cast<std::size_t>(i)],
+                                     target[static_cast<std::size_t>(i)]);
+        }
+        else
+        {
+            out[static_cast<std::size_t>(i)] =
+                unwrapContinuous(live[static_cast<std::size_t>(i)],
+                                 target[static_cast<std::size_t>(i)]);
+        }
+    }
     return out;
 }
 
@@ -485,6 +541,20 @@ std::vector<double> configuredHomeJointsRad()
     for (int i = 0; i < 6; ++i)
         home[static_cast<std::size_t>(i)] = deg[static_cast<std::size_t>(i)] * kDegToRad;
     return home;
+}
+
+/// First non-RGB ring entry — FPP scan hub (start/end) instead of cfg home.
+std::vector<double> fppSweepHomeJointsRad(const Ur3eSemiFixedRoute &route)
+{
+    for (const Ur3eSemiFixedRing &ring : route.rings)
+    {
+        if (ring.captureKind.trimmed().compare(QStringLiteral("rgb"), Qt::CaseInsensitive)
+            == 0)
+            continue;
+        if (ring.entryJointsRad.size() == 6)
+            return ring.entryJointsRad;
+    }
+    return {};
 }
 
 bool planApexJointsOnRingSphere(const QString &serverUrl,
@@ -727,7 +797,8 @@ bool principalizeShoulderPan(const QString &serverUrl,
 bool retreatToScanHome(const QString &serverUrl,
                        SemiFixedScanExecuteHost &host,
                        const bool userStopped,
-                       const std::vector<double> *unwindEntryBranch)
+                       const std::vector<double> *unwindEntryBranch,
+                       const std::vector<double> *homeJointsOverride = nullptr)
 {
     constexpr double kEntryVerifyTolRad = 0.08; // ~4.6° wrap-aware joint L2
 
@@ -736,76 +807,136 @@ bool retreatToScanHome(const QString &serverUrl,
     if (host.clearStopRequested)
         host.clearStopRequested();
 
+    const bool fppSweepHome =
+        homeJointsOverride != nullptr && homeJointsOverride->size() == 6;
+
     if (host.log)
     {
-        host.log(userStopped ? QStringLiteral(
-                                   "UR3e semi-fixed: stop — returning to home pose…")
-                             : QStringLiteral(
-                                   "UR3e semi-fixed: returning to home pose…"));
+        host.log(userStopped
+                     ? (fppSweepHome
+                            ? QStringLiteral("UR3e FPP: stop — returning to sweep home…")
+                            : QStringLiteral(
+                                  "UR3e semi-fixed: stop — returning to home pose…"))
+                     : (fppSweepHome
+                            ? QStringLiteral("UR3e FPP: returning to sweep home…")
+                            : QStringLiteral(
+                                  "UR3e semi-fixed: returning to home pose…")));
     }
-    if (host.syncHomeSliders)
+    if (!fppSweepHome && host.syncHomeSliders)
         host.syncHomeSliders();
 
-    // 1) Hard-require unwind to the exact continuous entry captured after MoveIt
-    //    (plan-validated pin↔home start) — not the wound look-alike (entry+360°).
+    // 1) Unwind to the continuous entry branch (plan-validated), then go home.
+    // FPP hub case: ring-entry joints == sweep home. Mid-pan live ≠ home — do NOT
+    // treat "entry == home" as already home; skip the redundant unwind and fall
+    // through to the live check + hardware move to sweep home below.
     if (unwindEntryBranch != nullptr && unwindEntryBranch->size() == 6)
     {
-        if (host.log)
+        const bool entryIsSweepHome =
+            fppSweepHome && jointsNearEqual(*unwindEntryBranch, *homeJointsOverride);
+        if (!entryIsSweepHome)
         {
-            host.log(QStringLiteral(
-                "UR3e semi-fixed: unwinding to ring-entry branch before MoveIt home…"));
-        }
-        QString unwindErr;
-        bool stopped = false;
-        if (!hardwareMoveExact(serverUrl,
-                               *unwindEntryBranch,
-                               QStringLiteral("semi-fixed unwind to entry branch"),
-                               &unwindErr,
-                               &stopped))
-        {
-            if (host.setReturningHome)
-                host.setReturningHome(false);
-            if (stopped)
+            if (host.log)
+            {
+                host.log(fppSweepHome
+                             ? QStringLiteral(
+                                   "UR3e FPP: unwinding to ring-entry before sweep home…")
+                             : QStringLiteral(
+                                   "UR3e semi-fixed: unwinding to ring-entry branch before "
+                                   "MoveIt home…"));
+            }
+            QString unwindErr;
+            bool stopped = false;
+            if (!hardwareMoveExact(serverUrl,
+                                   *unwindEntryBranch,
+                                   QStringLiteral("semi-fixed unwind to entry branch"),
+                                   &unwindErr,
+                                   &stopped))
+            {
+                if (host.setReturningHome)
+                    host.setReturningHome(false);
+                if (stopped)
+                    return false;
+                if (host.log)
+                {
+                    host.log(QStringLiteral(
+                                 "UR3e semi-fixed: abort home — entry unwind failed: %1")
+                                 .arg(unwindErr.isEmpty()
+                                          ? QStringLiteral("hardware move failed")
+                                          : unwindErr));
+                }
                 return false;
-            if (host.log)
-            {
-                host.log(QStringLiteral(
-                             "UR3e semi-fixed: abort MoveIt home — entry unwind failed: %1")
-                             .arg(unwindErr.isEmpty()
-                                      ? QStringLiteral("hardware move failed")
-                                      : unwindErr));
             }
-            return false;
-        }
 
-        std::vector<double> live;
-        if (!readLiveJointsRad(serverUrl, &live)
-            || ur3eJointDistanceRad(*unwindEntryBranch, live) > kEntryVerifyTolRad)
-        {
-            if (host.setReturningHome)
-                host.setReturningHome(false);
-            const double dist =
-                live.size() == 6 ? ur3eJointDistanceRad(*unwindEntryBranch, live)
-                                 : -1.0;
-            if (host.log)
+            std::vector<double> live;
+            if (!readLiveJointsRad(serverUrl, &live)
+                || ur3eJointDistanceRad(*unwindEntryBranch, live) > kEntryVerifyTolRad)
             {
-                host.log(
-                    QStringLiteral(
-                        "UR3e semi-fixed: abort MoveIt home — live joints not near "
-                        "validated entry (dist=%1 rad, tol=%2)")
-                        .arg(dist, 0, 'f', 3)
-                        .arg(kEntryVerifyTolRad, 0, 'f', 3));
+                if (host.setReturningHome)
+                    host.setReturningHome(false);
+                const double dist =
+                    live.size() == 6 ? ur3eJointDistanceRad(*unwindEntryBranch, live)
+                                     : -1.0;
+                if (host.log)
+                {
+                    host.log(
+                        QStringLiteral(
+                            "UR3e semi-fixed: abort home — live joints not near "
+                            "validated entry (dist=%1 rad, tol=%2)")
+                            .arg(dist, 0, 'f', 3)
+                            .arg(kEntryVerifyTolRad, 0, 'f', 3));
+                }
+                return false;
             }
-            return false;
         }
-        if (host.log)
+        else if (host.log)
         {
             host.log(QStringLiteral(
-                "UR3e semi-fixed: at validated entry — MoveIt home from this branch…"));
+                "UR3e FPP: ring entry is sweep home — recovering from live pan…"));
         }
     }
 
-    // 2) Collision-aware MoveIt to scan home (not hardware interpolate).
+    if (fppSweepHome)
+    {
+        std::vector<double> live;
+        if (readLiveJointsRad(serverUrl, &live)
+            && jointsNearEqual(live, *homeJointsOverride))
+        {
+            if (host.setReturningHome)
+                host.setReturningHome(false);
+            if (host.log)
+                host.log(QStringLiteral("UR3e FPP: already at sweep home."));
+            return true;
+        }
+        if (host.log)
+            host.log(QStringLiteral("UR3e FPP: hardware → sweep home…"));
+        QString homeErr;
+        bool homeStopped = false;
+        const bool okMove = hardwareMoveExact(serverUrl,
+                                              *homeJointsOverride,
+                                              QStringLiteral("FPP retreat to sweep home"),
+                                              &homeErr,
+                                              &homeStopped);
+        if (host.setReturningHome)
+            host.setReturningHome(false);
+        if (homeStopped)
+            return false;
+        if (!okMove)
+        {
+            if (host.log)
+            {
+                host.log(QStringLiteral("UR3e FPP: sweep home failed — %1")
+                             .arg(homeErr.isEmpty()
+                                      ? QStringLiteral("hardware move failed")
+                                      : homeErr));
+            }
+            return false;
+        }
+        if (host.log)
+            host.log(QStringLiteral("UR3e FPP: at sweep home."));
+        return true;
+    }
+
+    // 2) Collision-aware MoveIt to configured scan home (Semi hub).
     if (host.log)
         host.log(QStringLiteral("UR3e semi-fixed: MoveIt → scan home (collision-aware)…"));
     const Ur3eScanWaypointMoveResult postHome = ur3eExecuteMoveHome(serverUrl);
@@ -821,7 +952,6 @@ bool retreatToScanHome(const QString &serverUrl,
         return true;
     }
 
-    // Last resort: if MoveIt rejects the start state, try a MoveIt joint hop to home.
     if (host.log)
     {
         host.log(QStringLiteral(
@@ -920,24 +1050,65 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
         return host.stopRequested && host.stopRequested();
     };
 
+    // FPP hub = plan sweep pose (first non-RGB ring), not cfg home_joints_deg.
+    const std::vector<double> fppSweepHome =
+        input.route.isFppPlan ? fppSweepHomeJointsRad(input.route) : std::vector<double>{};
+    const bool useFppSweepHome = fppSweepHome.size() == 6;
+
     if (host.log)
-        host.log(QStringLiteral("UR3e semi-fixed: verifying scan home before scan…"));
-    if (host.syncHomeSliders)
+    {
+        host.log(useFppSweepHome
+                     ? QStringLiteral("UR3e FPP: verifying sweep home before scan…")
+                     : QStringLiteral("UR3e semi-fixed: verifying scan home before scan…"));
+    }
+    if (!useFppSweepHome && host.syncHomeSliders)
         host.syncHomeSliders();
 
-    if (host.ensureHomeBeforeScan && !host.ensureHomeBeforeScan())
+    if (useFppSweepHome)
+    {
+        std::vector<double> live;
+        const bool atSweep = readLiveJointsRad(input.serverUrl, &live)
+                             && jointsNearEqual(live, fppSweepHome);
+        if (!atSweep)
+        {
+            if (host.log)
+                host.log(QStringLiteral("UR3e FPP: hardware → sweep home before scan…"));
+            QString homeErr;
+            bool homeStopped = false;
+            if (!hardwareMoveExact(input.serverUrl,
+                                   fppSweepHome,
+                                   QStringLiteral("FPP move to sweep home"),
+                                   &homeErr,
+                                   &homeStopped))
+            {
+                if (homeStopped && stopRequested())
+                    ur3eStopMotion(input.serverUrl);
+                errorMessage =
+                    homeErr.isEmpty()
+                        ? QStringLiteral("Scan aborted — could not reach FPP sweep home.")
+                        : QStringLiteral("Scan aborted — FPP sweep home failed: %1")
+                              .arg(homeErr);
+                finishNow(false, homeStopped && stopRequested());
+                return;
+            }
+        }
+        else if (host.log)
+        {
+            host.log(QStringLiteral("UR3e FPP: already at sweep home."));
+        }
+    }
+    else if (host.ensureHomeBeforeScan && !host.ensureHomeBeforeScan())
     {
         errorMessage = QStringLiteral("Scan aborted — homing cancelled.");
         finishNow(false, false);
         return;
     }
 
-    if (host.syncHomeSliders)
+    if (!useFppSweepHome && host.syncHomeSliders)
         host.syncHomeSliders();
 
-    // Home verification is wrap-aware, so a physically wound wrist_3 (for example
-    // -449° vs the -90° home reference) can still count as "already home". Clear
-    // that continuous turn before planning the top pose.
+    // Clear wound wrist_3 at cfg home. Skip for FPP (rewinder targets cfg home).
+    if (!useFppSweepHome)
     {
         QString rewindErr;
         bool rewindStopped = false;
@@ -964,12 +1135,17 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
 
     Ur3eSemiFixedRoute route = input.route;
     pruneSemiFixedRedundantFullSpinPins(route);
+    // Fold RGB sweep after prune so same-θ FPP+RGB both run.
+    foldRgbEntriesIntoRings(route);
 
     const int ringCount = route.rings.size();
     const bool apexRingOnly =
         ringCount == 1
         && (route.rings[0].noPan || std::abs(route.rings[0].thetaDeg) < 0.75);
     bool doTop = !input.skipTop && !(apexRingOnly && !input.skipRings);
+    // Sweep-only FPP plans omit top_pose — do not invent a home still.
+    if (route.isFppPlan && !route.hasTopPose)
+        doTop = false;
     if (doTop)
     {
         Ur3eSemiFixedRoute apexProbe = route;
@@ -978,12 +1154,11 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
         {
             if (route.isFppPlan)
             {
-                apexProbe.topPose.entryJointsRad = configuredHomeJointsRad();
-                route.topPose = apexProbe.topPose;
-                route.hasTopPose = true;
+                // Explicit top_pose without joints is invalid for FPP; skip apex.
+                doTop = false;
                 if (host.log)
                     host.log(QStringLiteral(
-                        "UR3e FPP: apex uses cfg home joints (home XY, 450 mm)."));
+                        "UR3e FPP: top_pose missing joints — skipping apex still."));
             }
             else
             {
@@ -1030,11 +1205,13 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
 
     if (host.log)
     {
+        const bool announceTop = doTop;
         host.log(QStringLiteral(
-                     "UR3e semi-fixed execute: top still + %1 ring entry(ies), "
+                     "UR3e semi-fixed execute: %1%2 ring entry(ies), "
                      "full-spin latitudes use one pin, backup pairs go "
-                     "pin1 → home → pin2, pan %2%3° every %4° "
-                     "(%5 samples/spin%6)…")
+                     "pin1 → home → pin2, pan %3%4° every %5° "
+                     "(%6 samples/spin%7)…")
+                     .arg(announceTop ? QStringLiteral("top still + ") : QString())
                      .arg(ringCount)
                      .arg(panDir > 0 ? QStringLiteral("+") : QStringLiteral("−"))
                      .arg(panRangeDeg, 0, 'f', 0)
@@ -1071,6 +1248,7 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
     }
     std::vector<double> lastEntryBranch;
     bool hasLastEntryBranch = false;
+    bool rgbPromptDone = false;
     if (doTop)
     {
         Ur3eSemiFixedRoute routeCopy = route;
@@ -1208,6 +1386,44 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
             break;
         }
 
+        const bool isRgbRing =
+            ring.captureKind.trimmed().compare(QStringLiteral("rgb"), Qt::CaseInsensitive)
+            == 0;
+        if (route.isFppPlan && isRgbRing && !rgbPromptDone)
+        {
+            rgbPromptDone = true;
+            // First RGB ring: blank DLP, then ask the operator whether to continue.
+            if (host.blankProjector)
+            {
+                QString blankErr;
+                if (!host.blankProjector(&blankErr))
+                {
+                    if (host.log)
+                    {
+                        host.log(QStringLiteral("UR3e FPP: DLP blank before RGB failed — %1")
+                                     .arg(blankErr.isEmpty() ? QStringLiteral("unknown")
+                                                             : blankErr));
+                    }
+                }
+                else if (host.log)
+                {
+                    host.log(QStringLiteral(
+                        "UR3e FPP: DLP blanked after FPP — waiting for RGB confirm…"));
+                }
+            }
+            if (host.confirmContinueRgb)
+            {
+                if (!host.confirmContinueRgb())
+                {
+                    if (host.log)
+                        host.log(QStringLiteral("UR3e FPP: RGB scan skipped by operator."));
+                    break;
+                }
+                if (host.log)
+                    host.log(QStringLiteral("UR3e FPP: continuing with RGB sweep…"));
+            }
+        }
+
         if (host.setActiveRing)
             host.setActiveRing(ringIndex);
         if (host.log)
@@ -1232,7 +1448,7 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
             if (route.isFppPlan)
             {
                 host.log(QStringLiteral(
-                             "UR3e FPP [%1/%2] hardware hop → ring “%3” (taught pose)…")
+                             "UR3e FPP [%1/%2] MoveIt hop → ring “%3” (taught pose)…")
                              .arg(ringIndex + 1)
                              .arg(ringCount)
                              .arg(ring.displayName));
@@ -1259,25 +1475,68 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
             && !elbowFlipVsHome;
         const std::vector<double> *unwindPtr =
             hasLastEntryBranch ? &lastEntryBranch : nullptr;
-        // FPP pins are hand-taught. MoveIt OMPL/Pilz reject home→DLP when wrist_3
-        // must travel ~180° (221° home vs 37° DLP) even though both poses are valid.
-        const bool hopOk =
-            route.isFppPlan
-                ? hardwareMoveExact(input.serverUrl,
-                                    ring.entryJointsRad,
-                                    QStringLiteral("FPP ring entry"),
-                                    &moveErr,
-                                    &stopped)
-            : simple360
-                ? moveItToJoints(input.serverUrl, ring.entryJointsRad, tcpPtr, &moveErr,
-                                 &stopped, false)
-                : moveItToRingEntryViaHome(input.serverUrl,
-                                           ring.entryJointsRad,
-                                           tcpPtr,
-                                           host,
-                                           unwindPtr,
-                                           &moveErr,
-                                           &stopped);
+
+        // Already at the taught entry.
+        bool hopOk = true;
+        if (hasLastEntryBranch && jointsNearEqual(lastEntryBranch, ring.entryJointsRad))
+        {
+            if (host.log)
+            {
+                host.log(QStringLiteral(
+                             "UR3e semi-fixed ring %1: already at entry — skip hop")
+                             .arg(ringIndex));
+            }
+        }
+        else if (route.isFppPlan)
+        {
+            // Hand-taught FPP rings: MoveIt plans the entry hop (handles elbow-family
+            // flips that hardware PTP would fold through 0°). Pan spins stay hardware.
+            if (host.log)
+            {
+                const bool elbowFlip =
+                    hasLastEntryBranch
+                        ? !sameElbowFamily(lastEntryBranch, ring.entryJointsRad)
+                        : !sameElbowFamily(configuredHomeJointsRad(), ring.entryJointsRad);
+                if (elbowFlip)
+                {
+                    host.log(QStringLiteral(
+                        "UR3e FPP: elbow family change — relying on MoveIt path…"));
+                }
+            }
+            hopOk = moveItToJoints(input.serverUrl, ring.entryJointsRad, tcpPtr, &moveErr,
+                                   &stopped, false);
+            if (!hopOk && !stopped)
+            {
+                if (host.log)
+                {
+                    host.log(QStringLiteral(
+                                 "UR3e FPP: MoveIt direct failed (%1) — retry via home…")
+                                 .arg(moveErr));
+                }
+                hopOk = moveItToRingEntryViaHome(input.serverUrl,
+                                                 ring.entryJointsRad,
+                                                 tcpPtr,
+                                                 host,
+                                                 unwindPtr,
+                                                 &moveErr,
+                                                 &stopped);
+            }
+        }
+        else if (simple360)
+        {
+            hopOk = moveItToJoints(input.serverUrl, ring.entryJointsRad, tcpPtr, &moveErr,
+                                   &stopped, false);
+        }
+        else
+        {
+            hopOk = moveItToRingEntryViaHome(input.serverUrl,
+                                             ring.entryJointsRad,
+                                             tcpPtr,
+                                             host,
+                                             unwindPtr,
+                                             &moveErr,
+                                             &stopped);
+        }
         if (!hopOk)
         {
             if (stopped)
@@ -1362,6 +1621,11 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
         std::vector<double> samplePans;
         const bool pinOnly = ring.noPan || std::abs(ring.thetaDeg) < 0.75;
         const bool backupPartial = !pinOnly && ring.backupCoverageOk && !ring.baseSweepOk;
+        const double ringIntervalDeg = resolveRingIntervalDeg(ring, intervalDeg);
+        const double ringPanRangeDeg = resolveRingPanRangeDeg(ring, panRangeDeg);
+        const int ringSamplesPerRing =
+            semiFixedSampleCount(ringIntervalDeg, ringPanRangeDeg);
+        const double ringIntervalRad = ringIntervalDeg * kDegToRad;
         if (pinOnly)
         {
             samplePans.push_back(entryBranch[0]);
@@ -1375,7 +1639,7 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
         else if (backupPartial)
         {
             samplePans = backupContiguousPans(entryBranch[0], ring.panMask, panDir,
-                                             intervalDeg);
+                                             ringIntervalDeg);
             if (samplePans.empty())
                 samplePans.push_back(entryBranch[0]);
             if (host.log)
@@ -1405,8 +1669,8 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
             double edgePan = entryBranch[0];
             if (!pickPanSweepBranch(entryBranch[0],
                                     panDir,
-                                    samplesPerRing,
-                                    intervalRad,
+                                    ringSamplesPerRing,
+                                    ringIntervalRad,
                                     &sweepEntryPan,
                                     &edgePan))
             {
@@ -1466,12 +1730,12 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
                 lastEntryBranch = entryBranch;
                 std::this_thread::sleep_for(std::chrono::milliseconds(stabilizeMs));
             }
-            samplePans.reserve(static_cast<std::size_t>(samplesPerRing));
-            for (int i = 0; i < samplesPerRing; ++i)
+            samplePans.reserve(static_cast<std::size_t>(ringSamplesPerRing));
+            for (int i = 0; i < ringSamplesPerRing; ++i)
             {
                 samplePans.push_back(
                     edgePan
-                    + static_cast<double>(i) * intervalRad * static_cast<double>(panDir));
+                    + static_cast<double>(i) * ringIntervalRad * static_cast<double>(panDir));
             }
         }
 
@@ -1555,7 +1819,7 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
                                  .arg(sample + 1)
                                  .arg(samplesThisRing)
                                  .arg(sampleJoints[0] * 180.0 / kPi, 0, 'f', 1)
-                                 .arg(intervalDeg * panDir, 0, 'f', 1));
+                                 .arg(ringIntervalDeg * panDir, 0, 'f', 1));
                 }
 
                 const Ur3eScanWaypointMoveResult spin = ur3eExecuteHardwareJointMove(
@@ -1734,12 +1998,16 @@ semi_fixed_done:
     {
         const std::vector<double> *entryPtr =
             hasLastEntryBranch ? &lastEntryBranch : nullptr;
-        homeOk = retreatToScanHome(input.serverUrl, host, userStopped, entryPtr);
+        const std::vector<double> *homeOverride =
+            useFppSweepHome ? &fppSweepHome : nullptr;
+        homeOk = retreatToScanHome(input.serverUrl, host, userStopped, entryPtr,
+                                   homeOverride);
     }
 
     // Leave the robot on the configured continuous home branch. Without this,
     // wrap-aware homing can finish at wrist_3 home±360° and poison the next scan.
-    if (homeOk && !userStopped && !stopRequested())
+    // FPP uses sweep pose as hub — skip cfg-home wrist rewind.
+    if (homeOk && !userStopped && !stopRequested() && !useFppSweepHome)
     {
         QString rewindErr;
         bool rewindStopped = false;

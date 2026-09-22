@@ -1557,7 +1557,8 @@ bool parseConfigLines(const QStringList &lines, hf::HardwareConfig &config, QStr
                 if (src == QStringLiteral("usb") || src == QStringLiteral("hybrid")
                     || src == QStringLiteral("tpg"))
                     warnings.push_back(QStringLiteral(
-                        "dlp_fpp_source=%1 is removed; FPP is HDMI 26-frame sine (u+v).").arg(value));
+                        "dlp_fpp_source=%1 is removed; FPP is HDMI 26-frame sine PSP (u+v).")
+                            .arg(value));
                 else if (src != QStringLiteral("hdmi") && src != QStringLiteral("hdmi_psp")
                          && src != QStringLiteral("psp") && !src.isEmpty())
                     warnings.push_back(QStringLiteral("Unknown dlp_fpp_source (ignored): %1").arg(value));
@@ -1822,7 +1823,7 @@ bool writeDefaultHardwareConfigFile(const QString &path, QString *errorMessage)
         << "dlp_led_red_ma = 2400\n"
         << "dlp_led_green_ma = 2400\n"
         << "dlp_led_blue_ma = 2400\n"
-        << "# FPP burst is HDMI 26-frame 1280x720 sine (u then v) on the EVM display.\n"
+        << "# FPP burst is 26 HDMI PSP frames (black + white + 12u + 12v); RGB uses the plan RGB ring.\n"
         << "dlp_hdmi_screen_index = -1\n";
 
     if (!file.commit())

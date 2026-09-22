@@ -1,6 +1,8 @@
 # HyperFusion FPP decoder + MVS depth fusion (offline)
 
-Decode **26-frame HDMI PSP bursts** to metric camera-Z, then fuse to a cleaned dense cloud.
+New captures are a **26-frame HDMI PSP burst**. Color stills come from the plan
+**RGB ring** (not a full-white frame inside the FPP sequence). Older captures
+that begin with a visual-color TIFF remain supported for decode.
 
 ## Pipeline
 

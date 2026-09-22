@@ -51,6 +51,7 @@ def remove_tray(
     pts = np.concatenate(chunks, axis=0)
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(pts)
+    o3d.utility.random.seed(0)
     model, _inl = pcd.segment_plane(
         distance_threshold=float(plane_dist_m),
         ransac_n=3,

@@ -49,6 +49,26 @@ def load_flange_c2w(meta: dict) -> np.ndarray | None:
     return T if T.shape == (4, 4) else None
 
 
+def apply_stage_output_shift(c2w: np.ndarray, meta: dict) -> np.ndarray:
+    """Apply the sample-static output translation stored for an apex capture."""
+    stage = meta.get("stage_output")
+    if not isinstance(stage, dict):
+        return c2w
+    shift = stage.get("output_translation_m")
+    if not isinstance(shift, dict):
+        return c2w
+    out = c2w.copy()
+    out[:3, 3] += np.array(
+        [
+            float(shift.get("x_m") or 0.0),
+            float(shift.get("y_m") or 0.0),
+            float(shift.get("z_m") or 0.0),
+        ],
+        dtype=np.float64,
+    )
+    return out
+
+
 def resolve_camera_c2w(
     meta: dict,
     *,
@@ -65,11 +85,17 @@ def resolve_camera_c2w(
     if pose_mode == "flange_camera":
         if T_flange is None or tool0_T_camera is None:
             raise RuntimeError("flange_camera needs base_T_flange + hand-eye")
-        return T_flange @ tool0_T_camera, "flange@hand_eye"
+        return (
+            apply_stage_output_shift(T_flange @ tool0_T_camera, meta),
+            "flange@hand_eye+stage_output",
+        )
 
     # auto: prefer flange @ hand-eye when both exist (correct for lens-specific cal)
     if T_flange is not None and tool0_T_camera is not None:
-        return T_flange @ tool0_T_camera, "auto_flange@hand_eye"
+        return (
+            apply_stage_output_shift(T_flange @ tool0_T_camera, meta),
+            "auto_flange@hand_eye+stage_output",
+        )
     return T_json, "json_extrinsics_fallback"
 
 

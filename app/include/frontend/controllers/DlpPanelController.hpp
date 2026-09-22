@@ -35,6 +35,9 @@ public:
     [[nodiscard]] DlpProjectorSettings currentSettings() const;
     /// One FPP sequence step on the EVM (blocks). For pin capture, not the GUI loop.
     [[nodiscard]] bool showFppScanStepSync(int stepIndex, QString *errorOut = nullptr);
+    /// Apply LED currents synchronously for a capture step.
+    [[nodiscard]] bool applyLedCurrentsSync(const DlpProjectorSettings &settings,
+                                            QString *errorOut = nullptr);
     [[nodiscard]] bool blankSync(QString *errorOut = nullptr);
 
 private:

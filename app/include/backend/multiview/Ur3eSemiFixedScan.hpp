@@ -40,6 +40,12 @@ struct Ur3eSemiFixedRing
     double thetaDeg = 0.0;
     /// One still at entry (apex). No shoulder_pan spin.
     bool noPan = false;
+    /// ``rgb`` = one color still per pan sample. Empty = FPP burst when the plan is FPP.
+    QString captureKind;
+    /// 0 = inherit route ``intervalDeg``. Per-ring override (RGB Range / Interval).
+    double intervalDeg = 0.0;
+    /// ``< 0`` = inherit route ``panRangeDeg``. Per-ring override (RGB Range / Interval).
+    double panRangeDeg = -1.0;
 };
 
 struct Ur3eSemiFixedRoute
@@ -62,10 +68,22 @@ struct Ur3eSemiFixedRoute
     double stageDlpMm = 0.0;
     /// FPP apex working distance (metres above sample / z=0). 0 = default 0.45.
     double apexHeightM = 0.0;
-    /// Always captured first. FPP: home XY at apexHeightM. Semi: home XY at ring R.
+    /// Captured first when present. FPP omits this for sweep-only plans. Semi: home XY at ring R.
     Ur3eSemiFixedRing topPose{};
     bool hasTopPose = false;
     QVector<Ur3eSemiFixedRing> rings;
+    /// Optional RGB sweep. Same spin as a ring; one color still per sample, not an FPP burst.
+    Ur3eSemiFixedRing rgbRing{};
+    bool hasRgbRing = false;
+    /// Legacy optional RGB home still. Execute is sweep-only and does not fold this in.
+    Ur3eSemiFixedRing rgbHome{};
+    bool hasRgbHome = false;
+    /// Optional BFS exposure for FPP/DLP bursts (µs). Unset → use BFS GUI Exposure Time.
+    double dlpExposureUs = 0.0;
+    bool hasDlpExposure = false;
+    /// Optional BFS exposure for RGB sweep stills (µs). Unset → use BFS GUI Exposure Time.
+    double rgbExposureUs = 0.0;
+    bool hasRgbExposure = false;
 };
 
 struct Ur3eSemiFixedRouteInfo
@@ -87,7 +105,7 @@ struct Ur3eSemiFixedRouteInfo
 /// Sphere radius implied by planned ring TCPs (0 if unknown).
 [[nodiscard]] double inferSemiFixedSphereRadiusM(const Ur3eSemiFixedRoute &route);
 
-/// FPP: keep saved home joints; TCP = home XY at apexHeightM (default 450 mm).
+/// FPP: keep an explicit top_pose only. Sweep-only plans stay without a home still.
 /// Semi: if rings exist, install / replace a non-matching apex with home XY and Z = R.
 void ensureSemiFixedTopPose(Ur3eSemiFixedRoute &route);
 
@@ -132,7 +150,8 @@ struct Ur3eSemiFixedPreviewRing
     QString displayName;
     /// Apex / top still (θ≈0) — drawn as a pin instead of a spin ring.
     bool isTopPose = false;
-    /// FPP: pin at centerXM/YM/ZM (camera TCP), not a horizontal spin circle.
+    /// FPP: pin at centerXM/YM/ZM in tray preview frame (Z up from tray).
+    /// Taught entry_tcp is base_link; inferFppPreviewPins converts mount→tray.
     bool drawAsPin = false;
     /// Unit approach direction for pin stick (tool +Z / look axis).
     double tipDirX = 0.0;
@@ -141,6 +160,8 @@ struct Ur3eSemiFixedPreviewRing
     /// Maps to Semi/FPP execute ringIndex (top uses rings.size() when separate).
     int executeIndex = 0;
     bool noPan = false;
+    /// FPP RGB home / sweep pins (distinct color from fringe pins).
+    bool isRgb = false;
     bool reachabilityKnown = false;
     bool reachable = false;
     bool homePathOk = true;
@@ -152,7 +173,8 @@ inferSemiFixedPreviewRing(const Ur3eSemiFixedRing &ring);
 [[nodiscard]] QVector<Ur3eSemiFixedPreviewRing>
 inferSemiFixedPreviewRings(const Ur3eSemiFixedRoute &route);
 
-/// FPP: discrete pins at camera TCP home + pan samples (GUI interval/range).
+/// FPP: discrete pins at scan-TCP pan samples (GUI interval/range).
+/// Converts taught base_link entry_tcp into tray-frame preview XYZ (Z up).
 [[nodiscard]] QVector<Ur3eSemiFixedPreviewRing>
 inferFppPreviewPins(const Ur3eSemiFixedRoute &route);
 
@@ -174,5 +196,14 @@ void syncHemisphereParamsFromPlanLatitudes(const Ur3eHemisphereScanPlan &plan,
 [[nodiscard]] int semiFixedRingSampleCount(const Ur3eSemiFixedRing &ring,
                                            double intervalDeg,
                                            double rangeDeg = 360.0);
+
+/// Resolve per-ring spin spacing (0 / ``<0`` on the ring inherit the route defaults).
+[[nodiscard]] double resolveRingIntervalDeg(const Ur3eSemiFixedRing &ring,
+                                            double routeIntervalDeg);
+[[nodiscard]] double resolveRingPanRangeDeg(const Ur3eSemiFixedRing &ring,
+                                            double routePanRangeDeg);
+
+/// Append ``rgbRing`` onto ``route.rings`` for execute / capture index (sweep-only; no rgb_home).
+void foldRgbEntriesIntoRings(Ur3eSemiFixedRoute &route);
 
 } // namespace hf::ur3e

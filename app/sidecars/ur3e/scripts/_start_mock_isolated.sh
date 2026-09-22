@@ -34,12 +34,12 @@ exec ./venv/bin/python -m hyperfusion_ur3e.sidecar.server \
   --tool-payload-radius-mm 60 \
   --tool-payload-shape mesh \
   --tool-payload-mesh-file bfs_dlp_payload.stl \
-  --tool-tcp-x-mm 1.400 \
-  --tool-tcp-y-mm 31.743 \
-  --tool-tcp-z-mm 98.538 \
-  --tool-tcp-roll-deg -25.2629 \
-  --tool-tcp-pitch-deg 0.2395 \
-  --tool-tcp-yaw-deg 179.9313 \
+  --tool-tcp-x-mm "${HYPERFUSION_TOOL_TCP_X_MM:-1.400}" \
+  --tool-tcp-y-mm "${HYPERFUSION_TOOL_TCP_Y_MM:-31.743}" \
+  --tool-tcp-z-mm "${HYPERFUSION_TOOL_TCP_Z_MM:-98.538}" \
+  --tool-tcp-roll-deg "${HYPERFUSION_TOOL_TCP_ROLL_DEG:--25.2629}" \
+  --tool-tcp-pitch-deg "${HYPERFUSION_TOOL_TCP_PITCH_DEG:-0.2395}" \
+  --tool-tcp-yaw-deg "${HYPERFUSION_TOOL_TCP_YAW_DEG:-179.9313}" \
   --use-mock-hardware \
   --ros-distro jazzy \
   --ur-type ur3e \

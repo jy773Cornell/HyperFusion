@@ -62,6 +62,29 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--skip-decode", action="store_true")
     p.add_argument("--skip-fusion", action="store_true")
     p.add_argument(
+        "--fusion-mode",
+        choices=("intersection", "union"),
+        default="intersection",
+        help=(
+            "intersection: hard multi-view agree + densify ≥2 views. "
+            "union: soft score keep + densify 1-view cells."
+        ),
+    )
+    p.add_argument(
+        "--support-min-views",
+        type=int,
+        default=None,
+        help="Override densify multi-view support (default depends on --fusion-mode).",
+    )
+    p.add_argument("--score-lambda-agree", type=float, default=0.15)
+    p.add_argument("--score-lambda-contradict", type=float, default=0.40)
+    p.add_argument("--score-keep-threshold", type=float, default=0.12)
+    p.add_argument(
+        "--enable-tsdf",
+        action="store_true",
+        help="Also write score-gated TSDF mesh/cloud (secondary to dense_point_cloud.ply).",
+    )
+    p.add_argument(
         "--allow-non-fpp",
         action="store_true",
         help="Run even if pose JSON lacks fpp_pattern (default: skip)",
@@ -85,6 +108,14 @@ def main() -> int:
             skip_decode=bool(args.skip_decode),
             skip_fusion=bool(args.skip_fusion),
             require_fpp=not bool(args.allow_non_fpp),
+            fusion_mode=str(args.fusion_mode),
+            support_min_views=(
+                int(args.support_min_views) if args.support_min_views is not None else None
+            ),
+            score_lambda_agree=float(args.score_lambda_agree),
+            score_lambda_contradict=float(args.score_lambda_contradict),
+            score_keep_threshold=float(args.score_keep_threshold),
+            enable_tsdf=bool(args.enable_tsdf),
         )
     except Exception as exc:  # noqa: BLE001 — CLI
         print(json.dumps({"ok": False, "error": str(exc)}))

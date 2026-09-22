@@ -41,6 +41,9 @@ public:
     /// Stop the GUI FPP loop, show one burst step, return when the EVM has it.
     /// Call from a non-control thread (scan execute). Timeout 20 s.
     [[nodiscard]] bool showFppStepSync(int stepIndex, DlpError &error);
+    /// Apply LED currents and wait for the EVM before the next captured frame.
+    [[nodiscard]] bool applyLedCurrentsSync(const DlpProjectorSettings &settings,
+                                            DlpError &error);
     /// Stop the GUI FPP loop and blank. Call from a non-control thread.
     [[nodiscard]] bool blankSync(DlpError &error);
 

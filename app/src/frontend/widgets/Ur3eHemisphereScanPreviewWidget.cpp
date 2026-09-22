@@ -697,6 +697,22 @@ void Ur3eHemisphereScanPreviewWidget::drawLegend(QPainter &painter) const
         }
     }
 
+    bool hasFppPin = false;
+    bool hasRgbPin = false;
+    for (const PreviewSemiFixedRing &entry : semiFixedRings_)
+    {
+        if (!entry.ring.drawAsPin)
+            continue;
+        if (entry.ring.isRgb)
+            hasRgbPin = true;
+        else
+            hasFppPin = true;
+    }
+    if (hasFppPin)
+        entries.push_back({QColor(60, 180, 75), QStringLiteral("FPP")});
+    if (hasRgbPin)
+        entries.push_back({QColor(40, 200, 210), QStringLiteral("RGB")});
+
     QFont legendFont = painter.font();
     legendFont.setPointSize(9);
     painter.setFont(legendFont);
@@ -977,8 +993,14 @@ void Ur3eHemisphereScanPreviewWidget::drawSemiFixedRings(QPainter &painter,
                 color = QColor(70, 130, 220);
             else if (!ring.homePathOk)
                 color = QColor(230, 150, 40);
+            else if (ring.isRgb)
+                color = QColor(40, 200, 210); // cyan — RGB home / sweep
             else
-                color = QColor(60, 180, 75);
+                color = QColor(60, 180, 75); // green — FPP
+        }
+        else if (ring.isRgb)
+        {
+            color = QColor(40, 200, 210);
         }
         else
         {
@@ -987,7 +1009,7 @@ void Ur3eHemisphereScanPreviewWidget::drawSemiFixedRings(QPainter &painter,
 
         if (ring.drawAsPin)
         {
-            // FPP: pin at camera TCP xyz with tip look axis.
+            // FPP: pin at tray-frame TCP xyz with tip look axis.
             const Vec3 surface{ring.centerXM, ring.centerYM, ring.centerZM};
             double dirX = ring.tipDirX;
             double dirY = ring.tipDirY;

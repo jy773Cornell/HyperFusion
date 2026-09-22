@@ -158,6 +158,45 @@ bool DlpProjectorWorker::showFppStepSync(int stepIndex, DlpError &error)
     return ok;
 }
 
+bool DlpProjectorWorker::applyLedCurrentsSync(const DlpProjectorSettings &settings,
+                                              DlpError &error)
+{
+    if (!running_.load() || projector_ == nullptr)
+    {
+        error = {DlpErrorCode::InvalidState, "DLP worker is not running.", false};
+        return false;
+    }
+
+    std::mutex doneMutex;
+    std::condition_variable doneCv;
+    bool done = false;
+    bool ok = false;
+    DlpError localError;
+    enqueue([this, settings, &doneMutex, &doneCv, &done, &ok, &localError]() {
+        ok = projector_->applyLedCurrents(settings, localError);
+        if (!ok)
+            notifyError(localError);
+        {
+            std::lock_guard<std::mutex> lock(doneMutex);
+            done = true;
+        }
+        doneCv.notify_one();
+    });
+
+    {
+        std::unique_lock<std::mutex> lock(doneMutex);
+        if (!doneCv.wait_for(lock, std::chrono::seconds(8), [&done]() { return done; }))
+        {
+            error = {DlpErrorCode::InternalError,
+                     "Timed out applying DLP LED currents.",
+                     false};
+            return false;
+        }
+    }
+    error = localError;
+    return ok;
+}
+
 bool DlpProjectorWorker::blankSync(DlpError &error)
 {
     stopFppScan();

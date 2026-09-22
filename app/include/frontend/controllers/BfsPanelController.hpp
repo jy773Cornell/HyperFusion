@@ -45,8 +45,16 @@ public:
                                          int timeoutMs,
                                          BfsRgbFrame *out = nullptr,
                                          const std::function<bool()> &abortRequested = {}) const;
-    /// Current BFS UI settings (for pose JSON ``bfs_capture`` and apply).
+    /// Current BFS settings for capture JSON / apply. Honors an optional capture override.
     [[nodiscard]] BfsCameraSettings settingsFromUi() const;
+    /// While set, ``settingsFromUi()`` returns this (scan capture metadata). Clear after scan.
+    void setCaptureSettingsOverride(const std::optional<BfsCameraSettings> &settings);
+    /// Apply *settings* on the camera control thread (blocking). Updates capture override on success.
+    [[nodiscard]] bool applyCameraSettingsBlocking(const BfsCameraSettings &settings,
+                                                   QString *errorOut = nullptr);
+    /// Build Timed + ExposureAuto Off + *exposureUs* from *base* (does not touch UI).
+    [[nodiscard]] static BfsCameraSettings settingsWithCaptureExposure(
+        BfsCameraSettings base, double exposureUs);
 
 private:
     void onRefreshClicked();
@@ -78,5 +86,6 @@ private:
     QTimer *settingsApplyTimer_ = nullptr;
     std::thread fppBurstThread_;
     bool fppBurstBusy_ = false;
+    std::optional<BfsCameraSettings> captureSettingsOverride_;
 };
 } // namespace hf::bfs

@@ -136,6 +136,95 @@ std::vector<double> jointsFromJson(const QJsonArray &a)
     return out;
 }
 
+QJsonObject ringToJson(const Ur3eSemiFixedRing &ring)
+{
+    QJsonObject o;
+    o.insert(QStringLiteral("id"), ring.id);
+    o.insert(QStringLiteral("display_name"), ring.displayName);
+    o.insert(QStringLiteral("entry_joints_rad"), jointsToJson(ring.entryJointsRad));
+    if (ring.hasEntryTcp)
+        o.insert(QStringLiteral("entry_tcp"), tcpToJson(ring.entryTcp));
+    if (ring.reachabilityKnown)
+    {
+        o.insert(QStringLiteral("reachable"), ring.reachable);
+        o.insert(QStringLiteral("home_path_ok"), ring.homePathOk);
+    }
+    o.insert(QStringLiteral("base_sweep_ok"), ring.baseSweepOk);
+    o.insert(QStringLiteral("backup_coverage_ok"), ring.backupCoverageOk);
+    o.insert(QStringLiteral("backup_union_deg"), ring.backupUnionDeg);
+    o.insert(QStringLiteral("phi_deg"), ring.phiDeg);
+    o.insert(QStringLiteral("theta_deg"), ring.thetaDeg);
+    o.insert(QStringLiteral("no_pan"), ring.noPan);
+    if (!ring.captureKind.trimmed().isEmpty())
+        o.insert(QStringLiteral("capture_kind"), ring.captureKind.trimmed());
+    if (ring.intervalDeg > 0.0)
+        o.insert(QStringLiteral("interval_deg"), ring.intervalDeg);
+    if (ring.panRangeDeg >= 0.0)
+        o.insert(QStringLiteral("pan_range_deg"), ring.panRangeDeg);
+    if (!ring.panMask.empty())
+    {
+        QJsonArray mask;
+        for (const std::uint8_t bit : ring.panMask)
+            mask.append(static_cast<int>(bit != 0 ? 1 : 0));
+        o.insert(QStringLiteral("pan_mask"), mask);
+    }
+    return o;
+}
+
+bool ringFromJson(const QJsonObject &o, Ur3eSemiFixedRing &ringOut)
+{
+    Ur3eSemiFixedRing ring;
+    ring.id = o.value(QStringLiteral("id")).toString();
+    ring.displayName = o.value(QStringLiteral("display_name")).toString(ring.id);
+    ring.entryJointsRad = jointsFromJson(o.value(QStringLiteral("entry_joints_rad")).toArray());
+    if (ring.entryJointsRad.size() != 6)
+        return false;
+    if (o.contains(QStringLiteral("entry_tcp")))
+    {
+        ring.entryTcp = tcpFromJson(o.value(QStringLiteral("entry_tcp")).toObject());
+        ring.hasEntryTcp = true;
+    }
+    if (o.contains(QStringLiteral("reachable")))
+    {
+        ring.reachabilityKnown = true;
+        ring.reachable = o.value(QStringLiteral("reachable")).toBool(false);
+        ring.homePathOk = o.value(QStringLiteral("home_path_ok")).toBool(true);
+    }
+    ring.baseSweepOk = o.value(QStringLiteral("base_sweep_ok")).toBool(true);
+    ring.backupCoverageOk = o.value(QStringLiteral("backup_coverage_ok")).toBool(false);
+    ring.backupUnionDeg = o.value(QStringLiteral("backup_union_deg")).toDouble(0.0);
+    ring.phiDeg = o.value(QStringLiteral("phi_deg")).toDouble(0.0);
+    ring.thetaDeg = o.value(QStringLiteral("theta_deg")).toDouble(0.0);
+    ring.noPan = o.value(QStringLiteral("no_pan")).toBool(false)
+                 || std::abs(ring.thetaDeg) < 0.75;
+    ring.captureKind = o.value(QStringLiteral("capture_kind")).toString().trimmed();
+    ring.intervalDeg = o.value(QStringLiteral("interval_deg")).toDouble(0.0);
+    if (!(ring.intervalDeg > 0.0))
+        ring.intervalDeg = 0.0;
+    if (o.contains(QStringLiteral("pan_range_deg")))
+    {
+        ring.panRangeDeg = o.value(QStringLiteral("pan_range_deg")).toDouble(-1.0);
+        if (!(ring.panRangeDeg >= 0.0))
+            ring.panRangeDeg = 0.0;
+        if (ring.panRangeDeg > 360.0)
+            ring.panRangeDeg = 360.0;
+    }
+    else
+    {
+        ring.panRangeDeg = -1.0;
+    }
+    ring.panMask.clear();
+    if (o.contains(QStringLiteral("pan_mask")) && o.value(QStringLiteral("pan_mask")).isArray())
+    {
+        const QJsonArray mask = o.value(QStringLiteral("pan_mask")).toArray();
+        ring.panMask.reserve(mask.size());
+        for (const QJsonValue &bit : mask)
+            ring.panMask.push_back(bit.toBool(false) || bit.toInt(0) != 0 ? 1 : 0);
+    }
+    ringOut = std::move(ring);
+    return true;
+}
+
 void snapApexPreviewToRingSphere(QVector<Ur3eSemiFixedPreviewRing> &rings,
                                  const double fallbackRadiusM)
 {
@@ -238,12 +327,17 @@ void ensureSemiFixedTopPose(Ur3eSemiFixedRoute &route)
 
     if (route.isFppPlan)
     {
-        const double zM = route.apexHeightM > 0.01 ? route.apexHeightM : 0.45;
-        finishApex(zM);
-        if (route.topPose.id.isEmpty())
-            route.topPose.id = QStringLiteral("home");
-        if (route.topPose.displayName.isEmpty())
-            route.topPose.displayName = QStringLiteral("Home (camera 450 mm)");
+        // Sweep-only FPP plans have no top_pose. Do not invent a home still.
+        if (!route.hasTopPose || route.topPose.entryJointsRad.size() != 6)
+        {
+            route.hasTopPose = false;
+            return;
+        }
+        route.topPose.noPan = true;
+        route.topPose.thetaDeg = 0.0;
+        route.topPose.reachabilityKnown = true;
+        route.topPose.reachable = route.topPose.reachable;
+        route.topPose.homePathOk = true;
         return;
     }
 
@@ -292,56 +386,39 @@ bool saveUr3eSemiFixedRoute(const QString &path,
             (toSave.apexHeightM > 0.01 ? toSave.apexHeightM : 0.45) * 1000.0;
         root.insert(QStringLiteral("apex_height_mm"), mm);
     }
+    if (toSave.hasDlpExposure && toSave.dlpExposureUs > 0.0)
+        root.insert(QStringLiteral("dlp_exposure_us"), toSave.dlpExposureUs);
+    if (toSave.hasRgbExposure && toSave.rgbExposureUs > 0.0)
+        root.insert(QStringLiteral("rgb_exposure_us"), toSave.rgbExposureUs);
 
+    if (toSave.hasTopPose && toSave.topPose.entryJointsRad.size() == 6)
     {
-        QJsonObject top;
-        top.insert(QStringLiteral("id"), toSave.topPose.id);
-        top.insert(QStringLiteral("display_name"), toSave.topPose.displayName);
-        top.insert(QStringLiteral("entry_joints_rad"),
-                   jointsToJson(toSave.topPose.entryJointsRad));
-        if (toSave.topPose.hasEntryTcp)
-            top.insert(QStringLiteral("entry_tcp"), tcpToJson(toSave.topPose.entryTcp));
-        if (toSave.topPose.reachabilityKnown)
-        {
-            top.insert(QStringLiteral("reachable"), toSave.topPose.reachable);
-            top.insert(QStringLiteral("home_path_ok"), toSave.topPose.homePathOk);
-        }
-        top.insert(QStringLiteral("base_sweep_ok"), toSave.topPose.baseSweepOk);
-        top.insert(QStringLiteral("backup_coverage_ok"), toSave.topPose.backupCoverageOk);
-        top.insert(QStringLiteral("theta_deg"), toSave.topPose.thetaDeg);
+        QJsonObject top = ringToJson(toSave.topPose);
         top.insert(QStringLiteral("no_pan"), true);
         root.insert(QStringLiteral("top_pose"), top);
     }
 
+    if (toSave.hasRgbHome && toSave.rgbHome.entryJointsRad.size() == 6)
+    {
+        Ur3eSemiFixedRing home = toSave.rgbHome;
+        if (home.captureKind.trimmed().isEmpty())
+            home.captureKind = QStringLiteral("rgb");
+        home.noPan = true;
+        home.thetaDeg = 0.0;
+        root.insert(QStringLiteral("rgb_home"), ringToJson(home));
+    }
+
+    if (toSave.hasRgbRing && toSave.rgbRing.entryJointsRad.size() == 6)
+    {
+        Ur3eSemiFixedRing rgb = toSave.rgbRing;
+        if (rgb.captureKind.trimmed().isEmpty())
+            rgb.captureKind = QStringLiteral("rgb");
+        root.insert(QStringLiteral("rgb_ring"), ringToJson(rgb));
+    }
+
     QJsonArray rings;
     for (const Ur3eSemiFixedRing &ring : toSave.rings)
-    {
-        QJsonObject o;
-        o.insert(QStringLiteral("id"), ring.id);
-        o.insert(QStringLiteral("display_name"), ring.displayName);
-        o.insert(QStringLiteral("entry_joints_rad"), jointsToJson(ring.entryJointsRad));
-        if (ring.hasEntryTcp)
-            o.insert(QStringLiteral("entry_tcp"), tcpToJson(ring.entryTcp));
-        if (ring.reachabilityKnown)
-        {
-            o.insert(QStringLiteral("reachable"), ring.reachable);
-            o.insert(QStringLiteral("home_path_ok"), ring.homePathOk);
-        }
-        o.insert(QStringLiteral("base_sweep_ok"), ring.baseSweepOk);
-        o.insert(QStringLiteral("backup_coverage_ok"), ring.backupCoverageOk);
-        o.insert(QStringLiteral("backup_union_deg"), ring.backupUnionDeg);
-        o.insert(QStringLiteral("phi_deg"), ring.phiDeg);
-        o.insert(QStringLiteral("theta_deg"), ring.thetaDeg);
-        o.insert(QStringLiteral("no_pan"), ring.noPan);
-        if (!ring.panMask.empty())
-        {
-            QJsonArray mask;
-            for (const std::uint8_t bit : ring.panMask)
-                mask.append(static_cast<int>(bit != 0 ? 1 : 0));
-            o.insert(QStringLiteral("pan_mask"), mask);
-        }
-        rings.append(o);
-    }
+        rings.append(ringToJson(ring));
     root.insert(QStringLiteral("rings"), rings);
 
     QFile file(path);
@@ -431,73 +508,89 @@ bool loadUr3eSemiFixedRoute(const QString &path,
         apexMm = 450.0;
     routeOut.apexHeightM = apexMm > 0.0 ? apexMm * 0.001 : 0.0;
 
+    if (root.contains(QStringLiteral("dlp_exposure_us")))
+    {
+        const double us = root.value(QStringLiteral("dlp_exposure_us")).toDouble(0.0);
+        if (us > 0.0)
+        {
+            routeOut.dlpExposureUs = us;
+            routeOut.hasDlpExposure = true;
+        }
+    }
+    if (root.contains(QStringLiteral("rgb_exposure_us")))
+    {
+        const double us = root.value(QStringLiteral("rgb_exposure_us")).toDouble(0.0);
+        if (us > 0.0)
+        {
+            routeOut.rgbExposureUs = us;
+            routeOut.hasRgbExposure = true;
+        }
+    }
+
     if (root.contains(QStringLiteral("top_pose")) && root.value(QStringLiteral("top_pose")).isObject())
     {
-        const QJsonObject top = root.value(QStringLiteral("top_pose")).toObject();
         Ur3eSemiFixedRing pose;
-        pose.id = top.value(QStringLiteral("id")).toString(QStringLiteral("top"));
-        pose.displayName =
-            top.value(QStringLiteral("display_name")).toString(QStringLiteral("Top (θ=0)"));
-        pose.entryJointsRad =
-            jointsFromJson(top.value(QStringLiteral("entry_joints_rad")).toArray());
-        if (pose.entryJointsRad.size() == 6)
+        if (ringFromJson(root.value(QStringLiteral("top_pose")).toObject(), pose))
         {
-            if (top.contains(QStringLiteral("entry_tcp")))
-            {
-                pose.entryTcp = tcpFromJson(top.value(QStringLiteral("entry_tcp")).toObject());
-                pose.hasEntryTcp = true;
-            }
+            if (pose.id.isEmpty())
+                pose.id = QStringLiteral("top");
+            if (pose.displayName.isEmpty())
+                pose.displayName = QStringLiteral("Top (θ=0)");
             // Saved top is an intentional init pose — color like a reachable plan pin.
             pose.reachabilityKnown = true;
-            pose.reachable = top.value(QStringLiteral("reachable")).toBool(true);
-            pose.homePathOk = top.value(QStringLiteral("home_path_ok")).toBool(true);
+            if (!root.value(QStringLiteral("top_pose")).toObject().contains(QStringLiteral("reachable")))
+                pose.reachable = true;
+            pose.homePathOk = true;
             pose.noPan = true;
-            pose.thetaDeg = top.value(QStringLiteral("theta_deg")).toDouble(0.0);
+            pose.thetaDeg = 0.0;
             routeOut.topPose = pose;
             routeOut.hasTopPose = true;
         }
     }
     ensureSemiFixedTopPose(routeOut);
 
+    if (root.contains(QStringLiteral("rgb_home")) && root.value(QStringLiteral("rgb_home")).isObject())
+    {
+        Ur3eSemiFixedRing home;
+        if (ringFromJson(root.value(QStringLiteral("rgb_home")).toObject(), home))
+        {
+            if (home.id.isEmpty())
+                home.id = QStringLiteral("rgb_home");
+            if (home.displayName.isEmpty())
+                home.displayName = QStringLiteral("RGB Home");
+            if (home.captureKind.trimmed().isEmpty())
+                home.captureKind = QStringLiteral("rgb");
+            home.noPan = true;
+            home.thetaDeg = 0.0;
+            routeOut.rgbHome = home;
+            routeOut.hasRgbHome = true;
+        }
+    }
+
+    if (root.contains(QStringLiteral("rgb_ring")) && root.value(QStringLiteral("rgb_ring")).isObject())
+    {
+        Ur3eSemiFixedRing rgb;
+        if (ringFromJson(root.value(QStringLiteral("rgb_ring")).toObject(), rgb))
+        {
+            if (rgb.id.isEmpty())
+                rgb.id = QStringLiteral("rgb");
+            if (rgb.displayName.isEmpty())
+                rgb.displayName = QStringLiteral("RGB");
+            if (rgb.captureKind.trimmed().isEmpty())
+                rgb.captureKind = QStringLiteral("rgb");
+            routeOut.rgbRing = rgb;
+            routeOut.hasRgbRing = true;
+        }
+    }
+
     const QJsonArray rings = root.value(QStringLiteral("rings")).toArray();
     for (const QJsonValue &v : rings)
     {
         if (!v.isObject())
             continue;
-        const QJsonObject o = v.toObject();
         Ur3eSemiFixedRing ring;
-        ring.id = o.value(QStringLiteral("id")).toString();
-        ring.displayName = o.value(QStringLiteral("display_name")).toString(ring.id);
-        ring.entryJointsRad = jointsFromJson(o.value(QStringLiteral("entry_joints_rad")).toArray());
-        if (ring.entryJointsRad.size() != 6)
+        if (!ringFromJson(v.toObject(), ring))
             continue;
-        if (o.contains(QStringLiteral("entry_tcp")))
-        {
-            ring.entryTcp = tcpFromJson(o.value(QStringLiteral("entry_tcp")).toObject());
-            ring.hasEntryTcp = true;
-        }
-        if (o.contains(QStringLiteral("reachable")))
-        {
-            ring.reachabilityKnown = true;
-            ring.reachable = o.value(QStringLiteral("reachable")).toBool(false);
-            ring.homePathOk = o.value(QStringLiteral("home_path_ok")).toBool(true);
-        }
-        // Legacy routes had no flags — they were full-spin entries.
-        ring.baseSweepOk = o.value(QStringLiteral("base_sweep_ok")).toBool(true);
-        ring.backupCoverageOk = o.value(QStringLiteral("backup_coverage_ok")).toBool(false);
-        ring.backupUnionDeg = o.value(QStringLiteral("backup_union_deg")).toDouble(0.0);
-        ring.phiDeg = o.value(QStringLiteral("phi_deg")).toDouble(0.0);
-        ring.thetaDeg = o.value(QStringLiteral("theta_deg")).toDouble(0.0);
-        ring.noPan = o.value(QStringLiteral("no_pan")).toBool(false)
-                     || std::abs(ring.thetaDeg) < 0.75;
-        ring.panMask.clear();
-        if (o.contains(QStringLiteral("pan_mask")) && o.value(QStringLiteral("pan_mask")).isArray())
-        {
-            const QJsonArray mask = o.value(QStringLiteral("pan_mask")).toArray();
-            ring.panMask.reserve(mask.size());
-            for (const QJsonValue &bit : mask)
-                ring.panMask.push_back(bit.toBool(false) || bit.toInt(0) != 0 ? 1 : 0);
-        }
         if (ring.id.isEmpty())
             ring.id = QStringLiteral("ring_%1").arg(routeOut.rings.size() + 1);
         if (ring.displayName.isEmpty())
@@ -505,10 +598,11 @@ bool loadUr3eSemiFixedRoute(const QString &path,
         routeOut.rings.push_back(ring);
     }
 
-    if (routeOut.rings.isEmpty() && !routeOut.hasTopPose)
+    if (routeOut.rings.isEmpty() && !routeOut.hasTopPose && !routeOut.hasRgbRing
+        && !routeOut.hasRgbHome)
     {
         if (errorMessage != nullptr)
-            *errorMessage = QStringLiteral("Route has no valid rings or apex");
+            *errorMessage = QStringLiteral("Route has no valid rings, RGB entries, or apex");
         return false;
     }
     return true;
@@ -652,12 +746,26 @@ void fillPinTipDir(Ur3eSemiFixedPreviewRing &pin, const Ur3eSemiFixedRing &ring)
     }
 }
 
+/// Taught FPP entry_tcp is base_link (Z from ceiling mount toward the tray).
+/// Preview tray scene uses Z=0 on the tray and +Z up — flip height + look axis.
+void baseLinkTcpToTrayPreview(double &xM, double &yM, double &zM,
+                              double &tipX, double &tipY, double &tipZ)
+{
+    (void)xM;
+    (void)yM;
+    const double mountH =
+        std::max(0.1, hf::hardwareConfig().ur3e.ceilingMountHeightMm * 0.001);
+    zM = mountH - zM;
+    tipZ = -tipZ;
+}
+
 Ur3eSemiFixedPreviewRing makeFppPin(const Ur3eSemiFixedRing &ring,
                                     const double xM,
                                     const double yM,
                                     const double zM,
                                     const int executeIndex,
-                                    const QString &label)
+                                    const QString &label,
+                                    const bool isRgb = false)
 {
     Ur3eSemiFixedPreviewRing pin;
     pin.displayName = label;
@@ -668,12 +776,36 @@ Ur3eSemiFixedPreviewRing makeFppPin(const Ur3eSemiFixedRing &ring,
     pin.isTopPose = false;
     pin.drawAsPin = true;
     pin.noPan = ring.noPan;
+    pin.isRgb = isRgb
+                || ring.captureKind.trimmed().compare(QStringLiteral("rgb"),
+                                                      Qt::CaseInsensitive)
+                       == 0;
     pin.reachabilityKnown = ring.reachabilityKnown;
     pin.reachable = ring.reachable;
     pin.homePathOk = ring.homePathOk;
     pin.executeIndex = executeIndex;
     fillPinTipDir(pin, ring);
+    baseLinkTcpToTrayPreview(pin.centerXM, pin.centerYM, pin.centerZM,
+                             pin.tipDirX, pin.tipDirY, pin.tipDirZ);
     return pin;
+}
+
+void offsetRgbPreviewXy(double &xM, double &yM, const double cx, const double cy)
+{
+    // Same taught pose as FPP would stack on top of fringe pins — nudge RGB outward.
+    constexpr double kOffsetM = 0.03;
+    const double dx = xM - cx;
+    const double dy = yM - cy;
+    const double r = std::hypot(dx, dy);
+    if (r > 1.0e-6)
+    {
+        xM += dx / r * kOffsetM;
+        yM += dy / r * kOffsetM;
+    }
+    else
+    {
+        xM += kOffsetM;
+    }
 }
 } // namespace
 
@@ -735,18 +867,74 @@ QVector<Ur3eSemiFixedPreviewRing> inferFppPreviewPins(const Ur3eSemiFixedRoute &
         }
     }
 
+    // RGB home is optional in JSON for authoring, but preview is sweep-only (no home still).
+    if (route.hasRgbRing && route.rgbRing.hasEntryTcp
+        && route.rgbRing.entryJointsRad.size() == 6)
+    {
+        const Ur3eSemiFixedRing &ring = route.rgbRing;
+        const int rgbIndex = ringCount;
+        const bool pinOnly = ring.noPan || std::abs(ring.thetaDeg) < 0.75;
+        const double rgbInterval = resolveRingIntervalDeg(ring, intervalDeg);
+        const double rgbRange = resolveRingPanRangeDeg(ring, rangeDeg);
+        if (pinOnly)
+        {
+            double x = ring.entryTcp.xM;
+            double y = ring.entryTcp.yM;
+            offsetRgbPreviewXy(x, y, cx, cy);
+            out.push_back(makeFppPin(ring,
+                                     x,
+                                     y,
+                                     ring.entryTcp.zM,
+                                     rgbIndex,
+                                     ring.displayName.isEmpty()
+                                         ? QStringLiteral("RGB")
+                                         : ring.displayName,
+                                     true));
+        }
+        else
+        {
+            const int samples = semiFixedSampleCount(rgbInterval, rgbRange);
+            const double dx0 = ring.entryTcp.xM - cx;
+            const double dy0 = ring.entryTcp.yM - cy;
+            for (int s = 0; s < samples; ++s)
+            {
+                const double ang =
+                    static_cast<double>(panDir) * static_cast<double>(s) * rgbInterval
+                    * (3.14159265358979323846 / 180.0);
+                const double c = std::cos(ang);
+                const double sn = std::sin(ang);
+                double x = cx + dx0 * c - dy0 * sn;
+                double y = cy + dx0 * sn + dy0 * c;
+                offsetRgbPreviewXy(x, y, cx, cy);
+                const QString baseName =
+                    ring.displayName.isEmpty() ? QStringLiteral("RGB") : ring.displayName;
+                const QString label =
+                    samples <= 1
+                        ? baseName
+                        : QStringLiteral("%1 @%2°")
+                              .arg(baseName)
+                              .arg(static_cast<double>(panDir) * static_cast<double>(s)
+                                       * rgbInterval,
+                                   0, 'f', 0);
+                out.push_back(
+                    makeFppPin(ring, x, y, ring.entryTcp.zM, rgbIndex, label, true));
+            }
+        }
+    }
+
     if (route.hasTopPose && route.topPose.entryJointsRad.size() == 6)
     {
         Ur3eSemiFixedRing top = route.topPose;
         const double x = top.hasEntryTcp ? top.entryTcp.xM : cx;
         const double y = top.hasEntryTcp ? top.entryTcp.yM : cy;
         const double z = top.hasEntryTcp ? top.entryTcp.zM : 0.25;
+        const int topIndex = ringCount + (route.hasRgbRing ? 1 : 0);
         Ur3eSemiFixedPreviewRing home =
             makeFppPin(top,
                        x,
                        y,
                        z,
-                       ringCount,
+                       topIndex,
                        top.displayName.isEmpty() ? QStringLiteral("Home") : top.displayName);
         home.isTopPose = true;
         out.push_back(home);
@@ -989,6 +1177,11 @@ void pruneSemiFixedRedundantFullSpinPins(Ur3eSemiFixedRoute &route)
         {
             Ur3eSemiFixedRing &prev = kept[i];
             if (!sameTheta(prev, ring))
+                continue;
+            // RGB vs FPP at the same latitude are distinct capture entries — keep both.
+            if (prev.captureKind.trimmed().compare(ring.captureKind.trimmed(),
+                                                   Qt::CaseInsensitive)
+                != 0)
                 continue;
             if (prev.baseSweepOk)
             {
@@ -1248,6 +1441,36 @@ int semiFixedSampleCount(const double intervalDeg, const double rangeDeg)
         return 1;
     const int n = static_cast<int>(std::lround(range / intervalDeg));
     return std::max(1, n);
+}
+
+double resolveRingIntervalDeg(const Ur3eSemiFixedRing &ring, const double routeIntervalDeg)
+{
+    if (ring.intervalDeg > 0.0)
+        return ring.intervalDeg;
+    return routeIntervalDeg > 0.0 ? routeIntervalDeg : 10.0;
+}
+
+double resolveRingPanRangeDeg(const Ur3eSemiFixedRing &ring, const double routePanRangeDeg)
+{
+    if (ring.panRangeDeg >= 0.0)
+        return std::min(360.0, ring.panRangeDeg);
+    return routePanRangeDeg >= 0.0 ? std::min(360.0, routePanRangeDeg) : 360.0;
+}
+
+void foldRgbEntriesIntoRings(Ur3eSemiFixedRoute &route)
+{
+    // Sweep-only RGB: do not fold rgb_home (no vertical home still).
+    if (route.hasRgbRing && route.rgbRing.entryJointsRad.size() == 6)
+    {
+        Ur3eSemiFixedRing rgb = route.rgbRing;
+        if (rgb.captureKind.trimmed().isEmpty())
+            rgb.captureKind = QStringLiteral("rgb");
+        if (rgb.id.isEmpty())
+            rgb.id = QStringLiteral("rgb");
+        if (rgb.displayName.isEmpty())
+            rgb.displayName = QStringLiteral("RGB");
+        route.rings.push_back(rgb);
+    }
 }
 
 namespace

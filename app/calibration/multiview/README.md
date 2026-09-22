@@ -195,7 +195,7 @@ Results: `camera_intrinsics.yaml`, `undistort_preview/`, `flange_T_camera.yaml`,
 
 ### FPP geometry (checkerboard in the DLP patch — no empty tray)
 
-Same 10×7 / **18 mm** board as `bfs_cal/board.yaml`. Robot **nadir, one pin**, stage locked. Connect DLP. Execute once per board pose (26 frames). Keep GOOD bursts under `dlp_cal/checkerboard/` as `00000`–`00015` (13 fit + 3 hold-out). Whole board must sit inside the bright rectangle.
+Same 10×7 / **18 mm** board as `bfs_cal/board.yaml`. Robot **nadir, one pin**, stage locked. Connect DLP. Execute once per board pose (one RGB visual + 26 PSP frames). Keep GOOD bursts under `dlp_cal/checkerboard/` as `00000`–`00015` (13 fit + 3 hold-out). Whole board must sit inside the bright rectangle.
 
 ```powershell
 .\.venv\Scripts\python dlp_cal\check_fpp_board.py --input dlp_cal\checkerboard

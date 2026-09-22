@@ -208,6 +208,25 @@ bool DlpPanelController::showFppScanStepSync(int stepIndex, QString *errorOut)
     return true;
 }
 
+bool DlpPanelController::applyLedCurrentsSync(const DlpProjectorSettings &settings,
+                                              QString *errorOut)
+{
+    if (worker_ == nullptr)
+    {
+        if (errorOut != nullptr)
+            *errorOut = QStringLiteral("DLP worker is not running.");
+        return false;
+    }
+    DlpError error;
+    if (!worker_->applyLedCurrentsSync(settings, error))
+    {
+        if (errorOut != nullptr)
+            *errorOut = QString::fromStdString(error.message);
+        return false;
+    }
+    return true;
+}
+
 bool DlpPanelController::blankSync(QString *errorOut)
 {
     if (worker_ == nullptr)

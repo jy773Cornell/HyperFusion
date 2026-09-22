@@ -86,7 +86,9 @@ struct FppScanStep
     const char *hdmiFile = nullptr;
 };
 
-/// HDMI 26-frame sine PSP (u then v). JSON names must stay PSP* so decode uses psp.py.
+/// HDMI capture: 26-frame sine PSP (u then v), black + white + 12u + 12v.
+/// Color stills use the separate RGB ring (plan rgb exposure / capture_kind), not a
+/// full-white frame inside the FPP burst.
 inline constexpr FppScanStep kFppScanningSteps[] = {
     {FppScanStepKind::AmbientBlank, nullptr, "Black", "black.png"},
     {FppScanStepKind::Pattern, "PSP white", "White", "white.png"},

@@ -182,6 +182,20 @@ PersistedUr3eScanModePanelSettings loadScanModePanel(QSettings &settings,
         panel.panRangeDeg = 0.0;
     if (panel.panRangeDeg > 360.0)
         panel.panRangeDeg = 360.0;
+    panel.rgbImagingIntervalDeg =
+        settings
+            .value(prefix + QStringLiteral("rgbImagingIntervalDeg"),
+                   defaults.rgbImagingIntervalDeg)
+            .toDouble();
+    if (!(panel.rgbImagingIntervalDeg > 0.0))
+        panel.rgbImagingIntervalDeg = defaults.rgbImagingIntervalDeg;
+    panel.rgbPanRangeDeg =
+        settings.value(prefix + QStringLiteral("rgbPanRangeDeg"), defaults.rgbPanRangeDeg)
+            .toDouble();
+    if (!(panel.rgbPanRangeDeg >= 0.0))
+        panel.rgbPanRangeDeg = 0.0;
+    if (panel.rgbPanRangeDeg > 360.0)
+        panel.rgbPanRangeDeg = 360.0;
     panel.panDirection =
         settings.value(prefix + QStringLiteral("panDirection"), defaults.panDirection).toInt();
     if (panel.panDirection >= 0)
@@ -209,6 +223,9 @@ void saveScanModePanel(QSettings &settings,
     settings.setValue(prefix + QStringLiteral("wristSweepWrist3"), panel.wristSweepWrist3);
     settings.setValue(prefix + QStringLiteral("imagingIntervalDeg"), panel.imagingIntervalDeg);
     settings.setValue(prefix + QStringLiteral("panRangeDeg"), panel.panRangeDeg);
+    settings.setValue(prefix + QStringLiteral("rgbImagingIntervalDeg"),
+                      panel.rgbImagingIntervalDeg);
+    settings.setValue(prefix + QStringLiteral("rgbPanRangeDeg"), panel.rgbPanRangeDeg);
     settings.setValue(prefix + QStringLiteral("panDirection"), panel.panDirection);
 }
 

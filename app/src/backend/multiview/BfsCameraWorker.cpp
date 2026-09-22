@@ -175,6 +175,89 @@ void BfsCameraWorker::requestApplySettings(const BfsCameraSettings &settings)
     });
 }
 
+bool BfsCameraWorker::applySettingsBlocking(const BfsCameraSettings &settings,
+                                            BfsError *errorOut,
+                                            const int timeoutMs)
+{
+    if (!running_.load())
+    {
+        if (errorOut != nullptr)
+            *errorOut = {BfsErrorCode::InvalidState, "BFS worker not running.", false};
+        return false;
+    }
+
+    std::mutex doneMutex;
+    std::condition_variable doneCv;
+    bool done = false;
+    bool ok = false;
+    BfsError error;
+
+    enqueue([this, settings, &doneMutex, &doneCv, &done, &ok, &error]() {
+        if (state_ != BfsCameraState::Connected && state_ != BfsCameraState::Streaming)
+        {
+            error = {BfsErrorCode::InvalidState, "BFS not connected.", false};
+            ok = false;
+        }
+        else
+        {
+            const bool wasStreaming = streamEnabled_.exchange(false);
+            while (streamInPoll_)
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            if (wasStreaming)
+                camera_->stopStreaming();
+
+            if (!camera_->applySettings(settings, error))
+            {
+                ok = false;
+                notifyError(error);
+            }
+            else
+            {
+                ok = true;
+            }
+
+            if (wasStreaming || state_ == BfsCameraState::Streaming
+                || state_ == BfsCameraState::Connected)
+            {
+                BfsError streamError;
+                if (!camera_->startStreaming(streamError))
+                {
+                    ok = false;
+                    error = streamError;
+                    notifyError(streamError);
+                    notifyState(camera_->state());
+                }
+                else
+                {
+                    notifyState(BfsCameraState::Streaming);
+                    consecutiveTimeouts_ = 0;
+                    streamEnabled_ = true;
+                }
+            }
+        }
+        {
+            std::lock_guard<std::mutex> lock(doneMutex);
+            done = true;
+        }
+        doneCv.notify_one();
+    });
+
+    {
+        std::unique_lock<std::mutex> lock(doneMutex);
+        if (!doneCv.wait_for(lock, std::chrono::milliseconds(std::max(1, timeoutMs)),
+                             [&done]() { return done; }))
+        {
+            if (errorOut != nullptr)
+                *errorOut = {BfsErrorCode::Timeout, "BFS applySettings timed out.", false};
+            return false;
+        }
+    }
+
+    if (errorOut != nullptr)
+        *errorOut = error;
+    return ok;
+}
+
 void BfsCameraWorker::requestDisconnect()
 {
     enqueue([this]() {
