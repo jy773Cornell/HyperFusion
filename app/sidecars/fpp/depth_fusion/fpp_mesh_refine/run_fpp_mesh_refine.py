@@ -43,7 +43,20 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--voxel-mm", type=float, default=1.5)
     p.add_argument("--trunc-mm", type=float, default=8.0)
     p.add_argument("--conf-min", type=float, default=0.12)
-    p.add_argument("--keep-tray", action="store_true")
+    p.add_argument(
+        "--remove-tray",
+        action="store_true",
+        help=(
+            "RANSAC-remove a near-horizontal tray plane before fuse. "
+            "Default off: ambient object-only FPP has no tray; ROI uses "
+            "base_link +Z object workspace instead."
+        ),
+    )
+    p.add_argument(
+        "--keep-tray",
+        action="store_true",
+        help="Deprecated alias: tray is kept by default (same as omitting --remove-tray).",
+    )
     p.add_argument("--tray-band-mm", type=float, default=12.0)
     p.add_argument("--no-pose-refine", action="store_true")
     p.add_argument("--no-consistency", action="store_true")
@@ -129,8 +142,19 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Min points per ROI component (default: mode preset)",
     )
-    p.add_argument("--workspace-width-mm", type=float, default=200.0)
-    p.add_argument("--workspace-depth-mm", type=float, default=200.0)
+    p.add_argument("--workspace-width-mm", type=float, default=300.0)
+    p.add_argument(
+        "--workspace-depth-mm",
+        type=float,
+        default=300.0,
+        help="Workspace height along base_link +Z (mm). With width, forms a W×W×H box.",
+    )
+    p.add_argument(
+        "--workspace-height-mm",
+        type=float,
+        default=None,
+        help="Alias for --workspace-depth-mm (height of the W×W×H box).",
+    )
     p.add_argument(
         "--final-component-eps-mm",
         type=float,
@@ -164,7 +188,6 @@ def parse_args() -> argparse.Namespace:
         help="TSDF truncation mm (default: --trunc-mm)",
     )
     p.add_argument("--no-top-view", action="store_true")
-    p.add_argument("--no-apex-top-view", action="store_true")
     p.add_argument("--top-view-resolution-mm", type=float, default=0.5)
     p.add_argument(
         "--no-surface-filter",
@@ -216,7 +239,7 @@ def main() -> int:
         z_max_m=float(args.z_max_mm) * 1.0e-3,
         min_modulation=float(args.min_modulation),
         stride=int(args.stride),
-        remove_tray_plane=not bool(args.keep_tray),
+        remove_tray_plane=bool(args.remove_tray) and not bool(args.keep_tray),
         tray_band_m=float(args.tray_band_mm) * 1.0e-3,
         do_pose_refine=not bool(args.no_pose_refine),
         do_consistency=not bool(args.no_consistency),
@@ -256,7 +279,12 @@ def main() -> int:
             else None
         ),
         workspace_width_m=float(args.workspace_width_mm) * 1.0e-3,
-        workspace_depth_m=float(args.workspace_depth_mm) * 1.0e-3,
+        workspace_depth_m=float(
+            args.workspace_height_mm
+            if args.workspace_height_mm is not None
+            else args.workspace_depth_mm
+        )
+        * 1.0e-3,
         surface_filter=not bool(args.no_surface_filter),
         final_component_eps_m=(
             float(args.final_component_eps_mm) * 1.0e-3
@@ -269,7 +297,6 @@ def main() -> int:
             else None
         ),
         top_view=not bool(args.no_top_view),
-        apex_top_view=not bool(args.no_apex_top_view),
         top_view_resolution_mm=float(args.top_view_resolution_mm),
         light_smooth=bool(args.light_smooth),
     )

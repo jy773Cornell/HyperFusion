@@ -1,13 +1,13 @@
 # Checkerboard used for BFS + UR3e calibration.
 # OpenCV findChessboardCorners uses inner corners, not outer squares.
-square_size_mm: 18.0
+square_size_mm: 17.5
 squares_x: 11
 squares_y: 8
 inner_corners_x: 10
 inner_corners_y: 7
 # Pattern span between first and last inner corner.
-pattern_width_mm: 180.0
-pattern_height_mm: 126.0
+pattern_width_mm: 175.0
+pattern_height_mm: 122.5
 # Origin: top-left inner corner in a nadir image.
 # +X along width, +Y along height, +Z out of the board (toward camera at nadir).
 origin: top_left_inner_corner

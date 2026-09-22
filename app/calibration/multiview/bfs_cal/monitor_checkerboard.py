@@ -5,12 +5,16 @@
 Targets the *paper* fixed-board BA path (one shared base_T_board), not soft
 per-view board BA. A still is useful only if corners lock, flange pose exists,
 and the set spans distance / tilt / image coverage.
+
+After a lens/focus change: do **not** pass ``--seed-results`` (old K is wrong).
+Use only ``board.yaml`` (physical square size) plus new stills + pose JSON.
 """
 from __future__ import annotations
 
 import argparse
 import json
 import math
+import shutil
 import sys
 import time
 from dataclasses import asdict, dataclass, field
@@ -33,6 +37,18 @@ from calibrate_bfs import (  # noqa: E402
 
 
 IMAGE_EXTS = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
+SKIP_DIR_NAMES = {
+    "decode",
+    "fusion",
+    "rejected_no_corners",
+    "dropped_worst",
+    "results",
+    "good",
+    "candidates",
+    "reject",
+    "rejects",
+    "undistort_preview",
+}
 
 
 @dataclass
@@ -55,7 +71,7 @@ def list_images(folder: Path) -> list[Path]:
         if not p.is_file() or p.suffix.lower() not in IMAGE_EXTS:
             continue
         parts = {x.lower() for x in p.parts}
-        if parts & {"decode", "fusion", "rejected_no_corners", "dropped_worst", "results"}:
+        if parts & SKIP_DIR_NAMES:
             continue
         out.append(p)
     return out
@@ -81,10 +97,8 @@ def board_coverage(corners: np.ndarray, wh: tuple[int, int]) -> dict[str, float]
     xy = corners.reshape(-1, 2)
     xmin, ymin = float(xy[:, 0].min()), float(xy[:, 1].min())
     xmax, ymax = float(xy[:, 0].max()), float(xy[:, 1].max())
-    # Fraction of image spanned by board bbox.
     span_x = (xmax - xmin) / max(w, 1.0)
     span_y = (ymax - ymin) / max(h, 1.0)
-    # Distance of bbox center from image center (0 = center, ~0.5 = near edge).
     cx, cy = 0.5 * (xmin + xmax), 0.5 * (ymin + ymax)
     offset = math.hypot((cx - 0.5 * w) / w, (cy - 0.5 * h) / h)
     margin = min(xmin, ymin, w - xmax, h - ymax) / min(w, h)
@@ -131,14 +145,27 @@ def rough_pose(
 ) -> tuple[float | None, float | None, float | None]:
     """Return (tilt_deg, distance_mm, pnp_rms_px).
 
-    Always pick the K (seed or isotropic grid) with lowest board reprojection.
-    A stale seed K can make healthy corners look like 8–10 px RMS.
+    After a lens change, omit seed K — a stale seed makes healthy frames look bad.
     """
     w, h = wh
-    candidates: list[np.ndarray] = [
-        _isotropic_K((w, h), f)
-        for f in (1800.0, 2500.0, 3500.0, 4500.0, 5200.0, 0.9 * max(w, h))
+    focals = [
+        0.35 * max(w, h),
+        0.5 * max(w, h),
+        0.7 * max(w, h),
+        0.9 * max(w, h),
+        1.1 * max(w, h),
+        1.3 * max(w, h),
+        1200.0,
+        1600.0,
+        2000.0,
+        2500.0,
+        3000.0,
+        3500.0,
+        4200.0,
+        5000.0,
+        6000.0,
     ]
+    candidates: list[np.ndarray] = [_isotropic_K((w, h), float(f)) for f in focals]
     if K_seed is not None:
         candidates.append(np.asarray(K_seed, dtype=np.float64))
 
@@ -170,6 +197,19 @@ def load_seed_K(results_dir: Path) -> np.ndarray | None:
     if K is None:
         return None
     return np.asarray(K, dtype=np.float64)
+
+
+def keep_candidate(src: Path, keep_dir: Path) -> None:
+    """Copy image (+ sidecar JSON if present) into keep_dir."""
+    keep_dir.mkdir(parents=True, exist_ok=True)
+    dst = keep_dir / src.name
+    if not dst.is_file() or src.stat().st_mtime > dst.stat().st_mtime:
+        shutil.copy2(src, dst)
+    jsrc = src.with_suffix(".json")
+    if jsrc.is_file():
+        jdst = keep_dir / jsrc.name
+        if not jdst.is_file() or jsrc.stat().st_mtime > jdst.stat().st_mtime:
+            shutil.copy2(jsrc, jdst)
 
 
 def grade_image(
@@ -231,7 +271,6 @@ def grade_image(
         reasons.append("JSON missing base_T_flange — no hand-eye / paper BA")
         status = "REJECT"
 
-    # 4K BFS boards often sit ~30–80 laplacian; only flag clearly soft frames.
     if lap < 25.0:
         reasons.append(f"soft/blurry (laplacian={lap:.1f})")
         status = "WEAK" if status == "GOOD" else status
@@ -244,12 +283,10 @@ def grade_image(
         reasons.append("board clipped near image border")
         status = "WEAK" if status == "GOOD" else status
 
-    # Paper fixed-board BA wants some tilt + edge coverage, but extreme tilt is fragile.
     if tilt is not None and tilt > 45.0:
         reasons.append(f"extreme tilt {tilt:.1f} deg (paper BA prefers <=~35)")
         status = "WEAK" if status == "GOOD" else status
 
-    # With a temporary isotropic K, ~3 px is normal; >5 px usually means bad corners.
     if pnp_rms is not None and pnp_rms > 5.0:
         reasons.append(f"rough PnP RMS {pnp_rms:.2f} px (corners noisy?)")
         status = "WEAK" if status == "GOOD" else status
@@ -352,14 +389,31 @@ def run(args: argparse.Namespace) -> int:
     images_dir = Path(args.images)
     images_dir.mkdir(parents=True, exist_ok=True)
     state_path = Path(args.state)
-    K_seed = load_seed_K(Path(args.seed_results)) if args.seed_results else None
+    keep_dir = Path(args.keep_dir) if args.keep_dir else None
+    reject_dir = Path(args.reject_dir) if args.reject_dir else None
+    keep_weak = bool(args.keep_weak)
 
-    print("=== BFS checkerboard monitor (paper fixed-board BA) ===")
-    print(f"watch:  {images_dir}")
-    print(f"board:  {board['pattern_size']} @ {board['square_size_mm']} mm")
-    print(f"state:  {state_path}")
-    print(f"seed K: {'yes' if K_seed is not None else 'none (rough focal guess)'}")
-    print("Collect. Ctrl+C to stop.\n")
+    if args.seed_results:
+        print(
+            "WARNING: --seed-results loads an old K. After a lens/focus change "
+            "omit it so grading does not trust stale intrinsics.",
+            flush=True,
+        )
+        K_seed = load_seed_K(Path(args.seed_results))
+    else:
+        K_seed = None
+
+    print("=== BFS checkerboard monitor (new lens — no app K) ===")
+    print(f"watch:     {images_dir}")
+    print(f"board:     {board['pattern_size']} @ {board['square_size_mm']} mm (physical only)")
+    print(f"state:     {state_path}")
+    print(f"seed K:    {'YES (avoid after lens change)' if K_seed is not None else 'none'}")
+    print(f"keep GOOD: {keep_dir if keep_dir else '(off)'}")
+    if keep_weak and keep_dir:
+        print("keep WEAK: yes")
+    if reject_dir:
+        print(f"keep REJECT copies: {reject_dir}")
+    print("Drop TIFF+JSON into the watch folder. Ctrl+C to stop.\n")
     sys.stdout.flush()
 
     grades: dict[str, FrameGrade] = {}
@@ -378,7 +432,6 @@ def run(args: argparse.Namespace) -> int:
                 continue
             prev = seen_mtime.get(key)
             if prev is not None and abs(prev - mtime) < 1e-6 and key in grades:
-                # Re-check WAIT_JSON periodically.
                 if grades[key].status != "WAIT_JSON":
                     continue
             seen_mtime[key] = mtime
@@ -389,7 +442,13 @@ def run(args: argparse.Namespace) -> int:
                 print_grade(g)
                 changed = True
 
-        # Drop grades for files removed from the folder (fresh redo).
+            if keep_dir is not None and g.status == "GOOD":
+                keep_candidate(img, keep_dir)
+            elif keep_dir is not None and keep_weak and g.status == "WEAK":
+                keep_candidate(img, keep_dir)
+            if reject_dir is not None and g.status == "REJECT":
+                keep_candidate(img, reject_dir)
+
         for gone in [k for k in grades if k not in live_keys]:
             del grades[gone]
             seen_mtime.pop(gone, None)
@@ -397,6 +456,11 @@ def run(args: argparse.Namespace) -> int:
 
         ordered = [grades[k] for k in sorted(grades.keys())]
         summary = set_summary(ordered)
+        if keep_dir is not None:
+            summary["keep_dir"] = str(keep_dir)
+            summary["n_kept_files"] = len(list(keep_dir.glob("*.tif"))) + len(
+                list(keep_dir.glob("*.tiff"))
+            )
         set_sig = (
             f"{summary['n_good']}|{summary['n_weak']}|{summary['n_reject']}|"
             f"{summary['n_wait_json']}|{len(ordered)}"
@@ -417,15 +481,37 @@ def run(args: argparse.Namespace) -> int:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Live BFS checkerboard quality monitor")
+    p = argparse.ArgumentParser(
+        description=(
+            "Live BFS checkerboard quality monitor. "
+            "After lens/focus change: omit --seed-results."
+        )
+    )
     p.add_argument("--board", type=Path, required=True)
     p.add_argument("--images", type=Path, required=True)
     p.add_argument("--state", type=Path, required=True)
     p.add_argument(
+        "--keep-dir",
+        type=Path,
+        default=None,
+        help="Copy GOOD (image+JSON) here as calibration candidates",
+    )
+    p.add_argument(
+        "--keep-weak",
+        action="store_true",
+        help="Also copy WEAK frames into --keep-dir",
+    )
+    p.add_argument(
+        "--reject-dir",
+        type=Path,
+        default=None,
+        help="Optional folder for REJECT copies (debug)",
+    )
+    p.add_argument(
         "--seed-results",
         type=Path,
         default=None,
-        help="Optional bfs_cal/results for seed K (better tilt/distance)",
+        help="Optional bfs_cal/results for seed K — DO NOT use after lens change",
     )
     p.add_argument("--poll", type=float, default=2.0)
     p.add_argument("--json-wait", type=float, default=3.0)

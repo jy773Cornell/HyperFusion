@@ -17,7 +17,7 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise SystemExit("open3d required") from exc
 
-from .cleanup import cleanup_dense_cloud, physical_workspace_filter, resolve_cleanup_defaults
+from .cleanup import cleanup_dense_cloud, resolve_cleanup_defaults
 from .confidence import confidence_frames
 from .consistency import consistency_reject
 from .densify import densify_from_depth
@@ -72,7 +72,7 @@ def run_pipeline(
     z_max_m: float = 0.60,
     min_modulation: float = 0.12,
     stride: int = 2,
-    remove_tray_plane: bool = True,
+    remove_tray_plane: bool = False,
     tray_band_m: float = 0.012,
     do_pose_refine: bool = True,
     do_consistency: bool = True,
@@ -100,14 +100,13 @@ def run_pipeline(
     ror_min_neighbors: int | None = None,
     ror_radius_mm: float | None = None,
     component_min_points: int | None = None,
-    workspace_width_m: float = 0.200,
-    workspace_depth_m: float = 0.200,
+    workspace_width_m: float = 0.300,
+    workspace_depth_m: float = 0.300,
     surface_filter: bool = True,
     final_component_eps_m: float | None = None,
     final_component_min_points: int | None = None,
     top_view: bool = True,
     top_view_resolution_mm: float = 0.5,
-    apex_top_view: bool = True,
     light_smooth: bool = False,
 ) -> dict[str, Any]:
     fusion_mode, support_min_views = resolve_fusion_mode_defaults(
@@ -133,6 +132,8 @@ def run_pipeline(
         "grape_cloud.ply",
         "grape_mesh.ply",
         "grape_mesh_from_dense_clean.ply",
+        "apex_top_view_depth_mm.npy",
+        "apex_top_view_depth.png",
     ):
         (out_dir / legacy_name).unlink(missing_ok=True)
 
@@ -195,7 +196,7 @@ def run_pipeline(
 
     tray_plane: list[float] | None = None
     if remove_tray_plane:
-        print("[1b] remove tray plane…", flush=True)
+        print("[1b] remove tray plane (optional)…", flush=True)
         with _timed(timings, "tray"):
             tray = remove_tray(frames, keep_band_m=float(tray_band_m))
         stages["tray"] = {
@@ -203,12 +204,18 @@ def run_pipeline(
             "n_after": tray.n_after,
             "n_removed": tray.n_removed,
             "plane": tray.plane,
+            "upright": tray.upright,
+            "skipped_reason": tray.skipped_reason,
         }
         tray_plane = tray.plane
         print(f"  tray {tray.n_before} -> {tray.n_after} px", flush=True)
     else:
         timings["tray"] = 0.0
-        stages["tray"] = {"skipped": True}
+        stages["tray"] = {
+            "skipped": True,
+            "note": "object-only FPP; workspace uses base_link +Z (no tray reference)",
+        }
+        print("[1b] tray crop skipped (object-only / no tray reference)", flush=True)
 
     print("[2] edge-aware depth filter…", flush=True)
     with _timed(timings, "filter"):
@@ -515,78 +522,16 @@ def run_pipeline(
             "valid_pixels": top.valid_pixels,
             "min_height_mm": top.min_height_mm,
             "max_height_mm": top.max_height_mm,
-            "meaning": "topmost surface height above fitted sample stage",
+            "meaning": (
+                "topmost height above object base (base_link +Z); no tray"
+                if str(workspace_info.get("mode", "")) == "object_gravity"
+                else "topmost surface height above fitted sample stage"
+            ),
+            "workspace_mode": workspace_info.get("mode"),
         }
     else:
         timings["top_view"] = 0.0
         stages["top_view"] = {"skipped": True}
-
-    if apex_top_view and workspace_info is not None:
-        print("[8] apex-only top-view depth map...", flush=True)
-        try:
-            with _timed(timings, "apex_top_view"):
-                apex_frames = load_raw_frames(
-                    burst,
-                    decode_root,
-                    tool0_T_camera=tool0_T_camera,
-                    pose_mode=pose_mode,
-                    mode="apex",
-                    z_min_m=z_min_m,
-                    z_max_m=z_max_m,
-                    min_modulation=min_modulation,
-                    stride=max(1, int(stride)),
-                )
-                apex_tray = remove_tray(
-                    apex_frames,
-                    keep_band_m=float(tray_band_m),
-                )
-                filter_frames(apex_frames)
-                confidence_frames(apex_frames)
-                apex_dense = densify_from_depth(
-                    apex_frames,
-                    conf_min=float(conf_min),
-                    pixel_stride=max(1, int(dense_pixel_stride)),
-                    voxel_m=float(dense_voxel_m),
-                    support_voxel_m=float(support_voxel_m),
-                    support_min_views=1,
-                    weight_source="auto",
-                )
-                apex_cloud, apex_workspace = physical_workspace_filter(
-                    apex_dense.cloud,
-                    tray_plane=workspace_info.get("plane", tray_plane)
-                    if isinstance(workspace_info, dict)
-                    else tray_plane,
-                    camera_c2w=[frame.c2w for frame in apex_frames],
-                    width_m=float(workspace_width_m),
-                    depth_m=float(workspace_depth_m),
-                )
-                # Use the sweep-derived workspace axes so fused and apex maps align.
-                apex = rasterize_top_view(
-                    apex_cloud,
-                    workspace_info,
-                    out_dir,
-                    resolution_m=float(top_view_resolution_mm) * 1.0e-3,
-                    name_prefix="apex_top_view",
-                )
-            stages["apex_top_view"] = {
-                "stem": apex_frames[0].stem,
-                "depth_mm": str(apex.depth_path),
-                "preview": str(apex.preview_path),
-                "size_px": [apex.width_px, apex.height_px],
-                "resolution_mm": apex.resolution_mm,
-                "valid_pixels": apex.valid_pixels,
-                "min_height_mm": apex.min_height_mm,
-                "max_height_mm": apex.max_height_mm,
-                "input_points": apex_dense.n_after_voxel,
-                "workspace_points": int(len(apex_cloud.points)),
-                "tray_removed_pixels": apex_tray.n_removed,
-                "meaning": "topmost surface height from apex FPP decode only",
-            }
-        except Exception as exc:  # noqa: BLE001 — optional derivative
-            stages["apex_top_view"] = {"ok": False, "error": str(exc)}
-    else:
-        timings["apex_top_view"] = 0.0
-        stages["apex_top_view"] = {"skipped": True}
 
     pipeline_steps = [
         "load",
@@ -599,7 +544,6 @@ def run_pipeline(
         "physical_roi_sor_ror_surface_tight_components",
         "optional_weighted_tsdf",
         "top_view_depth",
-        "apex_top_view_depth",
     ]
 
     summary = {

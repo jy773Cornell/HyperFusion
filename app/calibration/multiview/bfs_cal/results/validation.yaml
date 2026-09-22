@@ -1,38 +1,48 @@
 ok: true
 count: 8
-translation_err_mm_median: 2.6319870572889643
-rotation_err_deg_median: 0.2948431627536535
-pnp_rms_px_median: 0.7797421813011169
+translation_err_mm_median: 3.524326794862905
+rotation_err_deg_median: 0.32568146185493035
+pnp_rms_px_median: 0.4993818998336792
 frames:
-- file: 00098.tif
-  translation_err_mm: 2.56097228169253
-  rotation_err_deg: 0.23094122431866324
-  pnp_rms_px: 0.8283048272132874
-- file: 00099.tif
-  translation_err_mm: 4.557246650751819
-  rotation_err_deg: 0.31640337221859544
-  pnp_rms_px: 0.767103910446167
-- file: 00100.tif
-  translation_err_mm: 2.7030018328853984
-  rotation_err_deg: 0.23132290316949336
-  pnp_rms_px: 0.7838916778564453
-- file: 00101.tif
-  translation_err_mm: 2.4213363741382437
-  rotation_err_deg: 0.33541895856721315
-  pnp_rms_px: 0.7755926847457886
-- file: 00102.tif
-  translation_err_mm: 13.453882520901063
-  rotation_err_deg: 3.942721193660962
-  pnp_rms_px: 0.7941089272499084
-- file: 00103.tif
-  translation_err_mm: 28.402627318129465
-  rotation_err_deg: 4.2841281919621865
-  pnp_rms_px: 0.7975490093231201
-- file: 00104.tif
-  translation_err_mm: 1.522275085087852
-  rotation_err_deg: 0.27328295328871155
-  pnp_rms_px: 0.7461892366409302
-- file: 00105.tif
-  translation_err_mm: 1.3446837981808697
-  rotation_err_deg: 0.21029590363598796
-  pnp_rms_px: 0.7492147088050842
+- file: bfs_20260922_171356.tif
+  translation_err_mm: 2.7560411758704055
+  rotation_err_deg: 0.3599329991783341
+  pnp_rms_px: 0.6678830981254578
+- file: bfs_20260922_171533.tif
+  translation_err_mm: 6.678405042724896
+  rotation_err_deg: 0.2263803989992158
+  pnp_rms_px: 0.6363286375999451
+- file: bfs_20260922_171808.tif
+  translation_err_mm: 5.320220870888143
+  rotation_err_deg: 0.3082245196023687
+  pnp_rms_px: 0.7455058097839355
+- file: bfs_20260922_172035.tif
+  translation_err_mm: 3.5159359726202415
+  rotation_err_deg: 0.32749975669366854
+  pnp_rms_px: 0.5560674667358398
+- file: bfs_20260922_172152.tif
+  translation_err_mm: 5.546367832796147
+  rotation_err_deg: 0.44095987969269707
+  pnp_rms_px: 0.3572942614555359
+- file: bfs_20260922_173729.tif
+  translation_err_mm: 3.5327176171055688
+  rotation_err_deg: 0.3515917576203609
+  pnp_rms_px: 0.44269633293151855
+- file: bfs_20260922_174010.tif
+  translation_err_mm: 2.528816877740824
+  rotation_err_deg: 0.32386316701619217
+  pnp_rms_px: 0.26708757877349854
+- file: bfs_20260922_174035.tif
+  translation_err_mm: 1.4705256066248964
+  rotation_err_deg: 0.2840315584946992
+  pnp_rms_px: 0.2954014539718628
+holdout_mode: smart
+holdout_files:
+- bfs_20260922_171356.tif
+- bfs_20260922_171533.tif
+- bfs_20260922_171808.tif
+- bfs_20260922_172035.tif
+- bfs_20260922_172152.tif
+- bfs_20260922_173729.tif
+- bfs_20260922_174010.tif
+- bfs_20260922_174035.tif

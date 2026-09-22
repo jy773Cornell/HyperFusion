@@ -1,4 +1,5 @@
 ﻿// 3D preview of UR3e hemisphere / semi-fixed scan over the sample tray (frontend/ui).
+// FPP plans idle-tour each fringe pin in visit order (pulse); execute uses the same flash.
 #pragma once
 
 #include "backend/multiview/Ur3eHemisphereScan.hpp"
@@ -112,6 +113,13 @@ private:
     [[nodiscard]] bool hasReachabilityLegend() const;
     void resetCameraView();
 
+    [[nodiscard]] QVector<int> fppTourPinIndices() const;
+    void startFppPinTour();
+    void stopFppPinTour();
+    void advanceFppPinTour();
+    [[nodiscard]] bool isFppTourPinActive(int ringIndex) const;
+    void ensureFlashTimerRunning();
+
     hf::ur3e::Ur3eHemisphereScanParams params_;
     hf::ur3e::Ur3eWorkspaceBoundary workspaceBoundary_;
     hf::ur3e::Ur3eMountTransform sceneMount_;
@@ -126,6 +134,10 @@ private:
     int executionActivePointIndex_ = -1;
     int flashPulse_ = 0;
     QTimer *flashTimer_ = nullptr;
+    /// Idle FPP path preview: pulse each fringe pin in plan order (not RGB).
+    bool fppTourActive_ = false;
+    int fppTourStep_ = 0;
+    QTimer *fppTourTimer_ = nullptr;
     bool dragging_ = false;
     QPoint lastDragPos_;
 };

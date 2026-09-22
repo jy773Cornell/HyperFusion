@@ -178,8 +178,8 @@ def physical_workspace_filter(
     *,
     tray_plane: list[float],
     camera_c2w: list[np.ndarray],
-    width_m: float = 0.200,
-    depth_m: float = 0.200,
+    width_m: float = 0.300,
+    depth_m: float = 0.300,
 ) -> tuple[o3d.geometry.PointCloud, dict]:
     """Crop a stage-centered box above the tray, derived from robot camera poses."""
     pts = np.asarray(cloud.points)
@@ -242,6 +242,85 @@ def physical_workspace_filter(
         "up_world": up.tolist(),
         "axis_u_world": axis_u.tolist(),
         "axis_v_world": axis_v.tolist(),
+        "plane": plane.tolist(),
+        "mode": "tray_plane",
+    }
+
+
+def object_gravity_workspace_filter(
+    cloud: o3d.geometry.PointCloud,
+    *,
+    camera_c2w: list[np.ndarray] | None,
+    width_m: float = 0.300,
+    depth_m: float = 0.300,
+) -> tuple[o3d.geometry.PointCloud, dict]:
+    """Object-centered ROI when FPP has no tray (ambient-lit object only).
+
+    Up is ``base_link`` +Z. XY center follows camera look-at at the object
+    median depth. Height for top-view is relative to the object base (5th
+    percentile Z), not a fitted tray plane. Box is ``width_m`` × ``width_m``
+    × ``depth_m`` (depth = height along +Z).
+    """
+    pts = np.asarray(cloud.points)
+    n0 = int(pts.shape[0])
+    if n0 == 0:
+        return cloud, {"n_in": 0, "n_out": 0, "skipped": True, "mode": "object_gravity"}
+
+    up = np.array([0.0, 0.0, 1.0], dtype=np.float64)
+    z_obj = float(np.median(pts[:, 2]))
+    center_xy = np.median(pts[:, :2], axis=0).astype(np.float64)
+    if camera_c2w:
+        hits: list[np.ndarray] = []
+        for pose in camera_c2w:
+            origin = np.asarray(pose[:3, 3], dtype=np.float64)
+            forward = np.asarray(pose[:3, 2], dtype=np.float64)
+            fz = float(forward[2])
+            if abs(fz) < 1.0e-6:
+                continue
+            ray_t = (z_obj - float(origin[2])) / fz
+            if ray_t > 0.0:
+                hits.append(origin + ray_t * forward)
+        if hits:
+            hit = np.median(np.asarray(hits), axis=0)
+            center_xy = hit[:2]
+
+    z_base = float(np.percentile(pts[:, 2], 5.0))
+    center = np.array([center_xy[0], center_xy[1], z_base], dtype=np.float64)
+    span = float(depth_m)
+
+    axis_u = np.array([1.0, 0.0, 0.0], dtype=np.float64)
+    axis_u -= float(np.dot(axis_u, up)) * up
+    if float(np.linalg.norm(axis_u)) < 1.0e-6:
+        axis_u = np.array([0.0, 1.0, 0.0], dtype=np.float64)
+        axis_u -= float(np.dot(axis_u, up)) * up
+    axis_u /= np.linalg.norm(axis_u)
+    axis_v = np.cross(up, axis_u)
+    axis_v /= np.linalg.norm(axis_v)
+
+    relative = pts - center
+    u = relative @ axis_u
+    v = relative @ axis_v
+    height = relative @ up
+    half_width = 0.5 * float(width_m)
+    inside = (
+        (np.abs(u) <= half_width)
+        & (np.abs(v) <= half_width)
+        & (height >= 0.0)
+        & (height <= span)
+    )
+    out = cloud.select_by_index(np.flatnonzero(inside).tolist())
+    return out, {
+        "n_in": n0,
+        "n_out": int(len(out.points)),
+        "width_m": float(width_m),
+        "depth_m": span,
+        "center_world_m": center.tolist(),
+        "up_world": up.tolist(),
+        "axis_u_world": axis_u.tolist(),
+        "axis_v_world": axis_v.tolist(),
+        "mode": "object_gravity",
+        "gravity_fallback": True,
+        "z_base_m": z_base,
     }
 
 
@@ -399,8 +478,8 @@ def cleanup_dense_cloud(
     do_smooth: bool = False,
     tray_plane: list[float] | None = None,
     camera_c2w: list[np.ndarray] | None = None,
-    workspace_width_m: float = 0.200,
-    workspace_depth_m: float = 0.200,
+    workspace_width_m: float = 0.300,
+    workspace_depth_m: float = 0.300,
     sor_k: int = 25,
     sor_std: float = 1.75,
     ror_min_neighbors: int = 12,
@@ -429,6 +508,16 @@ def cleanup_dense_cloud(
             cur, workspace_stats = physical_workspace_filter(
                 cur,
                 tray_plane=tray_plane,
+                camera_c2w=camera_c2w,
+                width_m=float(workspace_width_m),
+                depth_m=float(workspace_depth_m),
+            )
+            stats.steps["workspace"] = workspace_stats
+            percentile_crop = False
+        elif camera_c2w is not None or len(cur.points) > 0:
+            # No tray in decode (typical with ambient object-only lighting).
+            cur, workspace_stats = object_gravity_workspace_filter(
+                cur,
                 camera_c2w=camera_c2w,
                 width_m=float(workspace_width_m),
                 depth_m=float(workspace_depth_m),

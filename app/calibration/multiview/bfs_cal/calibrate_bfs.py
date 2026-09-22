@@ -369,10 +369,82 @@ def solve_pnp_frames(
     return out
 
 
-def split_holdout(frames: list[dict[str, Any]], holdout: int) -> tuple[list, list]:
+def _holdout_feature(frame: dict[str, Any]) -> np.ndarray:
+    """Pose + image coverage feature for diversity hold-out picking."""
+    corners = np.asarray(frame["corners"], dtype=np.float64).reshape(-1, 2)
+    c = corners.mean(axis=0)
+    bb = corners.max(axis=0) - corners.min(axis=0)
+    # Normalize image coords roughly to unit scale for 4k sensors.
+    feat = [c[0] / 1000.0, c[1] / 1000.0, bb[0] / 1000.0, bb[1] / 1000.0]
+    T = frame.get("flange_T")
+    if T is not None:
+        T = np.asarray(T, dtype=np.float64)
+        t = T[:3, 3] * 10.0  # metres → ~same magnitude as image feats
+        rvec, _ = cv2.Rodrigues(T[:3, :3])
+        feat.extend(t.tolist())
+        feat.extend((rvec.reshape(3) * 2.0).tolist())
+    else:
+        feat.extend([0.0] * 6)
+    return np.asarray(feat, dtype=np.float64)
+
+
+def split_holdout(
+    frames: list[dict[str, Any]],
+    holdout: int,
+    *,
+    mode: str = "smart",
+) -> tuple[list, list]:
+    """Split fit / hold-out.
+
+    ``smart`` (default): diversity sample across flange pose + board image
+    coverage, preferring frames that still leave a nearby twin in the fit set
+    (so hold-outs are representative, not unique orphans). ``last`` keeps the
+    old chronological tail split.
+    """
     if holdout <= 0 or holdout >= len(frames):
         return frames, []
-    return frames[:-holdout], frames[-holdout:]
+    if mode == "last":
+        return frames[:-holdout], frames[-holdout:]
+
+    n = len(frames)
+    n_hold = min(int(holdout), max(1, n // 5))
+    X = np.stack([_holdout_feature(f) for f in frames], axis=0)
+    std = X.std(axis=0)
+    std[std < 1e-9] = 1.0
+    Xn = (X - X.mean(axis=0)) / std
+
+    # Pairwise Euclidean distances in feature space.
+    d2 = ((Xn[:, None, :] - Xn[None, :, :]) ** 2).sum(axis=2)
+    D = np.sqrt(np.maximum(d2, 0.0))
+    np.fill_diagonal(D, np.inf)
+    nn = D.min(axis=1)
+    med_nn = float(np.median(nn[np.isfinite(nn)])) if np.isfinite(nn).any() else 1.0
+    # Prefer holding out from pose clusters that still keep a neighbor in fit.
+    candidates = [i for i in range(n) if nn[i] <= 1.5 * med_nn]
+    if len(candidates) < n_hold:
+        candidates = list(range(n))
+
+    hold_idx: list[int] = []
+    # Seed with densest candidate (most redundant for fit).
+    hold_idx.append(min(candidates, key=lambda i: float(nn[i])))
+    while len(hold_idx) < n_hold:
+        best_i = None
+        best_score = -1.0
+        for i in candidates:
+            if i in hold_idx:
+                continue
+            md = float(min(D[i, j] for j in hold_idx))
+            if md > best_score:
+                best_score = md
+                best_i = i
+        if best_i is None:
+            break
+        hold_idx.append(best_i)
+
+    hold_set = set(hold_idx)
+    fit = [f for i, f in enumerate(frames) if i not in hold_set]
+    hold = [frames[i] for i in sorted(hold_idx)]
+    return fit, hold
 
 
 def run_hand_eye(
@@ -568,8 +640,11 @@ def run(args: argparse.Namespace) -> int:
         print(f"Need >= 3 detections, got {len(frames)}", file=sys.stderr)
         return 1
 
-    fit, hold = split_holdout(frames, args.holdout)
-    print(f"Fit {len(fit)}  hold-out {len(hold)}")
+    fit, hold = split_holdout(frames, args.holdout, mode=args.holdout_mode)
+    hold_names = [f["path"].name for f in hold]
+    print(f"Fit {len(fit)}  hold-out {len(hold)}  mode={args.holdout_mode}")
+    if hold_names:
+        print("Hold-out frames:", ", ".join(hold_names))
 
     intr = calibrate_intrinsics(fit, size, args)
     print(f"Intrinsics RMS {intr['rms_px']:.4f} px")
@@ -673,6 +748,9 @@ def run(args: argparse.Namespace) -> int:
         },
     )
     val = validate_holdout(pnp_hold, flange_T_cam, base_T_board)
+    if isinstance(val, dict):
+        val["holdout_mode"] = args.holdout_mode
+        val["holdout_files"] = [f["path"].name for f in hold]
     write_yaml(args.out / "validation.yaml", val)
     print(f"Hand-eye method {he['chosen_method']}")
     print("flange t mm", (flange_T_cam[:3, 3] * 1000.0).tolist())
@@ -691,7 +769,18 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--board", type=Path, default=DEFAULT_BOARD)
     p.add_argument("--images", type=Path, default=DEFAULT_IMAGES)
     p.add_argument("--out", type=Path, default=DEFAULT_RESULTS)
-    p.add_argument("--holdout", type=int, default=6, help="last N frames held out (0 = none)")
+    p.add_argument(
+        "--holdout",
+        type=int,
+        default=6,
+        help="number of frames held out for validation (0 = none)",
+    )
+    p.add_argument(
+        "--holdout-mode",
+        choices=("smart", "last"),
+        default="smart",
+        help="smart = diversity across pose/image coverage; last = chronological tail",
+    )
     p.add_argument("--max-images", type=int, default=0, help="use only the first N images (0 = all)")
     p.add_argument(
         "--use-nominal-k",

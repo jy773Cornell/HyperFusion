@@ -1,4 +1,5 @@
-﻿// 3D preview of UR3e hemisphere scan over the sample tray (frontend/ui layer).
+﻿// 3D preview of UR3e hemisphere / FPP scan over the sample tray (frontend/ui).
+// Idle FPP plans tour-pulse each fringe pin; execute uses the same flash timer.
 #include "frontend/widgets/Ur3eHemisphereScanPreviewWidget.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
@@ -67,11 +68,17 @@ Ur3eHemisphereScanPreviewWidget::Ur3eHemisphereScanPreviewWidget(QWidget *parent
     flashTimer_ = new QTimer(this);
     flashTimer_->setInterval(80);
     connect(flashTimer_, &QTimer::timeout, this, [this]() {
-        if (!executionActive_ || executionActivePointIndex_ < 0)
+        const bool execPulse = executionActive_ && executionActivePointIndex_ >= 0;
+        const bool tourPulse = fppTourActive_ && !executionActive_;
+        if (!execPulse && !tourPulse)
             return;
         flashPulse_ = (flashPulse_ + 1) % 16;
         update();
     });
+
+    fppTourTimer_ = new QTimer(this);
+    fppTourTimer_->setInterval(700);
+    connect(fppTourTimer_, &QTimer::timeout, this, [this]() { advanceFppPinTour(); });
 }
 
 void Ur3eHemisphereScanPreviewWidget::resetCameraView()
@@ -79,6 +86,89 @@ void Ur3eHemisphereScanPreviewWidget::resetCameraView()
     yawRad_ = kDefaultYawRad;
     pitchRad_ = kDefaultPitchRad;
     zoomFactor_ = kDefaultZoomFactor;
+}
+
+QVector<int> Ur3eHemisphereScanPreviewWidget::fppTourPinIndices() const
+{
+    QVector<int> indices;
+    for (int i = 0; i < static_cast<int>(semiFixedRings_.size()); ++i)
+    {
+        const auto &ring = semiFixedRings_[static_cast<std::size_t>(i)].ring;
+        if (ring.drawAsPin && !ring.isRgb)
+            indices.push_back(i);
+    }
+    return indices;
+}
+
+void Ur3eHemisphereScanPreviewWidget::ensureFlashTimerRunning()
+{
+    if (flashTimer_ == nullptr)
+        return;
+    const bool need =
+        (executionActive_ && executionActivePointIndex_ >= 0)
+        || (fppTourActive_ && !executionActive_);
+    if (need)
+    {
+        if (!flashTimer_->isActive())
+            flashTimer_->start();
+    }
+    else if (flashTimer_->isActive())
+    {
+        flashTimer_->stop();
+    }
+}
+
+void Ur3eHemisphereScanPreviewWidget::startFppPinTour()
+{
+    const QVector<int> pins = fppTourPinIndices();
+    if (pins.isEmpty() || executionActive_)
+    {
+        stopFppPinTour();
+        return;
+    }
+    fppTourActive_ = true;
+    fppTourStep_ = 0;
+    flashPulse_ = 0;
+    if (fppTourTimer_ != nullptr && !fppTourTimer_->isActive())
+        fppTourTimer_->start();
+    ensureFlashTimerRunning();
+    update();
+}
+
+void Ur3eHemisphereScanPreviewWidget::stopFppPinTour()
+{
+    fppTourActive_ = false;
+    fppTourStep_ = 0;
+    if (fppTourTimer_ != nullptr)
+        fppTourTimer_->stop();
+    ensureFlashTimerRunning();
+}
+
+void Ur3eHemisphereScanPreviewWidget::advanceFppPinTour()
+{
+    if (!fppTourActive_ || executionActive_)
+        return;
+    const QVector<int> pins = fppTourPinIndices();
+    if (pins.isEmpty())
+    {
+        stopFppPinTour();
+        update();
+        return;
+    }
+    fppTourStep_ = (fppTourStep_ + 1) % pins.size();
+    flashPulse_ = 0;
+    update();
+}
+
+bool Ur3eHemisphereScanPreviewWidget::isFppTourPinActive(const int ringIndex) const
+{
+    if (!fppTourActive_ || executionActive_)
+        return false;
+    const QVector<int> pins = fppTourPinIndices();
+    if (pins.isEmpty())
+        return false;
+    const int step = ((fppTourStep_ % pins.size()) + pins.size()) % pins.size();
+    return pins[step] == ringIndex;
 }
 
 Ur3eHemisphereScanPreviewWidget::Vec3 Ur3eHemisphereScanPreviewWidget::sceneCenter() const
@@ -191,6 +281,7 @@ void Ur3eHemisphereScanPreviewWidget::setScanParams(const hf::ur3e::Ur3eHemisphe
 
 void Ur3eHemisphereScanPreviewWidget::setScanPlan(const hf::ur3e::Ur3eHemisphereScanPlan &plan)
 {
+    stopFppPinTour();
     semiFixedPreviewActive_ = false;
     semiFixedRings_.clear();
     executionActive_ = false;
@@ -217,6 +308,7 @@ void Ur3eHemisphereScanPreviewWidget::setScanPlan(const hf::ur3e::Ur3eHemisphere
 
 void Ur3eHemisphereScanPreviewWidget::beginScanExecution()
 {
+    stopFppPinTour();
     executionActive_ = true;
     executionResultsVisible_ = false;
     executionActivePointIndex_ = -1;
@@ -278,8 +370,7 @@ void Ur3eHemisphereScanPreviewWidget::setActiveScanPoint(const int pointIndex)
 
     executionActivePointIndex_ = previewIndex;
     flashPulse_ = 0;
-    if (flashTimer_ != nullptr && !flashTimer_->isActive())
-        flashTimer_->start();
+    ensureFlashTimerRunning();
     update();
 }
 
@@ -375,7 +466,11 @@ void Ur3eHemisphereScanPreviewWidget::endScanExecution()
     flashPulse_ = 0;
     if (flashTimer_ != nullptr)
         flashTimer_->stop();
-    update();
+    // Resume FPP pin tour after execute so the path keeps playing in preview.
+    if (semiFixedPreviewActive_ && !fppTourPinIndices().isEmpty())
+        startFppPinTour();
+    else
+        update();
 }
 
 int Ur3eHemisphereScanPreviewWidget::plannedExecutionCount() const
@@ -499,6 +594,7 @@ int Ur3eHemisphereScanPreviewWidget::failedExecutionCount() const
 
 void Ur3eHemisphereScanPreviewWidget::clearScanPlan()
 {
+    stopFppPinTour();
     executionActive_ = false;
     executionResultsVisible_ = false;
     executionActivePointIndex_ = -1;
@@ -524,11 +620,18 @@ void Ur3eHemisphereScanPreviewWidget::setSemiFixedPreviewRings(
     executionActive_ = false;
     executionResultsVisible_ = false;
     executionActivePointIndex_ = -1;
-    update();
+    if (!fppTourPinIndices().isEmpty())
+        startFppPinTour();
+    else
+    {
+        stopFppPinTour();
+        update();
+    }
 }
 
 void Ur3eHemisphereScanPreviewWidget::clearSemiFixedPreviewRings()
 {
+    stopFppPinTour();
     semiFixedPreviewActive_ = false;
     semiFixedRings_.clear();
     update();
@@ -709,7 +812,7 @@ void Ur3eHemisphereScanPreviewWidget::drawLegend(QPainter &painter) const
             hasFppPin = true;
     }
     if (hasFppPin)
-        entries.push_back({QColor(60, 180, 75), QStringLiteral("FPP")});
+        entries.push_back({QColor(60, 180, 75), QStringLiteral("FPP (tour pulse)")});
     if (hasRgbPin)
         entries.push_back({QColor(40, 200, 210), QStringLiteral("RGB")});
 
@@ -949,16 +1052,29 @@ void Ur3eHemisphereScanPreviewWidget::drawSemiFixedRings(QPainter &painter,
 
         // Same execute palette as Auto pins: pending yellow, current purple pulse,
         // done green, failed red. Plan-unreachable latitudes stay blue.
+        // Idle FPP tour also pulses the current fringe pin (visit order).
         QColor color(80, 180, 255);
         const bool planUnreachable = ring.reachabilityKnown && !ring.reachable;
+        const bool tourActive = isFppTourPinActive(i);
         const bool isActive =
-            executionActive_
-            && (ring.drawAsPin ? executionActivePointIndex_ == ring.executeIndex
-                               : executionActivePointIndex_ == i);
+            tourActive
+            || (executionActive_
+                && (ring.drawAsPin ? executionActivePointIndex_ == ring.executeIndex
+                                   : executionActivePointIndex_ == i));
         double lineWidth = isActive ? 2.5 : 1.8;
         if (planUnreachable)
         {
             color = QColor(70, 130, 220);
+        }
+        else if (tourActive && !executionActive_)
+        {
+            const double pulse =
+                0.5 + 0.5 * std::sin(static_cast<double>(flashPulse_) * kPi / 8.0);
+            const int red = static_cast<int>(std::clamp(40.0 + pulse * 40.0, 0.0, 255.0));
+            const int green = static_cast<int>(std::clamp(180.0 + pulse * 50.0, 0.0, 255.0));
+            const int blue = static_cast<int>(std::clamp(75.0 + pulse * 40.0, 0.0, 255.0));
+            color = QColor(red, green, blue);
+            lineWidth = 3.0;
         }
         else if (executionActive_ && (isActive || !entry.executionCompleted))
         {
