@@ -31,7 +31,9 @@ _CLEANUP_PRESETS: dict[str, dict[str, float | int]] = {
         "ror_min_neighbors": 12,
         "ror_radius_scale": 2.5,
         "component_min_points": 800,
-        "final_component_eps_m": 0.0015,
+        # 8 mm links berries in one bunch; 1.5 mm was splitting a single cluster
+        # into islands that look like hand–eye ghosts.
+        "final_component_eps_m": 0.008,
         "final_component_min_points": 500,
         "surface_max_normal_angle_deg": 55.0,
     },
@@ -41,7 +43,7 @@ _CLEANUP_PRESETS: dict[str, dict[str, float | int]] = {
         "ror_min_neighbors": 6,
         "ror_radius_scale": 3.5,
         "component_min_points": 300,
-        "final_component_eps_m": 0.0025,
+        "final_component_eps_m": 0.008,
         "final_component_min_points": 200,
         "surface_max_normal_angle_deg": 75.0,
     },
@@ -120,6 +122,7 @@ def roi_component_filter(
     margin_m: float = 0.005,
     eps_m: float | None = None,
     min_points: int = 500,
+    keep_largest_only: bool = False,
 ) -> tuple[o3d.geometry.PointCloud, dict]:
     """Optionally percentile-crop, then keep significant DBSCAN components."""
     pts = np.asarray(cloud.points)
@@ -160,6 +163,8 @@ def roi_component_filter(
     keep_labs = {lab for lab, c in counts.items() if c >= int(min_points)}
     if not keep_labs:
         keep_labs = {max(counts, key=counts.get)}  # type: ignore[arg-type]
+    if keep_largest_only and len(keep_labs) > 1:
+        keep_labs = {max(keep_labs, key=lambda lab: counts[lab])}
 
     keep_idx = [i for i, lab in enumerate(labels) if int(lab) in keep_labs]
     out = cropped.select_by_index(keep_idx)
@@ -169,6 +174,7 @@ def roi_component_filter(
         "n_out": int(len(out.points)),
         "eps_m": float(eps_m),
         "n_components_kept": int(len(keep_labs)),
+        "keep_largest_only": bool(keep_largest_only),
         "component_sizes": {str(k): int(v) for k, v in sorted(counts.items(), key=lambda x: -x[1])[:8]},
     }
 
@@ -569,6 +575,7 @@ def cleanup_dense_cloud(
             percentile_crop=False,
             eps_m=float(final_component_eps_m),
             min_points=int(final_component_min_points),
+            keep_largest_only=True,
         )
         stats.n_after_final_components = int(len(cur.points))
         stats.steps["final_components"] = s

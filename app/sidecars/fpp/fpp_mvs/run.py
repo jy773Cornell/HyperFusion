@@ -52,19 +52,21 @@ def run_fpp_mvs_pipeline(
     skip_decode: bool = False,
     skip_fusion: bool = False,
     require_fpp: bool = True,
-    fusion_mode: str = "intersection",
+    fusion_mode: str = "union",
     support_min_views: int | None = None,
     score_lambda_agree: float = 0.15,
     score_lambda_contradict: float = 0.40,
     score_keep_threshold: float = 0.12,
     enable_tsdf: bool = False,
+    z_min_m: float = 0.15,
+    z_max_m: float = 0.50,
 ) -> dict[str, Any]:
     t_all = time.perf_counter()
     datafolder, burst = resolve_datafolder(input_path)
-    if mode != "sweep":
+    if mode not in ("sweep", "all"):
         raise ValueError(
-            "The unified FPP MVS pipeline currently fuses sweep views only "
-            "(00026…00156); mode must be 'sweep'."
+            "FPP MVS is sweep-only (no apex pin). Use mode='sweep' or 'all' — "
+            "every decode stem is a ring/sweep view (including 00000)."
         )
 
     if require_fpp and not has_fpp_burst(burst):
@@ -148,6 +150,8 @@ def run_fpp_mvs_pipeline(
             score_lambda_contradict=float(score_lambda_contradict),
             score_keep_threshold=float(score_keep_threshold),
             enable_tsdf=bool(enable_tsdf),
+            z_min_m=float(z_min_m),
+            z_max_m=float(z_max_m),
         )
         fusion_wall = round(time.perf_counter() - t_fus, 3)
         # Prefer pipeline stage timings when present

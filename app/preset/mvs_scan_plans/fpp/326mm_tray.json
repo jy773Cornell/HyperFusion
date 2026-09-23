@@ -1,0 +1,97 @@
+{
+  "schema": 1,
+  "kind": "fpp",
+  "id": "326mm",
+  "display_name": "326mm",
+  "robot_cfg_fingerprint": "",
+  "interval_deg": 60.0,
+  "pan_range_deg": 240.0,
+  "pan_direction": 1,
+  "stabilize_ms": 500,
+  "apex_height_mm": 326.0,
+  "notes": {
+    "height_mm": 326,
+    "height_meaning": "DLP optical to tray (ceiling_mount_height - tip Zbase)",
+    "seed_joints_deg": [
+      140.62,
+      -20.76,
+      -123.42,
+      26.58,
+      114.4,
+      33.6
+    ],
+    "nadir_wrists_deg": [
+      139.12,
+      -19.62,
+      -122.28,
+      31.22,
+      106.58,
+      37.45
+    ],
+    "home_joints_deg": [
+      139.12,
+      -19.62,
+      -122.28,
+      31.22,
+      106.58,
+      37.45
+    ],
+    "home": "Nadir wrists from seed refine; entry base=50. Spin shoulder_pan 50->230 only. FPP only.",
+    "dlp_joints_deg": [
+      139.12,
+      -19.62,
+      -122.28,
+      31.22,
+      106.58,
+      37.45
+    ],
+    "dlp": "Ring 1: nadir wrists. DLP ~326 mm. Base pan 50/110/170/230.",
+    "pan_span_deg": [
+      50,
+      230
+    ],
+    "pan_samples_deg": [
+      50,
+      110,
+      170,
+      230
+    ],
+    "exposure": "omit dlp_exposure_us — use GUI Exposure Time.",
+    "scan_tcp": "dlp",
+    "nadir_tilt_deg": 0.015
+  },
+  "rings": [
+    {
+      "id": "dlp_326",
+      "display_name": "DLP look-down 326mm",
+      "entry_joints_rad": [
+        0.8726646259971648,
+        -0.34243359924128747,
+        -2.134188609338666,
+        0.5448917924726296,
+        1.8601719167755564,
+        0.6536258048718765
+      ],
+      "entry_tcp": {
+        "x_m": -0.010953258595882759,
+        "y_m": 0.08788827270018804,
+        "z_m": 0.52149958260304,
+        "rx": -0.00020984356827474055,
+        "ry": 0.00016129255003170177,
+        "rz": 0.00010530629371933303,
+        "tool_z_x": 0.00016128149892634242,
+        "tool_z_y": 0.00020985205799728404,
+        "tool_z_z": 0.9999999649751954
+      },
+      "reachable": true,
+      "home_path_ok": true,
+      "base_sweep_ok": true,
+      "backup_coverage_ok": false,
+      "backup_union_deg": 0.0,
+      "phi_deg": 97.1,
+      "theta_deg": 11.0,
+      "no_pan": false,
+      "pan_range_deg": 240.0
+    }
+  ]
+}

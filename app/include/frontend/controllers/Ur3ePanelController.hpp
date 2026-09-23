@@ -224,7 +224,8 @@ private:
     static constexpr int kMotionPollIntervalMs = 100;
     static constexpr int kConnectPollIntervalMs = 1500;
     static constexpr int kDriverReadyPollIntervalMs = 2000;
-    static constexpr int kBoundarySyncIntervalMs = 5000;
+    // Backup only — sidecar keepalive owns steady-state. Was 5s and thrashed logs.
+    static constexpr int kBoundarySyncIntervalMs = 30000;
     static constexpr int kScanCaptureStabilizeMs = 500;
 
     MainWindow *host_ = nullptr;

@@ -18,6 +18,8 @@ that begin with a visual-color TIFF remain supported for decode.
 
 Stages: decode → tray crop → filter → confidence → pose refine → consistency → densify → ROI/SOR/ROR.
 
+FPP MVS is **sweep/ring only** (no apex). Stem `00000` is the first ring pin, not nadir.
+
 ## Setup
 
 ```powershell

@@ -663,7 +663,8 @@ Ur3eScanWaypointMoveResult ur3eExecuteScanWaypoint(const QString &serverUrl,
                                                    QString *errorMessage,
                                                    const bool requireHomeFirst,
                                                    const bool directOnly,
-                                                   const bool allowPinPoseCone)
+                                                   const bool allowPinPoseCone,
+                                                   const bool ignoreWorkspaceBoundary)
 {
     QJsonObject body = buildScanMotionRequestBody();
     body.insert(QStringLiteral("joints"), positionsToJsonArray(positionsRad));
@@ -673,6 +674,13 @@ Ur3eScanWaypointMoveResult ur3eExecuteScanWaypoint(const QString &serverUrl,
         body.insert(QStringLiteral("direct_only"), true);
     if (allowPinPoseCone)
         body.insert(QStringLiteral("allow_pin_pose_cone"), true);
+    if (ignoreWorkspaceBoundary)
+    {
+        body.insert(QStringLiteral("ignore_workspace_boundary"), true);
+        QJsonObject workspace = body.value(QStringLiteral("workspace")).toObject();
+        workspace.insert(QStringLiteral("enabled"), false);
+        body.insert(QStringLiteral("workspace"), workspace);
+    }
     if (tcpPose != nullptr)
     {
         QJsonObject tcp;

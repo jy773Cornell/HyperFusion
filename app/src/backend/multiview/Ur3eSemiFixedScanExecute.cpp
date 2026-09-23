@@ -239,10 +239,18 @@ bool moveItToJoints(const QString &serverUrl,
                     const Ur3eScanTcpPose *tcp,
                     QString *errorOut,
                     bool *stoppedOut,
-                    const bool allowPinPoseCone = false)
+                    const bool allowPinPoseCone = false,
+                    const bool ignoreWorkspaceBoundary = false)
 {
     const Ur3eScanWaypointMoveResult move =
-        ur3eExecuteScanWaypoint(serverUrl, joints, tcp, nullptr, false, false, allowPinPoseCone);
+        ur3eExecuteScanWaypoint(serverUrl,
+                                joints,
+                                tcp,
+                                nullptr,
+                                false,
+                                false,
+                                allowPinPoseCone,
+                                ignoreWorkspaceBoundary);
     if (stoppedOut != nullptr)
         *stoppedOut = move.stopped;
     if (move.stopped)
@@ -992,7 +1000,8 @@ bool moveItToRingEntryViaHome(const QString &serverUrl,
                               SemiFixedScanExecuteHost &host,
                               const std::vector<double> *unwindEntryBranch,
                               QString *errorOut,
-                              bool *stoppedOut)
+                              bool *stoppedOut,
+                              const bool ignoreWorkspaceBoundary = false)
 {
     if (errorOut != nullptr)
         *errorOut = QString();
@@ -1013,7 +1022,8 @@ bool moveItToRingEntryViaHome(const QString &serverUrl,
     }
 
     // Plan joints only — allowPinPoseCone=false disables cone + live IK refresh.
-    if (moveItToJoints(serverUrl, joints, tcp, errorOut, stoppedOut, false))
+    if (moveItToJoints(serverUrl, joints, tcp, errorOut, stoppedOut, false,
+                       ignoreWorkspaceBoundary))
         return true;
 
     if (stoppedOut != nullptr && *stoppedOut)
@@ -1273,7 +1283,7 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
         const Ur3eScanTcpPose *tcpPtr = top.hasEntryTcp ? &top.entryTcp : nullptr;
         // Top / θ=0: FPP = home XY at working distance; Semi = home XY, Z = ring R. No pin-pose cone.
         if (!moveItToJoints(input.serverUrl, top.entryJointsRad, tcpPtr, &moveErr, &stopped,
-                            false))
+                            false, /*ignoreWorkspaceBoundary=*/route.isFppPlan))
         {
             if (stopped)
             {
@@ -1490,7 +1500,9 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
         else if (route.isFppPlan)
         {
             // Hand-taught FPP rings: MoveIt plans the entry hop (handles elbow-family
-            // flips that hardware PTP would fold through 0°). Pan spins stay hardware.
+            // flips that hardware PTP would fold through 0°). Pan spins stay hardware
+            // with skip_collision. Workspace box is not re-checked — operator already
+            // validated reachability / 360° pan when authoring the plan.
             if (host.log)
             {
                 const bool elbowFlip =
@@ -1504,7 +1516,7 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
                 }
             }
             hopOk = moveItToJoints(input.serverUrl, ring.entryJointsRad, tcpPtr, &moveErr,
-                                   &stopped, false);
+                                   &stopped, false, /*ignoreWorkspaceBoundary=*/true);
             if (!hopOk && !stopped)
             {
                 if (host.log)
@@ -1519,7 +1531,8 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
                                                  host,
                                                  unwindPtr,
                                                  &moveErr,
-                                                 &stopped);
+                                                 &stopped,
+                                                 /*ignoreWorkspaceBoundary=*/true);
             }
         }
         else if (simple360)

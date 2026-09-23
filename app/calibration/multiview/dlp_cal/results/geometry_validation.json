@@ -1,80 +1,94 @@
 {
   "ok": true,
-  "input": "C:\\Users\\jy773\\Downloads\\FPP_CAL",
-  "n_ok": 16,
+  "input": "C:\\Users\\jy773\\Downloads\\Camera_Cal\\dlp_cal\\good",
+  "n_ok": 20,
   "n_skipped": 0,
-  "n_fit": 13,
-  "n_holdout": 3,
+  "n_fit": 16,
+  "n_holdout": 4,
+  "holdout_mode": "smart",
   "fit_stems": [
-    "multiview_20260911_165130/00000.tif",
-    "multiview_20260911_165712/00000.tif",
-    "multiview_20260911_171315/00000.tif",
-    "multiview_20260911_171549/00000.tif",
-    "multiview_20260911_171655/00000.tif",
-    "multiview_20260911_171952/00000.tif",
-    "multiview_20260911_172734/00000.tif",
-    "multiview_20260911_173517/00000.tif",
-    "multiview_20260911_173854/00000.tif",
-    "multiview_20260911_174005/00000.tif",
-    "multiview_20260911_174311/00000.tif",
-    "multiview_20260911_174505/00000.tif",
-    "multiview_20260911_174605/00000.tif"
+    "multiview_20260923_120350__00000/00000.tif",
+    "multiview_20260923_121407__00000/00000.tif",
+    "multiview_20260923_121606__00000/00000.tif",
+    "multiview_20260923_121659__00000/00000.tif",
+    "multiview_20260923_121938__00000/00000.tif",
+    "multiview_20260923_122056__00000/00000.tif",
+    "multiview_20260923_122152__00000/00000.tif",
+    "multiview_20260923_122549__00000/00000.tif",
+    "multiview_20260923_122708__00000/00000.tif",
+    "multiview_20260923_123036__00000/00000.tif",
+    "multiview_20260923_123148__00000/00000.tif",
+    "multiview_20260923_123349__00000/00000.tif",
+    "multiview_20260923_123500__00000/00000.tif",
+    "multiview_20260923_123629__00000/00000.tif",
+    "multiview_20260923_123718__00000/00000.tif",
+    "multiview_20260923_123853__00000/00000.tif"
   ],
   "holdout_stems": [
-    "multiview_20260911_174847/00000.tif",
-    "multiview_20260911_174951/00000.tif",
-    "multiview_20260911_175138/00000.tif"
+    "multiview_20260923_121336__00000/00000.tif",
+    "multiview_20260923_122011__00000/00000.tif",
+    "multiview_20260923_122352__00000/00000.tif",
+    "multiview_20260923_123804__00000/00000.tif"
   ],
   "skipped": [],
   "fit": {
-    "n_views": 13,
-    "projector_rms_px": 2.5043741869521066,
-    "stereo_rms_px": 2.3131395665309014,
+    "n_views": 16,
+    "projector_rms_px": 1.607536629109141,
+    "stereo_rms_px": 3.4761803684260535,
     "stereo_from": "stereoCalibrate",
-    "baseline_mm": 104.56427525509889
+    "baseline_mm": 93.405979123686
   },
   "train_mm": {
-    "rms_mm": 2.6538750289814366,
-    "med_mm": 1.6500049764621267,
-    "p95_mm": 5.050410992870784,
-    "max_mm": 11.333712123961012,
-    "reproj_rms_uv": 1.0937968675534582
+    "rms_mm": 2.0614174921116684,
+    "med_mm": 1.1675495981572446,
+    "p95_mm": 3.8758260651498597,
+    "max_mm": 5.333953124943887,
+    "reproj_rms_uv": 1.5802606199684461
   },
   "holdout_mm": {
-    "rms_mm": 2.267091650405036,
-    "med_mm": 1.2483994353519448,
-    "p95_mm": 5.027652814494117,
-    "max_mm": 7.635480292756357,
-    "reproj_rms_uv": 0.9616237688163309
+    "rms_mm": 1.9981333213245969,
+    "med_mm": 1.110224252054766,
+    "p95_mm": 3.765845459934165,
+    "max_mm": 4.386521474867113,
+    "reproj_rms_uv": 1.5590786185103225
   },
   "holdout_views": [
     {
       "stem": "00000",
       "ok": true,
       "n": 70,
-      "rms_mm": 1.4863098563740087,
-      "med_mm": 1.0610508419095808,
-      "max_mm": 3.5667018955146785,
-      "reproj_rms_uv": 0.8023056366021952
+      "rms_mm": 1.9002558292111482,
+      "med_mm": 1.0226441618528086,
+      "max_mm": 3.9836847118830927,
+      "reproj_rms_uv": 1.2408760089779407
     },
     {
       "stem": "00000",
       "ok": true,
       "n": 70,
-      "rms_mm": 1.4139328522927166,
-      "med_mm": 1.0018549133142995,
-      "max_mm": 3.3643400560398957,
-      "reproj_rms_uv": 0.6263924909707539
+      "rms_mm": 1.7880695556184574,
+      "med_mm": 0.8612336226041248,
+      "max_mm": 3.7343052327059354,
+      "reproj_rms_uv": 1.428314833114072
     },
     {
       "stem": "00000",
       "ok": true,
       "n": 70,
-      "rms_mm": 3.348251865386106,
-      "med_mm": 2.2862677723373914,
-      "max_mm": 7.635480292756357,
-      "reproj_rms_uv": 1.3183698005451172
+      "rms_mm": 2.330961157732579,
+      "med_mm": 1.5655861089446663,
+      "max_mm": 4.386521474867113,
+      "reproj_rms_uv": 1.8704862740263029
+    },
+    {
+      "stem": "00000",
+      "ok": true,
+      "n": 70,
+      "rms_mm": 1.9309588830713398,
+      "med_mm": 1.0955760647493835,
+      "max_mm": 3.9472115622792883,
+      "reproj_rms_uv": 1.6261393302274934
     }
   ],
-  "stereo": "D:\\Pototypy\\HyperFusion\\app\\calibration\\multiview\\fpp_cal\\results\\camera_projector_stereo.yaml"
+  "stereo": "C:\\Users\\jy773\\Downloads\\Camera_Cal\\dlp_cal\\results\\camera_projector_stereo.yaml"
 }

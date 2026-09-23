@@ -54,7 +54,7 @@ def parse_args() -> argparse.Namespace:
         "--mode",
         choices=("sweep",),
         default="sweep",
-        help="Fusion currently uses sweep views only (apex 00000 is excluded).",
+        help="Fusion uses all FPP sweep/ring pins (no apex). 00000 is a normal pin.",
     )
     p.add_argument("--channel", default="auto")
     p.add_argument("--min-modulation", type=float, default=0.15)
@@ -64,10 +64,11 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--fusion-mode",
         choices=("intersection", "union"),
-        default="intersection",
+        default="union",
         help=(
-            "intersection: hard multi-view agree + densify ≥2 views. "
-            "union: soft score keep + densify 1-view cells."
+            "union (default): soft score keep + densify 1-view cells — keeps one "
+            "object together when views only partially overlap. "
+            "intersection: hard multi-view agree + densify ≥2 views."
         ),
     )
     p.add_argument(
@@ -83,6 +84,18 @@ def parse_args() -> argparse.Namespace:
         "--enable-tsdf",
         action="store_true",
         help="Also write score-gated TSDF mesh/cloud (secondary to dense_point_cloud.ply).",
+    )
+    p.add_argument(
+        "--z-min-mm",
+        type=float,
+        default=150.0,
+        help="Keep depth ≥ this (camera Z, mm). Default 150 for ~250 mm working distance.",
+    )
+    p.add_argument(
+        "--z-max-mm",
+        type=float,
+        default=500.0,
+        help="Keep depth ≤ this (camera Z, mm). Default 500.",
     )
     p.add_argument(
         "--allow-non-fpp",
@@ -116,6 +129,8 @@ def main() -> int:
             score_lambda_contradict=float(args.score_lambda_contradict),
             score_keep_threshold=float(args.score_keep_threshold),
             enable_tsdf=bool(args.enable_tsdf),
+            z_min_m=float(args.z_min_mm) * 1.0e-3,
+            z_max_m=float(args.z_max_mm) * 1.0e-3,
         )
     except Exception as exc:  # noqa: BLE001 — CLI
         print(json.dumps({"ok": False, "error": str(exc)}))

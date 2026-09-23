@@ -118,7 +118,8 @@ Ur3eHemisphereScanSettingsWidget::Ur3eHemisphereScanSettingsWidget(QWidget *pare
     fppRangeSpin_->setValue(360.0);
     fppRangeSpin_->setToolTip(
         QStringLiteral("Shoulder-pan arc to cover on each ring (0…360°). "
-                       "Photos every Interval along this arc."));
+                       "Photos every Interval along this arc. "
+                       "Stays in effect after Load (plan does not override)."));
 
     semiFixedIntervalSpin_ = new QDoubleSpinBox(autoSection_);
     semiFixedIntervalSpin_->setRange(1.0, 90.0);
@@ -491,6 +492,49 @@ void Ur3eHemisphereScanSettingsWidget::setSemiFixedRoute(const hf::ur3e::Ur3eSem
     semiFixedRoute_ = route;
     hf::ur3e::pruneSemiFixedRedundantFullSpinPins(semiFixedRoute_);
     hf::ur3e::ensureSemiFixedTopPose(semiFixedRoute_);
+
+    // FPP Load brings ring joints/TCPs only. Range / Interval / Direction stay GUI-owned
+    // (plan JSON must not overwrite the spins or pin-level overrides would ignore them).
+    const bool fppKeepGuiSpin =
+        scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::Fpp;
+    if (fppKeepGuiSpin)
+    {
+        if (semiFixedIntervalSpin_ != nullptr)
+            semiFixedRoute_.intervalDeg = semiFixedIntervalSpin_->value();
+        if (fppRangeSpin_ != nullptr)
+        {
+            const double range = fppRangeSpin_->value();
+            semiFixedRoute_.panRangeDeg =
+                range >= 0.0 ? std::min(360.0, range) : 360.0;
+        }
+        if (semiFixedDirectionCombo_ != nullptr)
+        {
+            const int dir = semiFixedDirectionCombo_->currentData().toInt();
+            semiFixedRoute_.panDirection = dir >= 0 ? 1 : -1;
+        }
+        for (hf::ur3e::Ur3eSemiFixedRing &ring : semiFixedRoute_.rings)
+        {
+            ring.intervalDeg = 0.0;   // inherit route / GUI Interval
+            ring.panRangeDeg = -1.0; // inherit route / GUI Range
+        }
+        if (semiFixedRoute_.hasRgbRing)
+        {
+            if (rgbIntervalSpin_ != nullptr)
+                semiFixedRoute_.rgbRing.intervalDeg = rgbIntervalSpin_->value();
+            if (rgbRangeSpin_ != nullptr)
+            {
+                const double rgbRange = rgbRangeSpin_->value();
+                semiFixedRoute_.rgbRing.panRangeDeg =
+                    rgbRange >= 0.0 ? std::min(360.0, rgbRange) : 360.0;
+            }
+        }
+        refreshSemiFixedRingList();
+        updateImageEstimateLabel();
+        saveToSettings();
+        emit semiFixedRouteChanged();
+        return;
+    }
+
     if (semiFixedIntervalSpin_ != nullptr)
     {
         const QSignalBlocker b(semiFixedIntervalSpin_);
@@ -723,8 +767,13 @@ void Ur3eHemisphereScanSettingsWidget::syncModeUi()
     if (loadRouteBtn_ != nullptr)
     {
         loadRouteBtn_->setToolTip(
-            autoMode ? QStringLiteral("Load the selected Auto route.")
-                     : QStringLiteral("Load the selected plan → ring entries."));
+            autoMode
+                ? QStringLiteral("Load the selected Auto route.")
+                : (fppMode
+                       ? QStringLiteral(
+                             "Load ring joints/TCPs from the plan. Range / Interval / "
+                             "Direction stay as set in the GUI.")
+                       : QStringLiteral("Load the selected plan → ring entries.")));
     }
     if (planBtn_ != nullptr)
     {

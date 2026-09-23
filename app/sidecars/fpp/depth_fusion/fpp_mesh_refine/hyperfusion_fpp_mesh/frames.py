@@ -41,8 +41,7 @@ def select_stems(all_stems: list[str], *, mode: str, poses: list[str] | None) ->
     if poses:
         want = {p.strip() for p in poses if p.strip()}
         return [s for s in all_stems if s in want]
-    if mode == "sweep":
-        return [s for s in all_stems if s != "00000"]
+    # FPP MVS is sweep-only (no dedicated apex pin). ``apex`` kept for legacy CLI.
     if mode == "apex":
         return [s for s in all_stems if s == "00000"][:1] or all_stems[:1]
     return list(all_stems)
@@ -56,8 +55,8 @@ def load_raw_frames(
     pose_mode: str,
     mode: str = "sweep",
     poses: list[str] | None = None,
-    z_min_m: float = 0.35,
-    z_max_m: float = 0.60,
+    z_min_m: float = 0.15,
+    z_max_m: float = 0.50,
     min_modulation: float = 0.0,
     stride: int = 1,
 ) -> list[DepthFrame]:

@@ -159,7 +159,11 @@ Ur3eScanWaypointMoveResult ur3eExecuteScanWaypoint(const QString &serverUrl,
                                                    const bool directOnly = false,
                                                    /// When true: pin-pose cone may relax look-at (non-apex).
                                                    /// Semi-fixed ring entries use this; top/apex does not.
-                                                   const bool allowPinPoseCone = false);
+                                                   const bool allowPinPoseCone = false,
+                                                   /// FPP taught rings: skip workspace-box validity (operator
+                                                   /// already verified reachability / 360° pan). Self-collision
+                                                   /// checks still apply.
+                                                   const bool ignoreWorkspaceBoundary = false);
 
 Ur3eScanWaypointMoveResult ur3eExecuteMoveHome(const QString &serverUrl,
                                                QString *errorMessage = nullptr);

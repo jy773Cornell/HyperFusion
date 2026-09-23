@@ -1063,6 +1063,9 @@ class MoveItScanPlanner:
         self._spin_thread: Optional[threading.Thread] = None
         self._spin_stop = threading.Event()
         self._workspace_applied: Optional[tuple[Any, ...]] = None
+        self._workspace_walls_key: Optional[tuple[Any, ...]] = None
+        self._workspace_acm_ok = False
+        self._last_acm_fail_log_s = 0.0
         self._last_known_move_group_pids: tuple[int, ...] = ()
         self._plan_in_progress = False
         self._last_workspace: Optional[WorkspaceBox] = None
@@ -1330,7 +1333,8 @@ class MoveItScanPlanner:
         first_cycle = True
         while True:
             # Poll quickly until the first boundary is applied after move_group start.
-            wait_s = 0.5 if first_cycle else 3.0
+            # After that, stay quiet — UI backup sync is slow; avoid log thrash.
+            wait_s = 0.5 if first_cycle else 10.0
             if self._boundary_keepalive_stop.wait(wait_s):
                 break
             first_cycle = False
@@ -1346,15 +1350,18 @@ class MoveItScanPlanner:
                 continue
 
             workspace_key = self._workspace_key(workspace)
-            if workspace_key == self._workspace_applied:
+            if workspace_key == self._workspace_applied and self._workspace_acm_ok:
                 continue
 
             try:
                 self.ensure_workspace_boundary_visible(workspace)
             except Exception as exc:
                 # Timeouts are common during MoveIt/RViz restart; next cycle retries.
-                sys.stderr.write(f"UR3e MoveIt: boundary keepalive: {exc}\n")
-                sys.stderr.flush()
+                now = time.time()
+                if now - self._last_acm_fail_log_s >= 15.0:
+                    self._last_acm_fail_log_s = now
+                    sys.stderr.write(f"UR3e MoveIt: boundary keepalive: {exc}\n")
+                    sys.stderr.flush()
 
     def ensure_workspace_boundary_visible(self, workspace: WorkspaceBox) -> bool:
         """Publish workspace collision walls into the active MoveIt planning scene."""
@@ -1364,7 +1371,7 @@ class MoveItScanPlanner:
             return False
 
         workspace_key = self._workspace_key(workspace)
-        if workspace_key == self._workspace_applied:
+        if workspace_key == self._workspace_applied and self._workspace_acm_ok:
             return True
 
         with self._lock:
@@ -2087,7 +2094,7 @@ class MoveItScanPlanner:
         """Install full workspace box collision (floor, walls, ceiling) for whole-arm checks."""
         with self._workspace_apply_cv:
             workspace_key = self._workspace_key(workspace)
-            if self._workspace_applied == workspace_key:
+            if self._workspace_applied == workspace_key and self._workspace_acm_ok:
                 return True
 
             if self._plan_in_progress:
@@ -2097,54 +2104,68 @@ class MoveItScanPlanner:
                     "UR3e MoveIt: skip workspace boundary update during planning.\n"
                 )
                 sys.stderr.flush()
-                return self._workspace_applied is not None
+                return self._workspace_applied is not None and self._workspace_acm_ok
 
             # Single-flight: waiters share one apply instead of stampeding after timeout.
             deadline = time.time() + 90.0
             while self._workspace_apply_in_progress and time.time() < deadline:
                 self._workspace_apply_cv.wait(timeout=0.5)
-                if self._workspace_applied == workspace_key:
+                if self._workspace_applied == workspace_key and self._workspace_acm_ok:
                     return True
-            if self._workspace_applied == workspace_key:
+            if self._workspace_applied == workspace_key and self._workspace_acm_ok:
                 return True
             if self._workspace_apply_in_progress:
                 sys.stderr.write(
                     "UR3e MoveIt: workspace boundary apply still in progress — skipping.\n"
                 )
                 sys.stderr.flush()
-                return self._workspace_applied is not None
+                return self._workspace_applied is not None and self._workspace_acm_ok
 
             if not workspace.enabled:
-                if self._workspace_applied is not None:
+                if self._workspace_applied is not None or self._workspace_walls_key is not None:
                     self._clear_workspace_boundary_objects()
                 self._workspace_applied = workspace_key
+                self._workspace_walls_key = workspace_key
+                self._workspace_acm_ok = True
                 sys.stderr.write("UR3e MoveIt: workspace boundary disabled.\n")
                 sys.stderr.flush()
                 return True
 
+            walls_already = self._workspace_walls_key == workspace_key
             self._workspace_apply_in_progress = True
 
         try:
-            collision_objects = self._make_workspace_boundary_objects(workspace)
-            sys.stderr.write(
-                "UR3e MoveIt: applying workspace boundary collision objects…\n"
-            )
-            sys.stderr.flush()
-            self._apply_planning_scene_objects(collision_objects)
+            if not walls_already:
+                collision_objects = self._make_workspace_boundary_objects(workspace)
+                sys.stderr.write(
+                    "UR3e MoveIt: applying workspace boundary collision objects…\n"
+                )
+                sys.stderr.flush()
+                self._apply_planning_scene_objects(collision_objects)
+                with self._workspace_apply_cv:
+                    self._workspace_walls_key = workspace_key
+
             try:
                 self._allow_base_ceiling_collisions()
             except Exception as exc:
-                sys.stderr.write(
-                    f"UR3e MoveIt: failed to apply base↔ceiling ACM ({exc}).\n"
-                    "UR3e MoveIt: workspace walls published; ACM pending retry "
-                    "(incomplete ACM replace would break camera↔wrist disables).\n"
-                )
-                sys.stderr.flush()
-                # Do not cache as applied — keepalive / next home retries ACM safely.
+                with self._workspace_apply_cv:
+                    # Walls stay; ACM retries quietly without republishing the box.
+                    self._workspace_acm_ok = False
+                now = time.time()
+                if now - self._last_acm_fail_log_s >= 15.0:
+                    self._last_acm_fail_log_s = now
+                    sys.stderr.write(
+                        f"UR3e MoveIt: failed to apply base↔ceiling ACM ({exc}).\n"
+                        "UR3e MoveIt: workspace walls published; ACM pending retry "
+                        "(incomplete ACM replace would break camera↔wrist disables).\n"
+                    )
+                    sys.stderr.flush()
                 return True
 
             with self._workspace_apply_cv:
                 self._workspace_applied = workspace_key
+                self._workspace_walls_key = workspace_key
+                self._workspace_acm_ok = True
             z_bottom, z_top = workspace_vertical_bounds(workspace)
             sys.stderr.write(
                 "UR3e MoveIt: workspace boundary enabled "
@@ -5122,6 +5143,7 @@ class MoveItScanPlanner:
         pin_pose_tolerance_deg: float = 0.0,
         lock_camera_up: bool = True,
         allow_pin_pose_cone: bool = False,
+        ignore_workspace_boundary: bool = False,
     ) -> Dict[str, Any]:
         """Plan and execute one collision-aware joint-space motion via MoveIt.
 
@@ -5137,6 +5159,10 @@ class MoveItScanPlanner:
 
         *allow_pin_pose_cone*: semi-fixed ring entries — force non-apex cone relaxation
         (``pin_pose_tolerance_deg``) and FK-fill TCP when missing.
+
+        *ignore_workspace_boundary*: FPP taught hops — clear the tray workspace box for
+        this move (operator already validated reachability / 360° pan). Self-collision
+        and pinch guards still apply.
         """
         if stop_event is not None and stop_event.is_set():
             return {"ok": False, "stopped": True, "error": "stopped"}
@@ -5156,6 +5182,23 @@ class MoveItScanPlanner:
             ws = workspace if workspace is not None else self._last_workspace
             if ws is None:
                 ws = WorkspaceBox(enabled=True)
+            if ignore_workspace_boundary:
+                # Keep geometry fields for logging; only disable the collision box.
+                ws = WorkspaceBox(
+                    enabled=False,
+                    length_m=float(getattr(ws, "length_m", 0.9) or 0.9),
+                    width_m=float(getattr(ws, "width_m", 0.6) or 0.6),
+                    height_m=float(getattr(ws, "height_m", 0.7) or 0.7),
+                    mount_height_m=float(getattr(ws, "mount_height_m", 0.85) or 0.85),
+                    ceiling_clearance_m=float(
+                        getattr(ws, "ceiling_clearance_m", 0.02) or 0.02
+                    ),
+                )
+                sys.stderr.write(
+                    "UR3e MoveIt execute: ignore workspace boundary "
+                    "(FPP taught pose / trusted 360°).\n"
+                )
+                sys.stderr.flush()
             self._last_workspace = ws
 
         try:

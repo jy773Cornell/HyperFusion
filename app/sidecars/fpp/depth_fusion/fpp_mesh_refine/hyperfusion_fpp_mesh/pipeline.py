@@ -68,8 +68,8 @@ def run_pipeline(
     pose_mode: str = "flange_camera",
     mode: str = "sweep",
     poses: list[str] | None = None,
-    z_min_m: float = 0.35,
-    z_max_m: float = 0.60,
+    z_min_m: float = 0.15,
+    z_max_m: float = 0.50,
     min_modulation: float = 0.12,
     stride: int = 2,
     remove_tray_plane: bool = False,
@@ -87,7 +87,7 @@ def run_pipeline(
     dense_pixel_stride: int = 1,
     support_voxel_m: float = 0.002,
     support_min_views: int | None = None,
-    fusion_mode: str = "intersection",
+    fusion_mode: str = "union",
     score_lambda_agree: float = 0.15,
     score_lambda_contradict: float = 0.40,
     score_keep_threshold: float = 0.12,
@@ -238,7 +238,10 @@ def run_pipeline(
             pose_stats = refine_poses_constrained(frames)
         stages["pose_refine"] = pose_stats
         print(
-            f"  refined={pose_stats['refined']} rejected={pose_stats['rejected']}",
+            f"  refined={pose_stats.get('refined', 0)} "
+            f"rejected={pose_stats.get('rejected', 0)} "
+            f"already_aligned={pose_stats.get('skipped_aligned', 0)} "
+            f"seed={pose_stats.get('seed')}",
             flush=True,
         )
     else:

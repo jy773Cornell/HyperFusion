@@ -152,14 +152,18 @@ class Ur3eRosBridge:
   def sync_workspace_boundary(self, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     from hyperfusion_ur3e.moveit.scan_planner import get_scan_planner, workspace_from_dict
 
+    # Prefer the UI/body workspace so keepalive and HTTP sync share one box.
+    # Using sidecar launch defaults here used to thrash mount Z (e.g. 0.847 vs 0.848)
+    # and flood the app log with "applying workspace boundary…" every few seconds.
     workspace = self.configured_workspace()
     if isinstance(body, dict):
       workspace_cfg = body.get("workspace")
       if isinstance(workspace_cfg, dict):
         workspace = workspace_from_dict(workspace_cfg)
 
-    self.start_workspace_boundary_sync()
     planner = get_scan_planner(ros_distro=self.ros_distro, ur_type=self.ur_type)
+    planner.set_default_workspace(workspace)
+    planner.start_boundary_keepalive()
     applied = planner.ensure_workspace_boundary_visible(workspace)
     return {"ok": True, "applied": applied}
 
@@ -1821,6 +1825,7 @@ class Ur3eRosBridge:
     tolerance_deg = float(body.get("pin_pose_tolerance_deg", 0.0) or 0.0)
     lock_camera_up = bool(body.get("scan_camera_up_world_z", True))
     allow_pin_pose_cone = bool(body.get("allow_pin_pose_cone", False))
+    ignore_workspace_boundary = bool(body.get("ignore_workspace_boundary", False))
 
     if not self._wait_for_external_control(
         timeout_s=120.0,
@@ -1845,6 +1850,7 @@ class Ur3eRosBridge:
         pin_pose_tolerance_deg=tolerance_deg,
         lock_camera_up=lock_camera_up,
         allow_pin_pose_cone=allow_pin_pose_cone,
+        ignore_workspace_boundary=ignore_workspace_boundary,
     )
     result = planner.execute_single_waypoint([float(v) for v in joints], **kwargs)
     if result.get("ok") or result.get("stopped"):
