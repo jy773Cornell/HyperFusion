@@ -123,6 +123,7 @@ private:
     void syncSessionUptimeClock(LumoCameraUi &ui, CameraState state);
     [[nodiscard]] bool anyCameraOperationWaitActive() const;
     void pollSdkFrameRates();
+    void refreshFrameRateSpinLimits(LumoCameraUi &ui);
     void syncStreamDisplayLoad();
 
     MainWindow *host_ = nullptr;

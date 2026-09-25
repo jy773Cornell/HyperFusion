@@ -591,11 +591,15 @@ void hf::capture::CapturePanelController::
     resetDualCameraScanSyncHardwareState() {
   dualCameraScanSyncHardwareApplied_ = false;
   lastAppliedSwir3SyncFrameRateHz_ = -1.0;
+  dualCameraSyncSessionLatched_ = false;
 }
 
 void hf::capture::CapturePanelController::updateDualCameraSyncControls() {
   const bool bothConnected = bothFx10eAndSwir3CaptureCamerasConnected();
-  if (!bothConnected)
+  // Apply settings briefly leaves a camera session; do not clear the latch
+  // or the intro/complete dialogs re-open in a loop.
+  if (!bothConnected && !dualCameraSyncHardwareApplyPending_
+      && !applyingDualCameraScanSync_)
     resetDualCameraScanSyncHardwareState();
 
   if (host_->captureDualCameraAutoCheck_ != nullptr)
@@ -656,7 +660,8 @@ void hf::capture::CapturePanelController::updateDualCameraSyncControls() {
 void hf::capture::CapturePanelController::maybeApplyInitialDualCameraSync() {
   if (!dualCameraScanSyncReadyForHardware() ||
       dualCameraScanSyncHardwareApplied_ ||
-      dualCameraSyncHardwareApplyPending_ || applyingDualCameraScanSync_)
+      dualCameraSyncHardwareApplyPending_ || applyingDualCameraScanSync_ ||
+      dualCameraSyncSessionLatched_)
     return;
 
   if (captureRecorderMode_ != CaptureRecorderMode::Idle)
@@ -667,21 +672,10 @@ void hf::capture::CapturePanelController::maybeApplyInitialDualCameraSync() {
   const QString swirName =
       host_->cameraPanel()->profileTabNameForUi(host_->camera2Ui_);
 
+  dualCameraSyncSessionLatched_ = true;
   host_->appendLog(QStringLiteral("Dual-camera sync: %1 and %2 connected — "
                                   "synchronizing SWIR3 to %1 scan geometry.")
                        .arg(fx10eName, swirName));
-
-  QMessageBox::information(
-      host_, QStringLiteral("Dual-camera sync"),
-      QStringLiteral(
-          "%1 and %2 are both connected.\n\n"
-          "HyperFusion will synchronize SWIR3 frame rate and exposure to match "
-          "%1 "
-          "so both cameras cover the same physical scan distance.\n\n"
-          "SWIR3 settings will be applied now. You can disable this later "
-          "under "
-          "Capture settings.")
-          .arg(fx10eName, swirName));
 
   applyDualCameraScanSync(true);
 }
@@ -724,6 +718,17 @@ void hf::capture::CapturePanelController::applyDualCameraScanSync(
     const double maxHz = host_->camera2Ui_.frameRateSpin->maximum();
     clampedRate = qBound(minHz, sync.syncedSwir3FrameRateHz, maxHz);
 
+    if (std::abs(clampedRate - sync.syncedSwir3FrameRateHz) > 0.05) {
+      host_->appendLog(
+          QStringLiteral(
+              "Dual-camera sync: geometric SWIR3 rate %1 Hz is outside "
+              "camera range %2–%3 Hz — using %4 Hz (scan speed still follows FX10e).")
+              .arg(sync.syncedSwir3FrameRateHz, 0, 'f', 2)
+              .arg(minHz, 0, 'f', 2)
+              .arg(maxHz, 0, 'f', 2)
+              .arg(clampedRate, 0, 'f', 2));
+    }
+
     QSignalBlocker blocker(host_->camera2Ui_.frameRateSpin);
     host_->camera2Ui_.frameRateSpin->setValue(clampedRate);
   }
@@ -750,6 +755,7 @@ void hf::capture::CapturePanelController::applyDualCameraScanSync(
 
     showDualCameraSyncWaitDialog();
     dualCameraSyncHardwareApplyPending_ = true;
+    dualCameraSyncSessionLatched_ = true;
 
     const CameraSettings settings =
         host_->cameraPanel()->buildSettings(host_->camera2Ui_);
@@ -817,6 +823,7 @@ void hf::capture::CapturePanelController::notifyDualCameraSyncApplyFailed(
   pendingDualSyncSummary_.valid = false;
   dualCameraScanSyncHardwareApplied_ = false;
   lastAppliedSwir3SyncFrameRateHz_ = -1.0;
+  // Keep sessionLatched_ so a failed apply does not immediately re-open dialogs.
 
   host_->appendLog(QStringLiteral("Dual-camera sync failed: %1").arg(message));
   QMessageBox::warning(host_, QStringLiteral("Dual-camera sync failed"),
@@ -4534,8 +4541,10 @@ void hf::capture::CapturePanelController::updateCamerasList() {
 
     const bool firstShow = checkbox->isHidden();
     checkbox->setText(host_->cameraPanel()->profileTabNameForUi(ui));
-    if (firstShow)
+    if (firstShow) {
+      const QSignalBlocker blocker(checkbox);
       checkbox->setChecked(true);
+    }
     checkbox->show();
   };
 

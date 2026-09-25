@@ -455,7 +455,8 @@ hf::ur3e::Ur3eSemiFixedRoute Ur3eHemisphereScanSettingsWidget::semiFixedRoute() 
     if (semiFixedIntervalSpin_ != nullptr)
         route.intervalDeg = semiFixedIntervalSpin_->value();
     if (fppRangeSpin_ != nullptr
-        && scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::Fpp)
+        && scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::Fpp
+        && route.panSweepRangesDeg.empty())
         route.panRangeDeg = fppRangeSpin_->value();
     else if (!(route.panRangeDeg >= 0.0))
         route.panRangeDeg = 360.0;
@@ -501,11 +502,15 @@ void Ur3eHemisphereScanSettingsWidget::setSemiFixedRoute(const hf::ur3e::Ur3eSem
     {
         if (semiFixedIntervalSpin_ != nullptr)
             semiFixedRoute_.intervalDeg = semiFixedIntervalSpin_->value();
+        if (!semiFixedRoute_.panSweepRangesDeg.empty())
+            semiFixedRoute_.panRangeDeg =
+                hf::ur3e::semiFixedSweepRangeTotalDeg(semiFixedRoute_.panSweepRangesDeg);
+        else
+            semiFixedRoute_.panRangeDeg = 360.0;
         if (fppRangeSpin_ != nullptr)
         {
-            const double range = fppRangeSpin_->value();
-            semiFixedRoute_.panRangeDeg =
-                range >= 0.0 ? std::min(360.0, range) : 360.0;
+            const QSignalBlocker block(fppRangeSpin_);
+            fppRangeSpin_->setValue(semiFixedRoute_.panRangeDeg);
         }
         if (semiFixedDirectionCombo_ != nullptr)
         {
@@ -667,7 +672,15 @@ void Ur3eHemisphereScanSettingsWidget::syncModeUi()
     if (rangeIntervalFormLabel_ != nullptr)
         rangeIntervalFormLabel_->setVisible(fppMode);
     if (fppRangeSpin_ != nullptr)
+    {
         fppRangeSpin_->setVisible(fppMode);
+        fppRangeSpin_->setReadOnly(true);
+        fppRangeSpin_->setToolTip(QStringLiteral(
+            "Plan-defined total shoulder-pan coverage. Full plans show 360°; "
+            "limited plans show the sum of their available ranges."));
+    }
+    if (rangeIntervalFormLabel_ != nullptr && fppMode)
+        rangeIntervalFormLabel_->setText(QStringLiteral("Range / Interval"));
     if (rgbRangeIntervalRow_ != nullptr)
         rgbRangeIntervalRow_->setVisible(fppMode);
     if (rgbRangeIntervalFormLabel_ != nullptr)
@@ -749,7 +762,7 @@ void Ur3eHemisphereScanSettingsWidget::syncModeUi()
     if (stageFormLabel_ != nullptr)
         stageFormLabel_->setVisible(true);
     if (semiFixedDirectionCombo_ != nullptr)
-        semiFixedDirectionCombo_->setVisible(ringMode);
+        semiFixedDirectionCombo_->setVisible(semiMode);
 
     if (imageEstimateLabel_ != nullptr)
         imageEstimateLabel_->setVisible(true);
@@ -771,8 +784,8 @@ void Ur3eHemisphereScanSettingsWidget::syncModeUi()
                 ? QStringLiteral("Load the selected Auto route.")
                 : (fppMode
                        ? QStringLiteral(
-                             "Load ring joints/TCPs from the plan. Range / Interval / "
-                             "Direction stay as set in the GUI.")
+                             "Load plan-owned joints, sweep ranges, and TCP preview data. "
+                             "Only Interval is editable.")
                        : QStringLiteral("Load the selected plan → ring entries.")));
     }
     if (planBtn_ != nullptr)
@@ -796,7 +809,8 @@ void Ur3eHemisphereScanSettingsWidget::syncSemiFixedRouteFromUi()
     if (semiFixedIntervalSpin_ != nullptr)
         semiFixedRoute_.intervalDeg = semiFixedIntervalSpin_->value();
     if (fppRangeSpin_ != nullptr
-        && scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::Fpp)
+        && scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::Fpp
+        && semiFixedRoute_.panSweepRangesDeg.empty())
         semiFixedRoute_.panRangeDeg = fppRangeSpin_->value();
     else if (scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::SemiFixed)
         semiFixedRoute_.panRangeDeg = 360.0;
@@ -1457,6 +1471,7 @@ void Ur3eHemisphereScanSettingsWidget::setParamsEnabled(const bool enabled)
         sphereRadiusSpin_->setEnabled(enabled);
     if (fppRangeSpin_ != nullptr)
         fppRangeSpin_->setEnabled(enabled);
+        fppRangeSpin_->setReadOnly(true);
     if (rgbRangeSpin_ != nullptr)
         rgbRangeSpin_->setEnabled(enabled);
     if (rgbIntervalSpin_ != nullptr)
@@ -1563,9 +1578,11 @@ void Ur3eHemisphereScanSettingsWidget::updateImageEstimateLabel()
                                        ? semiFixedRoute_.intervalDeg
                                        : 10.0;
         const double rangeDeg =
-            scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::Fpp
-                ? (fppRangeSpin_ != nullptr ? fppRangeSpin_->value() : 360.0)
-                : 360.0;
+            !semiFixedRoute_.panSweepRangesDeg.empty()
+                ? hf::ur3e::semiFixedSweepRangeTotalDeg(semiFixedRoute_.panSweepRangesDeg)
+                : (scanExecuteMode() == hf::ur3e::Ur3eScanExecuteMode::Fpp
+                       ? (fppRangeSpin_ != nullptr ? fppRangeSpin_->value() : 360.0)
+                       : 360.0);
 
         qint64 ringPins = 0;
         int ringEntries = 0;
@@ -1581,7 +1598,10 @@ void Ur3eHemisphereScanSettingsWidget::updateImageEstimateLabel()
             {
                 if (ring.noPan || std::abs(ring.thetaDeg) < 0.75)
                     continue;
-                ringPins += hf::ur3e::semiFixedRingSampleCount(ring, intervalDeg, rangeDeg);
+                ringPins += !semiFixedRoute_.panSweepRangesDeg.empty()
+                                ? hf::ur3e::semiFixedSweepRangeSampleCount(
+                                      semiFixedRoute_.panSweepRangesDeg, intervalDeg)
+                                : hf::ur3e::semiFixedRingSampleCount(ring, intervalDeg, rangeDeg);
                 ++ringEntries;
             }
         }

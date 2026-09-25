@@ -771,6 +771,10 @@ void CameraPanelController::onCameraStateChanged(LumoCameraUi &ui, const CameraS
     }
 
     updateCameraControls(ui, state);
+    if (state == CameraState::Initialized || state == CameraState::Configured
+        || state == CameraState::Armed || state == CameraState::Streaming
+        || state == CameraState::SafeStopped)
+        refreshFrameRateSpinLimits(ui);
     host_->capturePanel()->updateCamerasList();
     host_->capturePanel()->updateRecorderControls();
     syncStreamDisplayLoad();
@@ -1206,6 +1210,24 @@ void CameraPanelController::refreshSessionUptimeLabels()
 
         ui->sessionUptimeLabel->setText(formatSessionUptime(sessionUptimeTimers_[ui->cameraIndex].elapsed()));
     }
+}
+
+void CameraPanelController::refreshFrameRateSpinLimits(LumoCameraUi &ui)
+{
+    if (ui.frameRateSpin == nullptr || ui.camera == nullptr)
+        return;
+
+    CameraError error;
+    double minHz = 0.0;
+    double maxHz = 0.0;
+    if (!ui.camera->readFrameRateLimitsHz(minHz, maxHz, error))
+        return;
+
+    const QSignalBlocker blocker(ui.frameRateSpin);
+    ui.frameRateSpin->setRange(minHz, maxHz);
+    const double current = ui.frameRateSpin->value();
+    if (current < minHz || current > maxHz)
+        ui.frameRateSpin->setValue(qBound(minHz, current, maxHz));
 }
 
 void CameraPanelController::pollSdkFrameRates()

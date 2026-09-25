@@ -1,0 +1,75 @@
+﻿{
+    "schema":  1,
+    "kind":  "fpp",
+    "id":  "250mm_stand",
+    "display_name":  "250mm stand",
+    "robot_cfg_fingerprint":  "",
+    "interval_deg":  60.0,
+    "pan_range_deg":  120,
+    "pan_direction":  1,
+    "stabilize_ms":  500,
+    "apex_height_mm":  250.0,
+    "notes":  {
+                  "height_mm":  250,
+                  "height_meaning":  "DLP optical to stand target",
+                  "home_joints_deg":  [
+                                          139.12,
+                                          -3.64,
+                                          -144.68,
+                                          37.64,
+                                          106.58,
+                                          37.45
+                                      ],
+                  "home":  "250 mm stand homing pose. FPP only; no RGB burst.",
+                  "dlp_joints_deg":  [
+                                         170,
+                                         -40,
+                                         6.6,
+                                         -125,
+                                         103.96,
+                                         5.54
+                                     ],
+                  "dlp":  "DLP 250 mm stand pose.",
+                  "exposure":  "omit dlp_exposure_us â€” use GUI Exposure Time.",
+                  "scan_tcp":  "dlp"
+              },
+    "rings":  [
+                  {
+                      "id":  "dlp_250_stand",
+                      "display_name":  "DLP 250mm stand",
+                      "entry_joints_rad":  [
+                                               2.9670597283903604,
+                                               -0.69813170079773179,
+                                               0.11519173063162574,
+                                               -2.1816615649929116,
+                                               1.8144442903733047,
+                                               0.096691240560485864
+                                           ],
+                      "base_sweep_ok":  true,
+                      "backup_coverage_ok":  false,
+                      "backup_union_deg":  0.0,
+                      "phi_deg":  0.0,
+                      "theta_deg":  11.0,
+                      "no_pan":  false,
+                      "pan_range_deg":  120
+                  }
+              ],
+    "home_joints_deg":  [
+                            139.12,
+                            -3.64,
+                            -144.68,
+                            37.64,
+                            106.58,
+                            37.45
+                        ],
+    "pan_sweep_ranges_deg":  [
+                                 [
+                                     140,
+                                     200
+                                 ],
+                                 [
+                                     -40,
+                                     20
+                                 ]
+                             ]
+}

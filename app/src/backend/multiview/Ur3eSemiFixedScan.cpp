@@ -380,6 +380,25 @@ bool saveUr3eSemiFixedRoute(const QString &path,
     root.insert(QStringLiteral("pan_range_deg"), toSave.panRangeDeg);
     root.insert(QStringLiteral("pan_direction"), toSave.panDirection);
     root.insert(QStringLiteral("stabilize_ms"), toSave.stabilizeMs);
+    if (toSave.homeJointsRad.size() == 6)
+    {
+        QJsonArray homeDeg;
+        for (const double rad : toSave.homeJointsRad)
+            homeDeg.append(rad * 180.0 / 3.14159265358979323846);
+        root.insert(QStringLiteral("home_joints_deg"), homeDeg);
+    }
+    if (!toSave.panSweepRangesDeg.empty())
+    {
+        QJsonArray ranges;
+        for (const auto &range : toSave.panSweepRangesDeg)
+        {
+            QJsonArray pair;
+            pair.append(range[0]);
+            pair.append(range[1]);
+            ranges.append(pair);
+        }
+        root.insert(QStringLiteral("pan_sweep_ranges_deg"), ranges);
+    }
     if (toSave.isFppPlan || toSave.apexHeightM > 0.01)
     {
         const double mm =
@@ -493,6 +512,27 @@ bool loadUr3eSemiFixedRoute(const QString &path,
     else
         routeOut.panDirection = -1;
     routeOut.stabilizeMs = root.value(QStringLiteral("stabilize_ms")).toInt(500);
+
+    QJsonArray homeDeg = root.value(QStringLiteral("home_joints_deg")).toArray();
+    if (homeDeg.size() != 6 && root.value(QStringLiteral("notes")).isObject())
+        homeDeg = root.value(QStringLiteral("notes")).toObject().value(QStringLiteral("home_joints_deg")).toArray();
+    if (homeDeg.size() == 6)
+    {
+        for (const QJsonValue &value : homeDeg)
+            routeOut.homeJointsRad.push_back(value.toDouble() * 3.14159265358979323846 / 180.0);
+    }
+    const QJsonArray sweepRanges = root.value(QStringLiteral("pan_sweep_ranges_deg")).toArray();
+    for (const QJsonValue &value : sweepRanges)
+    {
+        const QJsonArray pair = value.toArray();
+        if (pair.size() != 2) continue;
+        const double start = pair[0].toDouble();
+        const double end = pair[1].toDouble();
+        if (std::isfinite(start) && std::isfinite(end) && std::abs(end - start) > 1.0e-9)
+            routeOut.panSweepRangesDeg.push_back({start, end});
+    }
+    if (!routeOut.panSweepRangesDeg.empty())
+        routeOut.panRangeDeg = semiFixedSweepRangeTotalDeg(routeOut.panSweepRangesDeg);
 
     // Stage stop is GUI-owned. Ignore legacy JSON stage blocks.
     routeOut.haveStagePositions = false;
@@ -826,16 +866,33 @@ QVector<Ur3eSemiFixedPreviewRing> inferFppPreviewPins(const Ur3eSemiFixedRoute &
     for (int ri = 0; ri < ringCount; ++ri)
     {
         const Ur3eSemiFixedRing &ring = route.rings[ri];
-        if (!ring.hasEntryTcp)
-            continue;
+        Ur3eSemiFixedRing previewRing = ring;
+        if (!previewRing.hasEntryTcp)
+        {
+            // Hand-authored plans may contain only joints. Give them a stable geometric
+            // preview at their declared height/theta instead of silently dropping them.
+            const double heightM = route.apexHeightM > 0.01 ? route.apexHeightM : 0.25;
+            const double thetaRad = std::abs(ring.thetaDeg) * 3.14159265358979323846 / 180.0;
+            const double phiRad = ring.phiDeg * 3.14159265358979323846 / 180.0;
+            const double radiusM = std::max(0.04, heightM * std::tan(thetaRad));
+            previewRing.entryTcp.xM = cx + radiusM * std::cos(phiRad);
+            previewRing.entryTcp.yM = cy + radiusM * std::sin(phiRad);
+            previewRing.entryTcp.zM =
+                std::max(0.1, hf::hardwareConfig().ur3e.ceilingMountHeightMm * 0.001)
+                - heightM;
+            previewRing.entryTcp.toolZMx = -std::sin(thetaRad) * std::cos(phiRad);
+            previewRing.entryTcp.toolZMy = -std::sin(thetaRad) * std::sin(phiRad);
+            previewRing.entryTcp.toolZMz = std::cos(thetaRad);
+            previewRing.hasEntryTcp = true;
+        }
 
         const bool pinOnly = ring.noPan || std::abs(ring.thetaDeg) < 0.75;
         if (pinOnly)
         {
-            out.push_back(makeFppPin(ring,
-                                     ring.entryTcp.xM,
-                                     ring.entryTcp.yM,
-                                     ring.entryTcp.zM,
+            out.push_back(makeFppPin(previewRing,
+                                     previewRing.entryTcp.xM,
+                                     previewRing.entryTcp.yM,
+                                     previewRing.entryTcp.zM,
                                      ri,
                                      ring.displayName.isEmpty()
                                          ? QStringLiteral("pin %1").arg(ri + 1)
@@ -843,30 +900,53 @@ QVector<Ur3eSemiFixedPreviewRing> inferFppPreviewPins(const Ur3eSemiFixedRoute &
             continue;
         }
 
-        const int samples = semiFixedSampleCount(intervalDeg, rangeDeg);
-        const double dx0 = ring.entryTcp.xM - cx;
-        const double dy0 = ring.entryTcp.yM - cy;
-        for (int s = 0; s < samples; ++s)
+        std::vector<double> samplePanDeg;
+        if (!route.panSweepRangesDeg.empty())
         {
-            const double ang =
-                static_cast<double>(panDir) * static_cast<double>(s) * intervalDeg
-                * (3.14159265358979323846 / 180.0);
+            for (const auto &range : route.panSweepRangesDeg)
+            {
+                const double direction = range[1] >= range[0] ? 1.0 : -1.0;
+                const double span = std::abs(range[1] - range[0]);
+                const int wholeSteps = static_cast<int>(std::floor(span / intervalDeg + 1.0e-9));
+                for (int i = 0; i <= wholeSteps; ++i)
+                    samplePanDeg.push_back(range[0] + direction * i * intervalDeg);
+                if (samplePanDeg.empty()
+                    || std::abs(samplePanDeg.back() - range[1]) > 0.25)
+                    samplePanDeg.push_back(range[1]);
+            }
+        }
+        else
+        {
+            const int samples = semiFixedSampleCount(intervalDeg, rangeDeg);
+            const double entryDeg = ring.entryJointsRad.size() == 6
+                                        ? ring.entryJointsRad[0] * 180.0
+                                              / 3.14159265358979323846
+                                        : 0.0;
+            for (int sample = 0; sample < samples; ++sample)
+                samplePanDeg.push_back(entryDeg + panDir * sample * intervalDeg);
+        }
+
+        const double entryDeg = ring.entryJointsRad.size() == 6
+                                    ? ring.entryJointsRad[0] * 180.0
+                                          / 3.14159265358979323846
+                                    : samplePanDeg.front();
+        const double dx0 = previewRing.entryTcp.xM - cx;
+        const double dy0 = previewRing.entryTcp.yM - cy;
+        for (const double sampleDeg : samplePanDeg)
+        {
+            const double ang = (sampleDeg - entryDeg)
+                               * (3.14159265358979323846 / 180.0);
             const double c = std::cos(ang);
             const double sn = std::sin(ang);
             const double x = cx + dx0 * c - dy0 * sn;
             const double y = cy + dx0 * sn + dy0 * c;
-            const QString label =
-                samples <= 1
-                    ? ring.displayName
-                    : QStringLiteral("%1 @%2°")
-                          .arg(ring.displayName)
-                          .arg(static_cast<double>(panDir) * static_cast<double>(s)
-                                   * intervalDeg,
-                               0, 'f', 0);
-            out.push_back(makeFppPin(ring, x, y, ring.entryTcp.zM, ri, label));
+            const QString label = QStringLiteral("%1 @%2°")
+                                      .arg(ring.displayName)
+                                      .arg(sampleDeg, 0, 'f', 0);
+            out.push_back(makeFppPin(previewRing, x, y, previewRing.entryTcp.zM,
+                                     ri, label));
         }
     }
-
     // RGB home is optional in JSON for authoring, but preview is sweep-only (no home still).
     if (route.hasRgbRing && route.rgbRing.hasEntryTcp
         && route.rgbRing.entryJointsRad.size() == 6)
@@ -1441,6 +1521,25 @@ int semiFixedSampleCount(const double intervalDeg, const double rangeDeg)
         return 1;
     const int n = static_cast<int>(std::lround(range / intervalDeg));
     return std::max(1, n);
+}
+
+double semiFixedSweepRangeTotalDeg(const std::vector<std::array<double, 2>> &rangesDeg)
+{
+    double total = 0.0;
+    for (const auto &range : rangesDeg)
+        total += std::abs(range[1] - range[0]);
+    return total;
+}
+
+int semiFixedSweepRangeSampleCount(const std::vector<std::array<double, 2>> &rangesDeg,
+                                   const double intervalDeg)
+{
+    if (rangesDeg.empty()) return semiFixedSampleCount(intervalDeg, 360.0);
+    const double step = intervalDeg > 0.0 ? intervalDeg : 10.0;
+    int total = 0;
+    for (const auto &range : rangesDeg)
+        total += std::max(1, static_cast<int>(std::floor(std::abs(range[1] - range[0]) / step + 1.0e-9)) + 1);
+    return total;
 }
 
 double resolveRingIntervalDeg(const Ur3eSemiFixedRing &ring, const double routeIntervalDeg)

@@ -1,8 +1,8 @@
 {
   "schema": 1,
   "kind": "fpp",
-  "id": "326mm",
-  "display_name": "326mm",
+  "id": "326mm_tray",
+  "display_name": "326mm tray",
   "robot_cfg_fingerprint": "",
   "interval_deg": 60.0,
   "pan_range_deg": 240.0,

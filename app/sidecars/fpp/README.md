@@ -12,11 +12,13 @@ that begin with a visual-color TIFF remain supported for decode.
     metadata.json                stage timings + paths
     decode/<stem>/fpp_*.npy      per-pin decode
     fusion/
-      dense_point_cloud.ply      ← only geometry output
+      dense_point_cloud.ply      primary geometry output
+      optimized_poses.json       refined camera-to-world matrices
       summary.json
 ```
 
-Stages: decode → tray crop → filter → confidence → pose refine → consistency → densify → ROI/SOR/ROR.
+Stages: decode → tray crop → filter → confidence → robust multi-scale ICP +
+global pose-graph refinement → consistency → densify → ROI/SOR/ROR.
 
 FPP MVS is **sweep/ring only** (no apex). Stem `00000` is the first ring pin, not nadir.
 

@@ -333,6 +333,8 @@ private:
     QString captureMultiviewSessionDirectory_;
     bool dualCameraScanSyncHardwareApplied_ = false;
     bool dualCameraSyncHardwareApplyPending_ = false;
+    /// Once a dual-connect sync attempt starts, do not re-open dialogs until a real disconnect.
+    bool dualCameraSyncSessionLatched_ = false;
     double lastAppliedSwir3SyncFrameRateHz_ = -1.0;
     OperationWaitDialog *dualCameraSyncWaitDialog_ = nullptr;
     bool dualModeExposureSwitchEnabled_ = false;

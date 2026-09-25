@@ -344,7 +344,7 @@
       <command_interface name="effort"/>
       <state_interface name="position">
         <!-- initial position for the mock system and simulation -->
-        <param name="initial_value">2.460914</param>
+        <param name="initial_value">2.428102</param>
       </state_interface>
       <state_interface name="velocity">
         <param name="initial_value">0.0</param>
@@ -359,7 +359,7 @@
       <command_interface name="effort"/>
       <state_interface name="position">
         <!-- initial position for the mock system and simulation -->
-        <param name="initial_value">-0.528835</param>
+        <param name="initial_value">-0.342434</param>
       </state_interface>
       <state_interface name="velocity">
         <param name="initial_value">0.0</param>
@@ -374,7 +374,7 @@
       <command_interface name="effort"/>
       <state_interface name="position">
         <!-- initial position for the mock system and simulation -->
-        <param name="initial_value">-1.858776</param>
+        <param name="initial_value">-2.134189</param>
       </state_interface>
       <state_interface name="velocity">
         <param name="initial_value">0.0</param>
@@ -389,7 +389,7 @@
       <command_interface name="effort"/>
       <state_interface name="position">
         <!-- initial position for the mock system and simulation -->
-        <param name="initial_value">0.335103</param>
+        <param name="initial_value">0.544892</param>
       </state_interface>
       <state_interface name="velocity">
         <param name="initial_value">0.0</param>
@@ -404,7 +404,7 @@
       <command_interface name="effort"/>
       <state_interface name="position">
         <!-- initial position for the mock system and simulation -->
-        <param name="initial_value">1.996657</param>
+        <param name="initial_value">1.860172</param>
       </state_interface>
       <state_interface name="velocity">
         <param name="initial_value">0.0</param>
@@ -419,7 +419,7 @@
       <command_interface name="effort"/>
       <state_interface name="position">
         <!-- initial position for the mock system and simulation -->
-        <param name="initial_value">0.586431</param>
+        <param name="initial_value">0.653626</param>
       </state_interface>
       <state_interface name="velocity">
         <param name="initial_value">0.0</param>

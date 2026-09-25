@@ -233,15 +233,32 @@ def run_pipeline(
     }
 
     if do_pose_refine:
-        print("[4] constrained pose refine…", flush=True)
+        print("[4] robust pose-graph refine…", flush=True)
         with _timed(timings, "pose_refine"):
             pose_stats = refine_poses_constrained(frames)
         stages["pose_refine"] = pose_stats
+        optimized_poses = pose_stats.get("optimized_poses")
+        if optimized_poses:
+            optimized_poses_path = out_dir / "optimized_poses.json"
+            optimized_poses_path.write_text(
+                json.dumps(
+                    {
+                        "method": pose_stats.get("method"),
+                        "reference": pose_stats.get("reference"),
+                        "pose_convention": pose_stats.get("pose_convention"),
+                        "poses": optimized_poses,
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            pose_stats["optimized_poses_path"] = str(optimized_poses_path)
         print(
-            f"  refined={pose_stats.get('refined', 0)} "
+            f"  method={pose_stats.get('method', 'legacy')} "
+            f"refined={pose_stats.get('refined', 0)} "
             f"rejected={pose_stats.get('rejected', 0)} "
             f"already_aligned={pose_stats.get('skipped_aligned', 0)} "
-            f"seed={pose_stats.get('seed')}",
+            f"reference={pose_stats.get('reference', pose_stats.get('seed'))}",
             flush=True,
         )
     else:

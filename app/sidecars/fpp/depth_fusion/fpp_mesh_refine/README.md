@@ -7,7 +7,8 @@ per-view decode depth (fpp_depth.npy)
 → edge-aware depth filtering
 → depth confidence (C_FPP: modulation + phase + smoothness + edges + mask
   interior + depth jumps)
-→ small constrained pose refinement
+→ robust multi-scale point-to-plane ICP between overlapping views
+→ globally optimized pose graph (robot/hand-eye poses are initialization)
 → full-resolution multi-view consistency / outlier rejection
 → require two-view support in 2 mm cells
 → confidence-weighted densify (back-project refined depth)
@@ -17,6 +18,7 @@ per-view decode depth (fpp_depth.npy)
 → tight 1.5 mm components; remove fragments below 500 points
 → optional light smooth
 → dense_point_cloud.ply
+→ optimized_poses.json (refined camera-to-world matrices in metres)
 → orthographic top_view_depth_mm.npy + top_view_depth.png
 ```
 
@@ -40,6 +42,7 @@ Unified-pipeline output: `<burst>/processed/fusion/`
 
 | File | Meaning |
 |------|---------|
+| optimized_poses.json | Refined camera-to-world matrices, in metres |
 | `dense_point_cloud.ply` | Cleaned dense cloud |
 | `top_view_depth_mm.npy` | 0.5 mm/pixel topmost height above the stage; invalid is NaN |
 | `top_view_depth.png` | Color preview of the top-view height map |

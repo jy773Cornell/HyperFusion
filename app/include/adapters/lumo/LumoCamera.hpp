@@ -42,6 +42,9 @@ public:
     /// Returns false without blocking when another thread holds the global Lumo SDK lock.
     bool readAppliedFrameRateHz(double &outHz, CameraError &error);
 
+    /// Read Camera.FrameRate min/max from the SDK. Same lock/state rules as readAppliedFrameRateHz.
+    bool readFrameRateLimitsHz(double &minHz, double &maxHz, CameraError &error);
+
     std::string name() const override;
     CameraBackendId backendId() const override;
     LumoSensorKind sensorKind() const override;

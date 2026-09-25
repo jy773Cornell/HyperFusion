@@ -1,4 +1,4 @@
-﻿// UR3e tab orchestration implementation.
+// UR3e tab orchestration implementation.
 #include "frontend/controllers/Ur3ePanelController.hpp"
 
 #include "backend/HyperFusionConfig.hpp"
@@ -2323,6 +2323,54 @@ void Ur3ePanelController::onLoadScanRouteRequested(const QString &routePath)
         host_->capturePanel()->syncBfsAndMultiviewRgbCaptureControls();
 }
 
+void Ur3ePanelController::moveToLoadedPlanHome(const Ur3eSemiFixedRoute &route)
+{
+    if (!robotConnected_ || serverManager_ == nullptr)
+        return;
+    if (route.homeJointsRad.size() != 6)
+    {
+        host_->appendLog(QStringLiteral(
+            "UR3e: loaded plan has no home_joints_deg; robot position unchanged."));
+        return;
+    }
+    if (busy_ || motionInProgress_ || scanExecuting_)
+    {
+        host_->appendLog(QStringLiteral(
+            "UR3e: plan loaded, but automatic move to plan home was skipped because the robot is busy."));
+        return;
+    }
+
+    const QString serverUrl = serverManager_->serverUrl();
+    const std::vector<double> target = route.homeJointsRad;
+    const QString targetSummary = formatJointTargetsDeg(target);
+    pushWorkspaceBoundaryToMoveIt();
+    applyJointTargets(target);
+    host_->appendLog(QStringLiteral(
+        "UR3e: loaded plan → MoveIt plan home (workspace enforced) — %1")
+                         .arg(targetSummary));
+    stopRequested_.store(false, std::memory_order_release);
+    motionInProgress_ = true;
+    setBusy(true);
+    setJointPollIntervalMs(kMotionPollIntervalMs);
+    std::thread([this, serverUrl, target, targetSummary]() {
+        const Ur3eScanWaypointMoveResult result =
+            ur3eExecuteScanWaypoint(serverUrl, target, nullptr, nullptr,
+                                    false, false, false, false);
+        QString detail;
+        if (result.ok)
+            detail = QStringLiteral("MoveIt reached loaded plan home — %1").arg(targetSummary);
+        else if (result.stopped)
+            detail = result.errorMessage.isEmpty() ? QStringLiteral("Plan-home motion stopped.")
+                                                   : result.errorMessage;
+        else
+            detail = result.errorMessage.isEmpty()
+                         ? QStringLiteral("MoveIt could not reach loaded plan home.")
+                         : result.errorMessage;
+        QMetaObject::invokeMethod(
+            this, [this, ok = result.ok, detail]() { finishMove(ok, detail); },
+            Qt::QueuedConnection);
+    }).detach();
+}
 void Ur3ePanelController::onLoadPlannedRouteAsSemiFixedRequested(const QString &routePath)
 {
     if (host_ == nullptr || host_->ur3eHemisphereScanSettings_ == nullptr)
@@ -2359,6 +2407,7 @@ void Ur3ePanelController::onLoadPlannedRouteAsSemiFixedRequested(const QString &
             updateRobotUi();
             if (host_->capturePanel() != nullptr)
                 host_->capturePanel()->syncBfsAndMultiviewRgbCaptureControls();
+            moveToLoadedPlanHome(hand);
             return;
         }
         if (fppMode)
@@ -3683,10 +3732,15 @@ bool Ur3ePanelController::startSemiFixedScanExecute(const HemisphereScanExecuteO
         int ringSamples = 0;
         for (const Ur3eSemiFixedRing &ring : route.rings)
         {
-            ringSamples += semiFixedRingSampleCount(
-                ring,
-                resolveRingIntervalDeg(ring, intervalDeg),
-                resolveRingPanRangeDeg(ring, route.panRangeDeg));
+            const double ringInterval = resolveRingIntervalDeg(ring, intervalDeg);
+            ringSamples += !route.panSweepRangesDeg.empty()
+                               && ring.captureKind.trimmed().compare(
+                                      QStringLiteral("rgb"), Qt::CaseInsensitive) != 0
+                               ? semiFixedSweepRangeSampleCount(route.panSweepRangesDeg,
+                                                                ringInterval)
+                               : semiFixedRingSampleCount(
+                                     ring, ringInterval,
+                                     resolveRingPanRangeDeg(ring, route.panRangeDeg));
         }
         if (route.hasRgbRing)
         {

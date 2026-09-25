@@ -10,6 +10,7 @@
 #include <QVector>
 
 #include <cstdint>
+#include <array>
 #include <vector>
 
 namespace hf::ur3e
@@ -60,6 +61,10 @@ struct Ur3eSemiFixedRoute
     /// +1 = positive pan direction, −1 = opposite.
     int panDirection = 1;
     int stabilizeMs = 500;
+    /// Optional plan-specific MoveIt hub, radians. FPP uses this between disjoint sweeps.
+    std::vector<double> homeJointsRad;
+    /// Absolute shoulder_pan ranges in degrees. Empty keeps the legacy contiguous arc.
+    std::vector<std::array<double, 2>> panSweepRangesDeg;
     /// JSON kind ``fpp`` (vs ``ur3e_semi_fixed_route`` for Semi).
     bool isFppPlan = false;
     /// FPP plans historically carried stage mm in JSON; stage is GUI-owned now.
@@ -191,6 +196,12 @@ void syncHemisphereParamsFromPlanLatitudes(const Ur3eHemisphereScanPlan &plan,
                                            Ur3eHemisphereScanParams &paramsInOut);
 
 [[nodiscard]] int semiFixedSampleCount(double intervalDeg, double rangeDeg = 360.0);
+
+[[nodiscard]] int semiFixedSweepRangeSampleCount(
+    const std::vector<std::array<double, 2>> &rangesDeg, double intervalDeg);
+
+[[nodiscard]] double semiFixedSweepRangeTotalDeg(
+    const std::vector<std::array<double, 2>> &rangesDeg);
 
 /// Imaging samples for one ring: panRange / interval, or backup arc / interval.
 [[nodiscard]] int semiFixedRingSampleCount(const Ur3eSemiFixedRing &ring,

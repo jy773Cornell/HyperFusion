@@ -25,6 +25,7 @@ namespace hf::ur3e
 {
 class Ur3eMoveItManager;
 class Ur3eRvizManager;
+struct Ur3eSemiFixedRoute;
 
 enum class HemisphereScanPinSet
 {
@@ -208,6 +209,7 @@ private:
     void tryLoadCachedScanPlan();
     void saveCachedScanPlan();
     void onLoadScanRouteRequested(const QString &routePath);
+    void moveToLoadedPlanHome(const hf::ur3e::Ur3eSemiFixedRoute &route);
     void onLoadPlannedRouteAsSemiFixedRequested(const QString &routePath);
 
     void dismissConnectWaitDialog();

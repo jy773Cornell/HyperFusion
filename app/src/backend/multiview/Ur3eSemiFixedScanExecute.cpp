@@ -839,8 +839,7 @@ bool retreatToScanHome(const QString &serverUrl,
     // through to the live check + hardware move to sweep home below.
     if (unwindEntryBranch != nullptr && unwindEntryBranch->size() == 6)
     {
-        const bool entryIsSweepHome =
-            fppSweepHome && jointsNearEqual(*unwindEntryBranch, *homeJointsOverride);
+        const bool entryIsSweepHome = fppSweepHome;
         if (!entryIsSweepHome)
         {
             if (host.log)
@@ -899,7 +898,7 @@ bool retreatToScanHome(const QString &serverUrl,
         else if (host.log)
         {
             host.log(QStringLiteral(
-                "UR3e FPP: ring entry is sweep home — recovering from live pan…"));
+                "UR3e FPP: MoveIt will recover from the live sweep pose to plan home…"));
         }
     }
 
@@ -912,18 +911,16 @@ bool retreatToScanHome(const QString &serverUrl,
             if (host.setReturningHome)
                 host.setReturningHome(false);
             if (host.log)
-                host.log(QStringLiteral("UR3e FPP: already at sweep home."));
+                host.log(QStringLiteral("UR3e FPP: already at plan home."));
             return true;
         }
         if (host.log)
-            host.log(QStringLiteral("UR3e FPP: hardware → sweep home…"));
+            host.log(QStringLiteral("UR3e FPP: MoveIt → plan home…"));
         QString homeErr;
         bool homeStopped = false;
-        const bool okMove = hardwareMoveExact(serverUrl,
-                                              *homeJointsOverride,
-                                              QStringLiteral("FPP retreat to sweep home"),
-                                              &homeErr,
-                                              &homeStopped);
+        const bool okMove = moveItToJoints(serverUrl, *homeJointsOverride, nullptr,
+                                               &homeErr, &homeStopped, false,
+                                               /*ignoreWorkspaceBoundary=*/false);
         if (host.setReturningHome)
             host.setReturningHome(false);
         if (homeStopped)
@@ -940,7 +937,7 @@ bool retreatToScanHome(const QString &serverUrl,
             return false;
         }
         if (host.log)
-            host.log(QStringLiteral("UR3e FPP: at sweep home."));
+            host.log(QStringLiteral("UR3e FPP: at plan home."));
         return true;
     }
 
@@ -1062,7 +1059,10 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
 
     // FPP hub = plan sweep pose (first non-RGB ring), not cfg home_joints_deg.
     const std::vector<double> fppSweepHome =
-        input.route.isFppPlan ? fppSweepHomeJointsRad(input.route) : std::vector<double>{};
+        input.route.isFppPlan && input.route.homeJointsRad.size() == 6
+            ? input.route.homeJointsRad
+            : (input.route.isFppPlan ? fppSweepHomeJointsRad(input.route)
+                                     : std::vector<double>{});
     const bool useFppSweepHome = fppSweepHome.size() == 6;
 
     if (host.log)
@@ -1082,14 +1082,11 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
         if (!atSweep)
         {
             if (host.log)
-                host.log(QStringLiteral("UR3e FPP: hardware → sweep home before scan…"));
+                host.log(QStringLiteral("UR3e FPP: MoveIt → plan home before scan…"));
             QString homeErr;
             bool homeStopped = false;
-            if (!hardwareMoveExact(input.serverUrl,
-                                   fppSweepHome,
-                                   QStringLiteral("FPP move to sweep home"),
-                                   &homeErr,
-                                   &homeStopped))
+            if (!moveItToJoints(input.serverUrl, fppSweepHome, nullptr, &homeErr,
+                                &homeStopped, false, /*ignoreWorkspaceBoundary=*/false))
             {
                 if (homeStopped && stopRequested())
                     ur3eStopMotion(input.serverUrl);
@@ -1104,7 +1101,7 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
         }
         else if (host.log)
         {
-            host.log(QStringLiteral("UR3e FPP: already at sweep home."));
+            host.log(QStringLiteral("UR3e FPP: already at plan home."));
         }
     }
     else if (host.ensureHomeBeforeScan && !host.ensureHomeBeforeScan())
@@ -1515,9 +1512,27 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
                         "UR3e FPP: elbow family change — relying on MoveIt path…"));
                 }
             }
-            hopOk = moveItToJoints(input.serverUrl, ring.entryJointsRad, tcpPtr, &moveErr,
-                                   &stopped, false, /*ignoreWorkspaceBoundary=*/true);
-            if (!hopOk && !stopped)
+            if (!route.panSweepRangesDeg.empty() && fppSweepHome.size() == 6)
+            {
+                std::vector<double> stagedHome = fppSweepHome;
+                stagedHome[0] = ring.entryJointsRad[0];
+                if (host.log)
+                {
+                    host.log(QStringLiteral(
+                        "UR3e FPP: base-only sweep at home %1° → temporary range home…")
+                                 .arg(stagedHome[0] * 180.0 / kPi, 0, 'f', 1));
+                }
+                hopOk = hardwareMoveExact(input.serverUrl, stagedHome,
+                                          QStringLiteral("FPP base sweep to temporary home"),
+                                          &moveErr, &stopped);
+            }
+            if (hopOk)
+            {
+                hopOk = moveItToJoints(input.serverUrl, ring.entryJointsRad, tcpPtr,
+                                       &moveErr, &stopped, false,
+                                       /*ignoreWorkspaceBoundary=*/false);
+            }
+            if (!hopOk && !stopped && route.panSweepRangesDeg.empty())
             {
                 if (host.log)
                 {
@@ -1532,7 +1547,7 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
                                                  unwindPtr,
                                                  &moveErr,
                                                  &stopped,
-                                                 /*ignoreWorkspaceBoundary=*/true);
+                                                 /*ignoreWorkspaceBoundary=*/false);
             }
         }
         else if (simple360)
@@ -1632,6 +1647,9 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
         // Imaging pans: full 360° when the pin is sweep-OK; backup 2-pin rings
         // only visit the contiguous valid run (or the pin itself if no mask).
         std::vector<double> samplePans;
+        std::vector<int> rangeStartSamples;
+        std::vector<int> rangeEndSamples;
+        std::vector<double> rangeEntryPans;
         const bool pinOnly = ring.noPan || std::abs(ring.thetaDeg) < 0.75;
         const bool backupPartial = !pinOnly && ring.backupCoverageOk && !ring.baseSweepOk;
         const double ringIntervalDeg = resolveRingIntervalDeg(ring, intervalDeg);
@@ -1674,6 +1692,33 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
                                  .arg(samplePans.size())
                                  .arg(ring.backupUnionDeg, 0, 'f', 1));
                 }
+            }
+        }
+        else if (!route.panSweepRangesDeg.empty() && !isRgbRing)
+        {
+            const double stepDeg = ringIntervalDeg > 0.0 ? ringIntervalDeg : 10.0;
+            for (const auto &range : route.panSweepRangesDeg)
+            {
+                rangeStartSamples.push_back(static_cast<int>(samplePans.size()));
+                const double startDeg = range[0];
+                const double endDeg = range[1];
+                rangeEntryPans.push_back(0.5 * (startDeg + endDeg) * kDegToRad);
+                const double direction = endDeg >= startDeg ? 1.0 : -1.0;
+                const double span = std::abs(endDeg - startDeg);
+                const int wholeSteps = static_cast<int>(std::floor(span / stepDeg + 1.0e-9));
+                for (int i = 0; i <= wholeSteps; ++i)
+                    samplePans.push_back((startDeg + direction * i * stepDeg) * kDegToRad);
+                if (samplePans.empty()
+                    || std::abs(samplePans.back() - endDeg * kDegToRad) > 0.25 * kDegToRad)
+                    samplePans.push_back(endDeg * kDegToRad);
+                rangeEndSamples.push_back(static_cast<int>(samplePans.size()) - 1);
+            }
+            if (host.log)
+            {
+                host.log(QStringLiteral("UR3e FPP ring %1: %2 plan-owned sweep ranges, %3 samples")
+                             .arg(ringIndex)
+                             .arg(route.panSweepRangesDeg.size())
+                             .arg(samplePans.size()));
             }
         }
         else
@@ -1821,7 +1866,64 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
             std::vector<double> sampleJoints = entryBranch;
             sampleJoints[0] = samplePans[static_cast<std::size_t>(sample)];
 
-            if (sample > 0)
+            const bool rangeJump = sample > 0
+                && std::find(rangeStartSamples.begin(), rangeStartSamples.end(), sample)
+                       != rangeStartSamples.end();
+            if (rangeJump)
+            {
+                if (host.log)
+                    host.log(QStringLiteral("UR3e FPP: entering next range through its temporary home…"));
+                QString jumpErr;
+                bool jumpStopped = false;
+                const auto startIt = std::find(rangeStartSamples.begin(),
+                                               rangeStartSamples.end(), sample);
+                const int rangeIndex = static_cast<int>(
+                    std::distance(rangeStartSamples.begin(), startIt));
+                std::vector<double> rangeEntryJoints = sampleJoints;
+                if (rangeIndex >= 0
+                    && rangeIndex < static_cast<int>(rangeEntryPans.size()))
+                    rangeEntryJoints[0] = rangeEntryPans[static_cast<std::size_t>(rangeIndex)];
+                std::vector<double> stagedHome = fppSweepHome;
+                if (stagedHome.size() == 6)
+                    stagedHome[0] = rangeEntryJoints[0];
+                if (host.log)
+                {
+                    host.log(QStringLiteral(
+                        "UR3e FPP: real home → base-only sweep to temporary home %1° → MoveIt entry…")
+                                 .arg(stagedHome.size() == 6
+                                          ? stagedHome[0] * 180.0 / kPi
+                                          : 0.0,
+                                      0, 'f', 1));
+                }
+                if (fppSweepHome.size() != 6
+                    || !hardwareMoveExact(input.serverUrl, stagedHome,
+                                          QStringLiteral("FPP base sweep to next temporary home"),
+                                          &jumpErr, &jumpStopped)
+                    || !moveItToJoints(input.serverUrl, rangeEntryJoints, tcpPtr, &jumpErr,
+                                       &jumpStopped, false, false))
+                {
+                    ok = false;
+                    errorMessage = jumpErr.isEmpty()
+                                       ? QStringLiteral("MoveIt range transition failed")
+                                       : jumpErr;
+                    if (jumpStopped && stopRequested()) ur3eStopMotion(input.serverUrl);
+                    goto semi_fixed_done;
+                }
+                const Ur3eScanWaypointMoveResult edgeMove = ur3eExecuteHardwareJointMove(
+                    input.serverUrl, sampleJoints, true, nullptr,
+                    QStringLiteral("FPP pan from range midpoint to first edge"));
+                if (!edgeMove.ok)
+                {
+                    ok = false;
+                    errorMessage = edgeMove.errorMessage.isEmpty()
+                                       ? QStringLiteral("pan from range midpoint to edge failed")
+                                       : edgeMove.errorMessage;
+                    if (edgeMove.stopped && stopRequested()) ur3eStopMotion(input.serverUrl);
+                    goto semi_fixed_done;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(stabilizeMs));
+            }
+            else if (sample > 0)
             {
                 if (host.log)
                 {
@@ -1930,10 +2032,85 @@ void runSemiFixedScanExecute(const SemiFixedScanExecuteInput &input, SemiFixedSc
             }
 
             ++executed;
+
+            const auto endIt = std::find(rangeEndSamples.begin(),
+                                         rangeEndSamples.end(), sample);
+            if (endIt != rangeEndSamples.end() && sessionOk() && !stopRequested())
+            {
+                const int completedRange = static_cast<int>(
+                    std::distance(rangeEndSamples.begin(), endIt));
+                std::vector<double> midpointJoints = sampleJoints;
+                midpointJoints[0] = rangeEntryPans[static_cast<std::size_t>(completedRange)];
+                if (host.log)
+                {
+                    host.log(QStringLiteral(
+                                 "UR3e FPP: range %1 complete — pan back to midpoint %2° before home…")
+                                 .arg(completedRange + 1)
+                                 .arg(midpointJoints[0] * 180.0 / kPi, 0, 'f', 1));
+                }
+                const Ur3eScanWaypointMoveResult backToMidpoint =
+                    ur3eExecuteHardwareJointMove(
+                        input.serverUrl, midpointJoints, true, nullptr,
+                        QStringLiteral("FPP return from range edge to midpoint"));
+                if (!backToMidpoint.ok)
+                {
+                    ok = false;
+                    errorMessage = backToMidpoint.errorMessage.isEmpty()
+                                       ? QStringLiteral("return to range midpoint failed")
+                                       : backToMidpoint.errorMessage;
+                    if (backToMidpoint.stopped && stopRequested())
+                        ur3eStopMotion(input.serverUrl);
+                    goto semi_fixed_done;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(stabilizeMs));
+
+                // Leave the scan posture at the range midpoint, keeping shoulder_pan fixed.
+                // Then sweep only shoulder_pan from temporary home back to real home.
+                std::vector<double> temporaryHome = fppSweepHome;
+                if (temporaryHome.size() == 6)
+                    temporaryHome[0] = midpointJoints[0];
+                QString homeErr;
+                bool homeStopped = false;
+                if (temporaryHome.size() != 6
+                    || !moveItToJoints(input.serverUrl, temporaryHome, nullptr, &homeErr,
+                                       &homeStopped, false, false))
+                {
+                    ok = false;
+                    errorMessage = homeErr.isEmpty()
+                                       ? QStringLiteral("MoveIt to temporary range home failed")
+                                       : homeErr;
+                    if (homeStopped && stopRequested())
+                        ur3eStopMotion(input.serverUrl);
+                    goto semi_fixed_done;
+                }
+                if (host.log)
+                {
+                    host.log(QStringLiteral(
+                        "UR3e FPP: at temporary home %1° — base-only sweep back to real home %2°…")
+                                 .arg(temporaryHome[0] * 180.0 / kPi, 0, 'f', 1)
+                                 .arg(fppSweepHome[0] * 180.0 / kPi, 0, 'f', 1));
+                }
+                if (!hardwareMoveExact(input.serverUrl, fppSweepHome,
+                                       QStringLiteral("FPP base sweep temporary to real home"),
+                                       &homeErr, &homeStopped))
+                {
+                    ok = false;
+                    errorMessage = homeErr.isEmpty()
+                                       ? QStringLiteral("base sweep back to real home failed")
+                                       : homeErr;
+                    if (homeStopped && stopRequested())
+                        ur3eStopMotion(input.serverUrl);
+                    goto semi_fixed_done;
+                }
+                lastEntryBranch = fppSweepHome;
+                hasLastEntryBranch = true;
+                std::this_thread::sleep_for(std::chrono::milliseconds(stabilizeMs));
+            }
         }
 
         // Return to entry (last sample should already be there for a full ring).
-        if (sessionOk() && !stopRequested())
+        if (sessionOk() && !stopRequested()
+            && (route.panSweepRangesDeg.empty() || isRgbRing))
         {
             if (host.log)
             {

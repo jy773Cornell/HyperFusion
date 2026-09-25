@@ -519,6 +519,67 @@ bool LumoCamera::readAppliedFrameRateHz(double &outHz, CameraError &error)
 #endif
 }
 
+bool LumoCamera::readFrameRateLimitsHz(double &minHz, double &maxHz, CameraError &error)
+{
+#if defined(HF_HAVE_LUMO_SDK)
+    LumoGlobalTryLock lumoApi;
+    if (!lumoApi)
+    {
+        error.code = CameraErrorCode::Timeout;
+        error.message = tag() + " Lumo SDK busy (connect/init in progress).";
+        error.fatal = false;
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (handle_ == nullptr)
+    {
+        error.code = CameraErrorCode::InvalidState;
+        error.message = tag() + " sensor handle not open.";
+        error.fatal = false;
+        return false;
+    }
+
+    if (state_ != CameraState::Initialized && state_ != CameraState::Configured
+        && state_ != CameraState::Armed && state_ != CameraState::Streaming
+        && state_ != CameraState::SafeStopped)
+    {
+        error.code = CameraErrorCode::InvalidState;
+        error.message = tag() + " sensor not initialized.";
+        error.fatal = false;
+        return false;
+    }
+
+    const SI_H handle = static_cast<SI_H>(handle_);
+    double lo = 0.0;
+    double hi = 0.0;
+    if (!checkSi(SI_GetFloatMin(handle, L"Camera.FrameRate", &lo),
+                 "SI_GetFloatMin(Camera.FrameRate)",
+                 error))
+        return false;
+    if (!checkSi(SI_GetFloatMax(handle, L"Camera.FrameRate", &hi),
+                 "SI_GetFloatMax(Camera.FrameRate)",
+                 error))
+        return false;
+    if (!(hi > lo) || !(lo > 0.0))
+    {
+        error.code = CameraErrorCode::SdkError;
+        error.message = tag() + " Camera.FrameRate limits invalid.";
+        error.fatal = false;
+        return false;
+    }
+
+    minHz = lo;
+    maxHz = hi;
+    return true;
+#else
+    (void)error;
+    minHz = 1.0;
+    maxHz = 500.0;
+    return handle_ != nullptr;
+#endif
+}
+
 LumoCamera::LumoCamera(const CameraBackendId backendId,
                        std::string instanceLabel,
                        const LumoSensorKind sensorKind)
@@ -1245,7 +1306,15 @@ bool LumoCamera::applyCameraTiming(void *handlePtr,
         }
     }
 
-    if (!checkSi(SI_SetFloat(handle, L"Camera.FrameRate", requested.frameRateHz),
+    double frameRateHz = requested.frameRateHz;
+    double frameRateMin = 0.0;
+    double frameRateMax = 0.0;
+    if (SI_SUCCEEDED(SI_GetFloatMin(handle, L"Camera.FrameRate", &frameRateMin))
+        && SI_SUCCEEDED(SI_GetFloatMax(handle, L"Camera.FrameRate", &frameRateMax))
+        && frameRateMax > frameRateMin)
+        frameRateHz = std::clamp(frameRateHz, frameRateMin, frameRateMax);
+
+    if (!checkSi(SI_SetFloat(handle, L"Camera.FrameRate", frameRateHz),
                  "SI_SetFloat(Camera.FrameRate)",
                  error))
         return false;
