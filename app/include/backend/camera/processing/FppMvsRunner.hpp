@@ -13,6 +13,7 @@ struct FppMvsRunRequest
     QString handEyeYaml;
     QString stereoYaml;
     QString mode = QStringLiteral("sweep");
+    bool gsam = false;
     int timeoutMs = 3600000;
 };
 

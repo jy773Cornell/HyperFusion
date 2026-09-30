@@ -164,13 +164,20 @@ FppMvsRunResult runFppMvsPipeline(const FppMvsRunRequest &request)
     }
 
     QStringList args;
-    args << script << QStringLiteral("--input") << request.inputPath;
+    // Keep app-triggered jobs aligned with the current TSDF-only sidecar pipeline.
+    args << script << QStringLiteral("--input") << request.inputPath
+         << QStringLiteral("--dense-voxel-mm") << QStringLiteral("0.25")
+         << QStringLiteral("--enable-tsdf")
+         << QStringLiteral("--tsdf-voxel-mm") << QStringLiteral("0.25")
+         << QStringLiteral("--tsdf-trunc-mm") << QStringLiteral("2.5");
     if (!request.handEyeYaml.trimmed().isEmpty())
         args << QStringLiteral("--hand-eye") << request.handEyeYaml;
     if (!request.stereoYaml.trimmed().isEmpty())
         args << QStringLiteral("--stereo") << request.stereoYaml;
     if (!request.mode.trimmed().isEmpty())
         args << QStringLiteral("--mode") << request.mode;
+    if (request.gsam)
+        args << QStringLiteral("--gsam");
 
     QProcess process;
     process.setProgram(python);

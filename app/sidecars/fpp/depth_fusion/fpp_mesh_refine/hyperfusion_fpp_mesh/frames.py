@@ -34,6 +34,7 @@ class DepthFrame:
     pose_source: str
     conf: np.ndarray | None = None  # HxW float32 [0,1]
     phase_quality: np.ndarray | None = None  # HxW PSP fringe quality
+    object_mask: np.ndarray | None = None  # deferred semantic fusion mask
     meta: dict = field(default_factory=dict)
 
 

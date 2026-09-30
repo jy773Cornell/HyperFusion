@@ -4,18 +4,12 @@
 from __future__ import annotations
 
 import time
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-import numpy as np
-
-from fpp_depth.capture import list_burst_jobs, load_burst
-from fpp_depth.decode import decode_burst
-from fpp_depth.depth import depth_from_decode
+from fpp_depth.capture import list_burst_jobs
+from fpp_depth.decode_pin import decode_pin
 from fpp_depth.geometry import StereoGeometry
-from fpp_depth.io_maps import write_decode_maps, write_depth_maps
-from fpp_depth.undistort import undistort_burst
 
 
 def decode_mvs_burst(
@@ -42,58 +36,17 @@ def decode_mvs_burst(
     pin_timings: list[dict[str, Any]] = []
 
     for burst_dir, start in jobs:
-        tp = time.perf_counter()
-        loaded = load_burst(burst_dir, start=start, channel=channel)
-        undistort_maps = undistort_burst(loaded)
-        decoded = decode_burst(
-            loaded,
+        dest = decode_out / start.stem
+        summary = decode_pin(
+            burst_dir,
+            start,
+            dest,
+            stereo=stereo,
+            channel=channel,
             min_modulation=min_modulation,
             min_phase_quality=min_phase_quality,
         )
-        effective_stereo = stereo
-        if stereo is not None and undistort_maps is not None:
-            # The scan may carry a newer BFS K/D than the checkerboard stereo
-            # calibration. R/t remain camera→projector, but triangulation and
-            # later back-projection must use this burst's undistorted pinhole K.
-            effective_stereo = replace(
-                stereo,
-                camera_k=undistort_maps.new_k.copy(),
-                camera_d=np.zeros(5, dtype=np.float64),
-                undistorted=True,
-            )
-        depth = depth_from_decode(decoded, stereo=effective_stereo)
-        dest = decode_out / start.stem
-        write_decode_maps(dest, decoded, stem="fpp")
-        write_depth_maps(dest, depth, stem="fpp")
-        camera_k = (
-            effective_stereo.camera_k
-            if effective_stereo is not None
-            else (
-                undistort_maps.new_k
-                if undistort_maps is not None
-                else None
-            )
-        )
-        if camera_k is not None:
-            np.save(dest / "fpp_camera_k.npy", np.asarray(camera_k, dtype=np.float64))
-        elapsed = round(time.perf_counter() - tp, 3)
-        summary: dict[str, Any] = {
-            "stem": start.stem,
-            "start": start.name,
-            "decode_channel": loaded.decode_channel,
-            "valid_px": int(depth.mask.sum()),
-            "mode": depth.mode,
-            "out": str(dest),
-            "elapsed_s": elapsed,
-        }
-        if depth.units == "mm":
-            finite = depth.depth[np.isfinite(depth.depth)]
-            if finite.size:
-                summary["z_mm"] = {
-                    "med": float(np.median(finite)),
-                    "p05": float(np.percentile(finite, 5)),
-                    "p95": float(np.percentile(finite, 95)),
-                }
+        elapsed = float(summary["elapsed_s"])
         pin_results.append(summary)
         pin_timings.append({"stem": start.stem, "elapsed_s": elapsed})
         print(

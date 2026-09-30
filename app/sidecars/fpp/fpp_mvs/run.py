@@ -46,23 +46,33 @@ def run_fpp_mvs_pipeline(
     hand_eye: Path | None = None,
     pose_mode: str = "auto",
     mode: str = "sweep",
+    stage: str = "depth-fusion",
     channel: str = "auto",
     min_modulation: float = 0.15,
     min_phase_quality: float = 0.04,
-    skip_decode: bool = False,
-    skip_fusion: bool = False,
+    gsam: bool = False,
+    gsam_url: str = "http://127.0.0.1:8765",
+    gsam_prompt: str = "grape cluster",
+    gsam_box_threshold: float = 0.25,
+    gsam_max_detections: int = 8,
+    gsam_dilation_px: int = 4,
     require_fpp: bool = True,
     fusion_mode: str = "union",
     support_min_views: int | None = None,
     score_lambda_agree: float = 0.15,
     score_lambda_contradict: float = 0.40,
     score_keep_threshold: float = 0.12,
-    enable_tsdf: bool = False,
+    dense_voxel_m: float = 0.00025,
+    enable_tsdf: bool = True,
+    tsdf_voxel_m: float | None = None,
+    tsdf_trunc_m: float | None = None,
     z_min_m: float = 0.15,
     z_max_m: float = 0.50,
 ) -> dict[str, Any]:
     t_all = time.perf_counter()
     datafolder, burst = resolve_datafolder(input_path)
+    if stage not in ("depth", "depth-fusion"):
+        raise ValueError("stage must be 'depth' or 'depth-fusion'")
     if mode not in ("sweep", "all"):
         raise ValueError(
             "FPP MVS is sweep-only (no apex pin). Use mode='sweep' or 'all' — "
@@ -99,25 +109,21 @@ def run_fpp_mvs_pipeline(
                 f"App default checked: {DEFAULT_STEREO_YAML}. Pass --stereo PATH."
             )
 
-    # --- decode ---
-    if skip_decode:
-        stages["decode"] = {"skipped": True, "elapsed_s": 0.0, "decode_root": str(dec)}
-        print("[decode] skipped", flush=True)
-    else:
-        print(f"[decode] -> {dec}", flush=True)
-        stages["decode"] = decode_mvs_burst(
-            burst,
-            dec,
-            stereo_yaml=stereo_path,
-            channel=channel,
-            min_modulation=min_modulation,
-            min_phase_quality=min_phase_quality,
-        )
+    # --- depth decode ---
+    print(f"[depth] -> {dec}", flush=True)
+    stages["decode"] = decode_mvs_burst(
+        burst,
+        dec,
+        stereo_yaml=stereo_path,
+        channel=channel,
+        min_modulation=min_modulation,
+        min_phase_quality=min_phase_quality,
+    )
 
     # --- fusion (dense clean cloud) ---
     he_path = hand_eye
     tool0 = None
-    if not skip_fusion:
+    if stage == "depth-fusion":
         if pose_mode != "json":
             if he_path is None:
                 he_path = default_hand_eye(burst)
@@ -141,17 +147,26 @@ def run_fpp_mvs_pipeline(
             tool0_T_camera=tool0,
             pose_mode=pose_mode,
             mode=mode,
-            densify=True,
-            cleanup_dense=True,
+            densify=not bool(enable_tsdf),
+            cleanup_dense=not bool(enable_tsdf),
             min_modulation=float(min_modulation),
             fusion_mode=str(fusion_mode),
             support_min_views=support_min_views,
             score_lambda_agree=float(score_lambda_agree),
             score_lambda_contradict=float(score_lambda_contradict),
             score_keep_threshold=float(score_keep_threshold),
+            dense_voxel_m=float(dense_voxel_m),
             enable_tsdf=bool(enable_tsdf),
+            tsdf_voxel_m=tsdf_voxel_m,
+            tsdf_trunc_m=tsdf_trunc_m,
             z_min_m=float(z_min_m),
             z_max_m=float(z_max_m),
+            gsam=bool(gsam),
+            gsam_url=str(gsam_url),
+            gsam_prompt=str(gsam_prompt),
+            gsam_box_threshold=float(gsam_box_threshold),
+            gsam_max_detections=int(gsam_max_detections),
+            gsam_dilation_px=int(gsam_dilation_px),
         )
         fusion_wall = round(time.perf_counter() - t_fus, 3)
         # Prefer pipeline stage timings when present
@@ -193,24 +208,31 @@ def run_fpp_mvs_pipeline(
         },
         "pose_mode": pose_mode,
         "mode": mode,
+        "stage": stage,
         "fusion_mode": fusion_mode,
+        "gsam": bool(gsam),
+        "gsam_prompt": str(gsam_prompt) if gsam else None,
         "support_min_views": support_min_views,
         "fused_stems": (
             fusion_summary.get("stages", {}).get("load", {}).get("stems")
-            if not skip_fusion
+            if stage == "depth-fusion"
             else None
         ),
         "channel": channel,
-        "pipeline": [
-            "decode_fpp_depth",
-            "tray_crop",
-            "edge_aware_filter",
-            "confidence",
-            "pose_refine",
-            "consistency",
-            "densify_backproject",
-            "roi_sor_ror_cleanup",
-        ],
+        "pipeline": (
+            [
+                "decode_fpp_depth",
+                "tray_crop",
+                "edge_aware_filter",
+                "confidence",
+                "pose_refine",
+                "consistency",
+                "densify_backproject",
+                "roi_sor_ror_cleanup",
+            ]
+            if stage == "depth-fusion"
+            else ["decode_fpp_depth"]
+        ),
         "stages": {
             "decode": {
                 "elapsed_s": stages.get("decode", {}).get("elapsed_s"),

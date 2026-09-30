@@ -1,5 +1,5 @@
 # Classical FPP dense-cloud refine (sidecar / fpp / depth_fusion / fpp_mesh_refine).
-# Filter → conf → pose → consistency → densify → cleanup. No robot I/O.
+# Filter -> conf -> pose -> consistency -> densify -> cleanup. No robot I/O.
 """Run the end-to-end FPP mesh refine pipeline with per-stage timings."""
 
 from __future__ import annotations
@@ -17,14 +17,15 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise SystemExit("open3d required") from exc
 
-from .cleanup import cleanup_dense_cloud, resolve_cleanup_defaults
+from .cleanup import cleanup_dense_cloud, object_gravity_workspace_filter, resolve_cleanup_defaults
 from .confidence import confidence_frames
 from .consistency import consistency_reject
 from .densify import densify_from_depth
 from .filter import filter_frames
 from .frames import load_raw_frames
+from .gsam_mask import apply_gsam_masks, apply_prepared_object_masks
 from .pose_refine import refine_poses_constrained
-from .top_view import rasterize_top_view
+from .top_view import rasterize_top_view, remove_flat_background
 from .tray import remove_tray
 from .tsdf_fuse import fuse_frames_tsdf
 
@@ -36,7 +37,7 @@ def resolve_fusion_mode_defaults(
 ) -> tuple[str, int]:
     """Normalize fusion mode and apply mode-specific support defaults.
 
-    ``intersection`` (legacy): densify requires ≥2 views per 2 mm cell.
+    ``intersection`` (legacy): densify requires >=2 views per 2 mm cell.
     ``union``: densify allows 1-view cells; voxel merge weights use fusion_score when present.
     Explicit ``support_min_views`` always wins.
     """
@@ -106,8 +107,14 @@ def run_pipeline(
     final_component_eps_m: float | None = None,
     final_component_min_points: int | None = None,
     top_view: bool = True,
-    top_view_resolution_mm: float = 0.5,
+    top_view_resolution_mm: float = 0.25,
     light_smooth: bool = False,
+    gsam: bool = False,
+    gsam_url: str = "http://127.0.0.1:8765",
+    gsam_prompt: str = "grape cluster",
+    gsam_box_threshold: float = 0.25,
+    gsam_max_detections: int = 8,
+    gsam_dilation_px: int = 4,
 ) -> dict[str, Any]:
     fusion_mode, support_min_views = resolve_fusion_mode_defaults(
         fusion_mode, support_min_views=support_min_views
@@ -150,10 +157,13 @@ def run_pipeline(
         "score_lambda_contradict": float(score_lambda_contradict),
         "score_keep_threshold": float(score_keep_threshold),
         "conf_min": float(conf_min),
+        "registration_geometry": "full_scene_robot_prior" if gsam else "full_scene",
+        "fusion_geometry": "sam_exact" if gsam else "fpp_valid",
+        "pose_strategy": "local adjacency plus cross-range scene loop closures",
         "note": (
             "union: soft score keep + densify 1-view cells + milder cleanup"
             if fusion_mode == "union"
-            else "intersection: hard agree≥min_views + multi-view densify support"
+            else "intersection: hard agree>=min_views + multi-view densify support"
         ),
         "cleanup_preset": cleanup_knobs["preset"],
         "cleanup": {
@@ -173,12 +183,12 @@ def run_pipeline(
     }
     print(
         f"[0] fusion_mode={fusion_mode} support_min_views={support_min_views} "
-        f"consistency={'soft-score' if fusion_mode == 'union' else f'hard agree≥{consistency_min_views}'} "
+        f"consistency={'soft-score' if fusion_mode == 'union' else f'hard agree>={consistency_min_views}'} "
         f"cleanup={cleanup_knobs['preset']}",
         flush=True,
     )
 
-    print("[1] load raw depth maps…", flush=True)
+    print("[1] load raw depth maps...", flush=True)
     with _timed(timings, "load"):
         frames = load_raw_frames(
             burst,
@@ -194,9 +204,31 @@ def run_pipeline(
         )
     stages["load"] = {"n_frames": len(frames), "stems": [f.stem for f in frames]}
 
+    if gsam:
+        print(f"[1a] GSAM object masks: {gsam_prompt!r}...", flush=True)
+        with _timed(timings, "gsam"):
+            stages["gsam"] = apply_gsam_masks(
+                frames,
+                out_dir,
+                server_url=str(gsam_url),
+                prompt=str(gsam_prompt),
+                box_threshold=float(gsam_box_threshold),
+                max_detections=int(gsam_max_detections),
+                dilation_px=max(0, int(gsam_dilation_px)),
+            )
+        print(
+            f"  GSAM will retain {stages['gsam']['valid_after']:,}/"
+            f"{stages['gsam']['valid_before']:,} valid depth pixels "
+            f"({100.0 * stages['gsam']['keep_ratio']:.1f}%)",
+            flush=True,
+        )
+    else:
+        timings["gsam"] = 0.0
+        stages["gsam"] = {"skipped": True}
+
     tray_plane: list[float] | None = None
     if remove_tray_plane:
-        print("[1b] remove tray plane (optional)…", flush=True)
+        print("[1b] remove tray plane (optional)...", flush=True)
         with _timed(timings, "tray"):
             tray = remove_tray(frames, keep_band_m=float(tray_band_m))
         stages["tray"] = {
@@ -217,12 +249,12 @@ def run_pipeline(
         }
         print("[1b] tray crop skipped (object-only / no tray reference)", flush=True)
 
-    print("[2] edge-aware depth filter…", flush=True)
+    print("[2] edge-aware depth filter...", flush=True)
     with _timed(timings, "filter"):
         filter_frames(frames)
     stages["filter"] = {"ok": True}
 
-    print("[3] depth confidence…", flush=True)
+    print("[3] depth confidence...", flush=True)
     with _timed(timings, "confidence"):
         confidence_frames(frames)
     stages["confidence"] = {
@@ -233,9 +265,14 @@ def run_pipeline(
     }
 
     if do_pose_refine:
-        print("[4] robust pose-graph refine…", flush=True)
+        print("[4] robust pose-graph refine...", flush=True)
         with _timed(timings, "pose_refine"):
-            pose_stats = refine_poses_constrained(frames)
+            pose_stats = refine_poses_constrained(
+                frames,
+                max_trans_m=0.015 if gsam else 0.030,
+                max_rot_deg=3.0 if gsam else 6.0,
+            )
+
         stages["pose_refine"] = pose_stats
         optimized_poses = pose_stats.get("optimized_poses")
         if optimized_poses:
@@ -265,9 +302,17 @@ def run_pipeline(
         timings["pose_refine"] = 0.0
         stages["pose_refine"] = {"skipped": True}
 
+    if gsam:
+        print("[4b] apply exact grape masks after full-scene registration...", flush=True)
+        with _timed(timings, "gsam_apply"):
+            stages["gsam_apply"] = apply_prepared_object_masks(frames)
+    else:
+        timings["gsam_apply"] = 0.0
+        stages["gsam_apply"] = {"skipped": True}
+
     if do_consistency:
         keep_mode = "soft" if fusion_mode == "union" else "hard"
-        print(f"[5] multi-view consistency ({keep_mode})…", flush=True)
+        print(f"[5] multi-view consistency ({keep_mode})...", flush=True)
         with _timed(timings, "consistency"):
             cons = consistency_reject(
                 frames,
@@ -284,8 +329,8 @@ def run_pipeline(
             print(
                 f"  kept={cons['kept']} killed={cons['killed']} "
                 f"({100.0 * float(cons.get('kill_ratio', 0.0)):.1f}% removed by "
-                f"score≥{score_keep_threshold:g}; "
-                f"λ_a={score_lambda_agree:g} λ_c={score_lambda_contradict:g})",
+                f"score>={score_keep_threshold:g}; "
+                f"lambda_a={score_lambda_agree:g} lambda_c={score_lambda_contradict:g})",
                 flush=True,
             )
             score_stats = cons.get("score") or {}
@@ -298,11 +343,11 @@ def run_pipeline(
             print(
                 f"  kept={cons['kept']} killed={cons['killed']} "
                 f"({100.0 * float(cons.get('kill_ratio', 0.0)):.1f}% removed by "
-                f"agree≥{consistency_min_views})",
+                f"agree>={consistency_min_views})",
                 flush=True,
             )
         print(
-            f"  labels (pixel×view): AGREE={labels.get('AGREE', 0)} "
+            f"  labels (pixelxview): AGREE={labels.get('AGREE', 0)} "
             f"NOT_OBSERVED={labels.get('NOT_OBSERVED', 0)} "
             f"OCCLUDED={labels.get('OCCLUDED', 0)} "
             f"CONTRADICT={labels.get('CONTRADICT', 0)}",
@@ -310,7 +355,7 @@ def run_pipeline(
         )
         checked = int(cons.get("checked", 0))
         keep_ratio = float(cons.get("keep_ratio", 0.0))
-        # Soft mode keeps more by design — only abort on catastrophic loss.
+        # Soft mode keeps more by design - only abort on catastrophic loss.
         abort_ratio = (
             float(consistency_min_keep_ratio) * 0.5
             if keep_mode == "soft"
@@ -332,7 +377,7 @@ def run_pipeline(
     final_cloud: o3d.geometry.PointCloud | None = None
     workspace_info: dict[str, Any] | None = None
     if densify:
-        print("[6] densify point cloud (back-project refined depth)…", flush=True)
+        print("[6] densify point cloud (back-project refined depth)...", flush=True)
         with _timed(timings, "densify"):
             dense = densify_from_depth(
                 frames,
@@ -366,7 +411,7 @@ def run_pipeline(
         print(
             f"  dense {dense.n_raw:,} -> support {dense.n_after_support:,} "
             f"(dropped {dense.n_dropped_by_support:,} / {drop_pct:.1f}% by "
-            f"≥{dense.support_min_views}-view rule) "
+            f">={dense.support_min_views}-view rule) "
             f"-> {dense.n_after_voxel:,} pts "
             f"(1-view={dense.n_single_view:,}, multi={dense.n_multi_view:,}, "
             f"w={dense.weight_source}, "
@@ -387,7 +432,7 @@ def run_pipeline(
                 ror_r = None if ror_radius_mm is None else float(ror_radius_mm) * 1.0e-3
                 cleaned, cstats = cleanup_dense_cloud(
                     dense.cloud,
-                    do_roi=True,
+                    do_roi=False,
                     do_sor=True,
                     do_ror=True,
                     do_surface=bool(surface_filter),
@@ -409,15 +454,33 @@ def run_pipeline(
                     final_component_min_points=int(
                         cleanup_knobs["final_component_min_points"]
                     ),
+                    # Union retains substantial disconnected object parts.
+                    final_keep_largest_only=(fusion_mode != "union"),
                     surface_max_normal_angle_deg=float(
                         cleanup_knobs["surface_max_normal_angle_deg"]
                     ),
                 )
+                workspace_info = cstats.steps.get("workspace")
+                if workspace_info is not None:
+                    # Fit the tray plane for the top-view datum, but retain it in output.
+                    _, background_stats = remove_flat_background(
+                        cleaned, workspace_info, distance_m=0.003
+                    )
+                    if not background_stats.get("skipped"):
+                        workspace_info = dict(workspace_info)
+                        workspace_info["plane"] = background_stats["plane"]
+                        background_stats = dict(background_stats)
+                        background_stats["mode"] = "kept"
+                        background_stats["n_plane_candidates"] = background_stats.get("n_removed", 0)
+                        background_stats["n_removed"] = 0
+                        background_stats["n_out"] = int(len(cleaned.points))
+                else:
+                    background_stats = {"skipped": True, "reason": "no_workspace"}
                 point_cloud_path = out_dir / "dense_point_cloud.ply"
                 o3d.io.write_point_cloud(str(point_cloud_path), cleaned)
                 point_cloud_points = int(len(cleaned.points))
                 final_cloud = cleaned
-                workspace_info = cstats.steps.get("workspace")
+            stages["background_removal"] = background_stats
             stages["cleanup"] = {
                 "preset": cleanup_knobs["preset"],
                 "knobs": {
@@ -463,6 +526,7 @@ def run_pipeline(
                 point_cloud_points = int(len(dense.cloud.points))
                 final_cloud = dense.cloud
             timings["cleanup"] = 0.0
+            stages["background_removal"] = background_stats
             stages["cleanup"] = {"skipped": True, "path": str(point_cloud_path)}
     else:
         timings["densify"] = 0.0
@@ -471,14 +535,14 @@ def run_pipeline(
         stages["cleanup"] = {"skipped": True}
 
     if enable_tsdf:
-        print("[6c] optional weighted TSDF (score-gated, no free-space carve)…", flush=True)
+        print("[6c] final TSDF fusion (score-gated, no free-space carve)...", flush=True)
         try:
             with _timed(timings, "tsdf"):
                 tsdf_voxel = (
-                    float(tsdf_voxel_m) if tsdf_voxel_m is not None else float(voxel_m)
+                    float(tsdf_voxel_m) if tsdf_voxel_m is not None else float(dense_voxel_m)
                 )
                 tsdf_trunc = (
-                    float(tsdf_trunc_m) if tsdf_trunc_m is not None else float(trunc_m)
+                    float(tsdf_trunc_m) if tsdf_trunc_m is not None else 0.0025
                 )
                 tsdf = fuse_frames_tsdf(
                     frames,
@@ -488,10 +552,66 @@ def run_pipeline(
                     weight_source="auto",
                     depth_trunc_m=float(z_max_m),
                 )
-                tsdf_cloud_path = out_dir / "tsdf_cloud.ply"
-                tsdf_mesh_path = out_dir / "tsdf_mesh.ply"
-                o3d.io.write_point_cloud(str(tsdf_cloud_path), tsdf.cloud)
-                o3d.io.write_triangle_mesh(str(tsdf_mesh_path), tsdf.mesh)
+                ror_r = None if ror_radius_mm is None else float(ror_radius_mm) * 1.0e-3
+                tsdf_clean, tsdf_cstats = cleanup_dense_cloud(
+                    tsdf.cloud,
+                    do_roi=False,
+                    do_sor=True,
+                    do_ror=True,
+                    do_surface=bool(surface_filter),
+                    do_final_components=True,
+                    do_smooth=bool(light_smooth),
+                    tray_plane=tray_plane,
+                    camera_c2w=[frame.c2w for frame in frames],
+                    workspace_width_m=float(workspace_width_m),
+                    workspace_depth_m=float(workspace_depth_m),
+                    sor_k=int(cleanup_knobs["sor_k"]),
+                    sor_std=float(cleanup_knobs["sor_std"]),
+                    ror_min_neighbors=int(cleanup_knobs["ror_min_neighbors"]),
+                    ror_radius_m=ror_r,
+                    ror_radius_scale=float(cleanup_knobs["ror_radius_scale"]),
+                    component_min_points=int(cleanup_knobs["component_min_points"]),
+                    final_component_eps_m=float(cleanup_knobs["final_component_eps_m"]),
+                    final_component_min_points=int(cleanup_knobs["final_component_min_points"]),
+                    final_keep_largest_only=(fusion_mode != "union"),
+                    surface_max_normal_angle_deg=float(cleanup_knobs["surface_max_normal_angle_deg"]),
+                )
+                workspace_info = tsdf_cstats.steps.get("workspace")
+                if workspace_info is None:
+                    _, workspace_info = object_gravity_workspace_filter(
+                        tsdf_clean,
+                        camera_c2w=[frame.c2w for frame in frames],
+                        width_m=1000.0,
+                        depth_m=1000.0,
+                    )
+                    workspace_info["unconstrained"] = True
+                if workspace_info is not None:
+                    # Fit the tray plane for the top-view datum, but retain it in output.
+                    _, background_stats = remove_flat_background(
+                        tsdf_clean, workspace_info, distance_m=0.003
+                    )
+                    if not background_stats.get("skipped"):
+                        workspace_info = dict(workspace_info)
+                        workspace_info["plane"] = background_stats["plane"]
+                        background_stats = dict(background_stats)
+                        background_stats["mode"] = "kept"
+                        background_stats["n_plane_candidates"] = background_stats.get("n_removed", 0)
+                        background_stats["n_removed"] = 0
+                        background_stats["n_out"] = int(len(tsdf_clean.points))
+                else:
+                    background_stats = {"skipped": True, "reason": "no_workspace"}
+                point_cloud_path = out_dir / "dense_point_cloud.ply"
+                o3d.io.write_point_cloud(str(point_cloud_path), tsdf_clean)
+                point_cloud_points = int(len(tsdf_clean.points))
+                final_cloud = tsdf_clean
+            stages["background_removal"] = background_stats
+            stages["tsdf_cleanup"] = {
+                "n_in": tsdf_cstats.n_in,
+                "n_out_before_background": tsdf_cstats.n_out,
+                "n_out": point_cloud_points,
+                "mean_nn_m": tsdf_cstats.mean_nn_m,
+                "steps": tsdf_cstats.steps,
+            }
             stages["tsdf"] = {
                 "ok": True,
                 "n_frames": tsdf.n_frames,
@@ -500,31 +620,23 @@ def run_pipeline(
                 "trunc_m": tsdf.trunc_m,
                 "weight_source": tsdf.weight_source,
                 "conf_min": tsdf.conf_min,
-                "cloud": str(tsdf_cloud_path),
-                "mesh": str(tsdf_mesh_path),
-                "cloud_points": int(len(tsdf.cloud.points)),
-                "mesh_vertices": int(len(tsdf.mesh.vertices)),
-                "note": (
-                    "Secondary product. Primary geometry remains dense_point_cloud.ply. "
-                    "Depth=0 for low-score pixels (unknown; no free-space carve)."
-                ),
+                "final_cloud": str(point_cloud_path),
+                "cloud_points": point_cloud_points,
+                "mesh_generated": False,
+                "note": "Final geometry is the cleaned TSDF point cloud; no mesh is saved.",
             }
             print(
-                f"  tsdf {tsdf.n_pixels_integrated:,} px -> "
-                f"{int(len(tsdf.cloud.points)):,} pts / "
-                f"{int(len(tsdf.mesh.vertices)):,} verts "
-                f"(voxel={tsdf.voxel_m * 1000:.2f} mm, trunc={tsdf.trunc_m * 1000:.2f} mm, "
-                f"w={tsdf.weight_source}, gate≥{tsdf.conf_min:.2f})",
+                f"  tsdf {tsdf.n_pixels_integrated:,} px -> {point_cloud_points:,} final pts "
+                f"(voxel={tsdf.voxel_m * 1000:.2f} mm, trunc={tsdf.trunc_m * 1000:.2f} mm)",
                 flush=True,
             )
-        except Exception as exc:  # noqa: BLE001 — optional path
+        except Exception as exc:  # noqa: BLE001 - optional path
             timings.setdefault("tsdf", 0.0)
             stages["tsdf"] = {"ok": False, "error": str(exc)}
-            print(f"  tsdf skipped: {exc}", flush=True)
+            print(f"  tsdf failed: {exc}", flush=True)
     else:
         timings["tsdf"] = 0.0
         stages["tsdf"] = {"skipped": True}
-
     if top_view and final_cloud is not None and workspace_info is not None:
         print("[7] top-view depth map...", flush=True)
         with _timed(timings, "top_view"):
@@ -542,11 +654,10 @@ def run_pipeline(
             "valid_pixels": top.valid_pixels,
             "min_height_mm": top.min_height_mm,
             "max_height_mm": top.max_height_mm,
-            "meaning": (
-                "topmost height above object base (base_link +Z); no tray"
-                if str(workspace_info.get("mode", "")) == "object_gravity"
-                else "topmost surface height above fitted sample stage"
-            ),
+            "reference_plane": top.reference_plane,
+            "reference_plane_source": top.reference_plane_source,
+            "orientation": "axis_u_right_axis_v_down",
+            "meaning": "topmost perpendicular distance from fitted flat surface",
             "workspace_mode": workspace_info.get("mode"),
         }
     else:
@@ -555,10 +666,12 @@ def run_pipeline(
 
     pipeline_steps = [
         "load",
+        "gsam_object_mask",
         "tray_crop",
         "edge_aware_filter",
         "confidence",
         "pose_refine",
+        "apply_gsam_object_mask",
         "consistency",
         "densify_backproject",
         "physical_roi_sor_ror_surface_tight_components",

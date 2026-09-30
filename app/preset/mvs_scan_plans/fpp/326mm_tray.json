@@ -36,7 +36,7 @@
       106.58,
       37.45
     ],
-    "home": "Nadir wrists from seed refine; entry base=50. Spin shoulder_pan 50->230 only. FPP only.",
+    "home": "Nadir wrists from seed refine. MoveIt entry = this hub (inside Y=600 mm box). Spin is GUI pan, not a baked pan=50 hop. FPP only.",
     "dlp_joints_deg": [
       139.12,
       -19.62,
@@ -45,7 +45,7 @@
       106.58,
       37.45
     ],
-    "dlp": "Ring 1: nadir wrists. DLP ~326 mm. Base pan 50/110/170/230.",
+    "dlp": "Ring 1: nadir wrists. DLP ~326 mm. Entry is home pan 139.12° (valid). Spin samples 50/110/170/230 via GUI pan, skip_collision.",
     "pan_span_deg": [
       50,
       230
@@ -65,7 +65,7 @@
       "id": "dlp_326",
       "display_name": "DLP look-down 326mm",
       "entry_joints_rad": [
-        0.8726646259971648,
+        2.428102055374511,
         -0.34243359924128747,
         -2.134188609338666,
         0.5448917924726296,
@@ -73,14 +73,14 @@
         0.6536258048718765
       ],
       "entry_tcp": {
-        "x_m": -0.010953258595882759,
-        "y_m": 0.08788827270018804,
+        "x_m": -0.08804613003096523,
+        "y_m": -0.00960215281388837,
         "z_m": 0.52149958260304,
-        "rx": -0.00020984356827474055,
-        "ry": 0.00016129255003170177,
-        "rz": 0.00010530629371933303,
-        "tool_z_x": 0.00016128149892634242,
-        "tool_z_y": 0.00020985205799728404,
+        "rx": -0.00029116965809215394,
+        "ry": -3.5817973247968896e-05,
+        "rz": 1.5555427257900305,
+        "tool_z_x": -0.00020735029827290144,
+        "tool_z_y": 0.0001644854460060028,
         "tool_z_z": 0.9999999649751954
       },
       "reachable": true,
@@ -88,7 +88,7 @@
       "base_sweep_ok": true,
       "backup_coverage_ok": false,
       "backup_union_deg": 0.0,
-      "phi_deg": 97.1,
+      "phi_deg": -173.8,
       "theta_deg": 11.0,
       "no_pan": false,
       "pan_range_deg": 240.0

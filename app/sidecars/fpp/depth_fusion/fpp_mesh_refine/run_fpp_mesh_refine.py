@@ -59,6 +59,12 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument("--tray-band-mm", type=float, default=12.0)
     p.add_argument("--no-pose-refine", action="store_true")
+    p.add_argument("--gsam", action="store_true", help="Apply GSAM2 object masks before registration/fusion")
+    p.add_argument("--gsam-url", default="http://127.0.0.1:8765")
+    p.add_argument("--gsam-prompt", default="grape cluster")
+    p.add_argument("--gsam-box-threshold", type=float, default=0.25)
+    p.add_argument("--gsam-max-detections", type=int, default=8)
+    p.add_argument("--gsam-dilation-px", type=int, default=4)
     p.add_argument("--no-consistency", action="store_true")
     p.add_argument("--consistency-min-views", type=int, default=1)
     p.add_argument("--consistency-max-dz-mm", type=float, default=6.0)
@@ -242,6 +248,12 @@ def main() -> int:
         remove_tray_plane=bool(args.remove_tray) and not bool(args.keep_tray),
         tray_band_m=float(args.tray_band_mm) * 1.0e-3,
         do_pose_refine=not bool(args.no_pose_refine),
+        gsam=bool(args.gsam),
+        gsam_url=str(args.gsam_url),
+        gsam_prompt=str(args.gsam_prompt),
+        gsam_box_threshold=float(args.gsam_box_threshold),
+        gsam_max_detections=int(args.gsam_max_detections),
+        gsam_dilation_px=int(args.gsam_dilation_px),
         do_consistency=not bool(args.no_consistency),
         consistency_min_views=int(args.consistency_min_views),
         consistency_max_dz_m=float(args.consistency_max_dz_mm) * 1.0e-3,

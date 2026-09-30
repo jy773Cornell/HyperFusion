@@ -494,6 +494,7 @@ def cleanup_dense_cloud(
     component_min_points: int = 800,
     final_component_eps_m: float = 0.0015,
     final_component_min_points: int = 500,
+    final_keep_largest_only: bool = True,
     surface_max_normal_angle_deg: float = 55.0,
 ) -> tuple[o3d.geometry.PointCloud, CleanupStats]:
     """Run physical ROI/components, SOR, ROR, normals, and optional smoothing."""
@@ -575,7 +576,7 @@ def cleanup_dense_cloud(
             percentile_crop=False,
             eps_m=float(final_component_eps_m),
             min_points=int(final_component_min_points),
-            keep_largest_only=True,
+            keep_largest_only=bool(final_keep_largest_only),
         )
         stats.n_after_final_components = int(len(cur.points))
         stats.steps["final_components"] = s

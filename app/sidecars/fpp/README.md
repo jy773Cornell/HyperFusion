@@ -22,6 +22,9 @@ global pose-graph refinement → consistency → densify → ROI/SOR/ROR.
 
 FPP MVS is **sweep/ring only** (no apex). Stem `00000` is the first ring pin, not nadir.
 
+`fpp_mvs_cli.py` is the single processing interface. Select the complete
+depth-and-fusion pipeline (default) or stop after per-view depth decoding.
+
 ## Setup
 
 ```powershell
@@ -44,14 +47,15 @@ Accepts the cluster root or its `multiview/` folder. Skips automatically if pose
 
 App auto-runs this after an FPP MVS capture when `fpp_mvs_auto_process = true` in `hyperfusion.cfg`.
 
-## Other CLIs
+Stage selection:
 
-| Script | Role |
-|--------|------|
-| `fpp_mvs_cli.py` | **Full** decode + dense cloud → `processed/` |
-| `fpp_cli.py` | Decode only (`--flat` for `processed/decode` layout) |
-| `depth_fusion/fpp_mesh_refine/run_fpp_mesh_refine.py` | Fusion only (given an existing decode tree) |
-| `depth_fusion/fuse_tsdf.py` | Simple TSDF CLI |
+```powershell
+# Complete pipeline: depth maps plus fused dense cloud
+.\.venv\Scripts\python.exe fpp_mvs_cli.py --input D:\Data\Cluster --stage depth-fusion
+
+# Per-view depth maps only
+.\.venv\Scripts\python.exe fpp_mvs_cli.py --input D:\Data\Cluster --stage depth
+```
 
 ## Calibrate (tilted checkerboard → millimetres)
 

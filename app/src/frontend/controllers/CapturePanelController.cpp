@@ -1,4 +1,4 @@
-﻿// Capture tab orchestration implementation (recorder, stage scan sequence,
+// Capture tab orchestration implementation (recorder, stage scan sequence,
 // writer).
 #include "frontend/controllers/CapturePanelController.hpp"
 
@@ -4788,6 +4788,8 @@ void hf::capture::CapturePanelController::maybeStartFppMvsProcessingAfterMultivi
   hf::processing::FppMvsRunRequest req;
   req.inputPath = sessionDir;
   req.mode = QStringLiteral("sweep");
+  // FPP TSDF fusion uses full-scene registration; do not implicitly apply GSAM masks.
+  req.gsam = false;
   req.timeoutMs = hw.ur3e.fppMvsTimeoutMs;
 
   host_->appendLog(
