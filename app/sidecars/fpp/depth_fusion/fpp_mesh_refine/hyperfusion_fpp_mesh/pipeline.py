@@ -657,7 +657,7 @@ def run_pipeline(
             "reference_plane": top.reference_plane,
             "reference_plane_source": top.reference_plane_source,
             "orientation": "axis_u_right_axis_v_down",
-            "meaning": "topmost perpendicular distance from fitted flat surface",
+            "meaning": "topmost perpendicular distance from fitted tray/background plane",
             "workspace_mode": workspace_info.get("mode"),
         }
     else:
